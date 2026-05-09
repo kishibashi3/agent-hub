@@ -1,0 +1,25 @@
+// Express Request 拡張: authenticateUser middleware 通過後に
+// `req.userId` (canonical handle, 常に `@<name>` 形式) と
+// `req.githubLogin` (GitHub login、`@` なし) が利用可能になる。
+//
+// これにより `(req as any).userId` のような型安全ぶち破りを排除する。
+// optional にしているのは middleware を通る前のリクエストでも型が成立するため。
+// 各 handler は middleware を信用して `req.userId!` のように non-null 断定するか、
+// 防御的に分岐する。
+
+import 'express-serve-static-core';
+
+declare module 'express-serve-static-core' {
+  interface Request {
+    /**
+     * canonical handle, 常に `@<name>` 形式。
+     * authenticateUser middleware を通った後にセットされる。
+     */
+    userId?: string;
+    /**
+     * GitHub login (例: "kishibashi3")、`@` なし。
+     * PAT モードでは PAT を verify した結果、trust モードでは X-User-Id と同じ。
+     */
+    githubLogin?: string;
+  }
+}

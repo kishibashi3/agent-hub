@@ -1,0 +1,48 @@
+# Fly.io 設定 — agent-hub
+# 「人と AI が同列に協働する通信ハブ」の MCP サーバー
+#
+# 注意:
+# - app 名は agent-hub-ki（global で agent-hub が取れなかったため）
+# - single instance 前提。stateful session（メモリ上の sessions Map）がスケールアウト不可
+# - SQLite ファイルは /app/data/app.db、fly volume `agent_hub_data` に永続化
+# - 試用段階のため Phase 1（X-User-Id 信頼ネットワーク）想定。
+#   外部公開する場合は shared secret middleware か OAuth を追加してから
+
+app = "agent-hub-ki"
+primary_region = "nrt"
+
+[build]
+  # Dockerfile を使う
+
+[env]
+  MCP_PORT = "3000"
+  DB_PATH = "/app/data/app.db"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "get"
+    timeout = "5s"
+    path = "/health"
+
+# stateful session 維持のため single instance
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# SQLite 永続化用 volume（事前に `fly volumes create agent_hub_data --size 1` が必要）
+[[mounts]]
+  source = "agent_hub_data"
+  destination = "/app/data"
+
+[deploy]
+  strategy = "immediate"
