@@ -46,7 +46,6 @@
   }
   .system { color: #6a737d; }
   .user { color: #58a6ff; }
-  .agent { color: #79c0ff; }
   .agent.global { color: #d2a8ff; }
   .agent.stateful { color: #7ee787; }
   .agent.stateless { color: #ff7b72; }
@@ -64,7 +63,7 @@
   .badge.stateful { color: #7ee787; }
   .badge.stateless { color: #ff7b72; }
   pre {
-    margin: 4px 0 16px;
+    margin: 4px 0 14px;
     padding: 0;
     color: #d4d4d4;
     white-space: pre-wrap;
@@ -73,13 +72,15 @@
   .divider {
     border: 0;
     border-top: 1px dashed #2a2a2a;
-    margin: 18px 0;
+    margin: 16px 0;
   }
   .annot {
     color: #6a737d;
     font-size: 12px;
     font-style: italic;
     margin: 4px 0 14px 0;
+    padding-left: 8px;
+    border-left: 2px solid #2a2a2a;
   }
   .header-note {
     text-align: center;
@@ -91,7 +92,7 @@
 </head>
 <body>
 
-<div class="header-note">同じ質問を 3 種類の peer に投げると、応答の「記憶のかたち」がはっきり違う。</div>
+<div class="header-note">同じ session で 3 種類の peer と話してみると、「記憶のかたち」が peer 種別によって違うのが一目でわかる。</div>
 
 <div class="terminal">
   <div class="titlebar">
@@ -101,54 +102,64 @@
     <span class="label">claude-code · @kishibashi3 · default tenant</span>
   </div>
   <div class="body">
+
 <pre><span class="system">[skill] agent-hub-plugin loaded
 [monitor] inbox://@kishibashi3 subscribed</span>
 
-<span class="prompt">$</span> <span class="user">@claude-code さっきの設計の続き、コード書いて</span>
-
-<span class="agent global">@claude-code</span><span class="badge global">global</span>
-<span class="arrow">→</span> 了解。@gemma が翻訳した spec と、さっき @ouroboros が出してきた
-   roadmap も踏まえて TypeScript で書きます:
-
-   class Container {
-     private services = new Map&lt;string, unknown&gt;();
-     register&lt;T&gt;(key: string, factory: () =&gt; T) { ... }
-     resolve&lt;T&gt;(key: string): T { ... }
-   }
-
-   続きで Resolver pattern も足しますか?
-</pre>
-<div class="annot">↑ global は同じ session に全 peer の発言が流れてくるので、
-   @gemma の翻訳も @ouroboros の roadmap も「見て覚えてる」前提で答える。</div>
-
-<hr class="divider">
-
-<pre><span class="prompt">$</span> <span class="user">@gemma さっきの設計の続き、コード書いて</span>
+<span class="prompt">$</span> <span class="user">@gemma この英文を要約して:
+   "Dependency injection lets components receive their dependencies
+    from external sources rather than constructing them..."</span>
 
 <span class="agent stateful">@gemma</span><span class="badge stateful">stateful</span>
-<span class="arrow">→</span> 前回 DM でやり取りした DI パターンの続きですね。私と
-   @kishibashi3 さんの会話履歴に沿って、TypeScript で:
-
-   class Container { ... }
-
-   (※ @ouroboros の roadmap や @claude-code の最新 review は
-    私の context に入ってないので、共有していただければ反映します)
+<span class="arrow">→</span> 依存性注入 (DI) は、コンポーネントが自分で依存物を構築するのではなく、
+   外部から受け取る設計パターンです。テストの差し替えが楽になります。
 </pre>
-<div class="annot">↑ stateful は @kishibashi3 との 1 対 1 の文脈は持ってる。
-   ただし他 peer (@ouroboros, @claude-code) の発言は別 channel なので見てない。</div>
+
+<pre><span class="prompt">$</span> <span class="user">@translator 別の文を翻訳:
+   "A Resolver returns instances based on registered factories."</span>
+
+<span class="agent stateless">@translator</span><span class="badge stateless">stateless</span>
+<span class="arrow">→</span> Resolver は、登録されたファクトリに基づいてインスタンスを返します。
+</pre>
+
+<pre><span class="prompt">$</span> <span class="user">@claude-code いまの 2 つの翻訳を踏まえて、TypeScript で書ける?</span>
+
+<span class="agent global">@claude-code</span><span class="badge global">global</span>
+<span class="arrow">→</span> 了解。@gemma が要約した DI と、@translator が翻訳した Resolver、
+   両方踏まえて書きます:
+
+   class Container {
+     private factories = new Map&lt;string, () =&gt; unknown&gt;();
+     register&lt;T&gt;(key: string, f: () =&gt; T): void { ... }
+     resolve&lt;T&gt;(key: string): T { ... }
+   }
+</pre>
+<div class="annot">↑ <strong>global</strong> は 1 session に流れてきた他 peer の発言まで全部見えてる。
+@gemma と @translator のどちらの応答も「自分の文脈」として参照できる。</div>
 
 <hr class="divider">
 
-<pre><span class="prompt">$</span> <span class="user">@translator さっきの設計の続き、コード書いて</span>
+<pre><span class="prompt">$</span> <span class="user">@gemma さっきの @translator の翻訳と統合して説明書いて</span>
+
+<span class="agent stateful">@gemma</span><span class="badge stateful">stateful</span>
+<span class="arrow">→</span> 「@translator の翻訳」というのは私の context に入っていません。
+   私が覚えているのは @kishibashi3 さんと私の DM 履歴だけです。
+   @translator の応答テキストを貼っていただければ、それと統合できます。
+</pre>
+<div class="annot">↑ <strong>stateful</strong> は自分と 1 人の peer (= @kishibashi3) との文脈は持ってる。
+ただし他 peer (@translator) との別 channel の発言は見えてない。</div>
+
+<hr class="divider">
+
+<pre><span class="prompt">$</span> <span class="user">@translator じゃあ @gemma の要約と私の依頼をまとめて翻訳して</span>
 
 <span class="agent stateless">@translator</span><span class="badge stateless">stateless</span>
 <span class="arrow">→</span> 申し訳ありません、私は単発呼び出しで動作しているため、
-   過去の会話を記憶していません。
-   また、私の用途は翻訳に特化しています。
+   過去のやりとりを記憶していません。
    翻訳したい原文を直接お送りいただけますか。
 </pre>
-<div class="annot">↑ stateless は呼ばれるたび zero-context、しかも specialty 特化。
-   「さっきの続き」は通じない、というのが設計の前提。</div>
+<div class="annot">↑ <strong>stateless</strong> は呼ばれるたびに zero-context。
+直前の自分の発言すら覚えていない。「単機能 worker」として割り切った設計。</div>
 
   </div>
 </div>
