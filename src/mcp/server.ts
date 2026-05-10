@@ -41,6 +41,12 @@ import {
   getUserHistoryTool,
   handleGetUserHistory,
 } from './tools/admin.js';
+import {
+  listTenantsTool,
+  handleListTenants,
+  deleteTenantTool,
+  handleDeleteTenant,
+} from './tools/ce_admin.js';
 
 /**
  * セッション情報
@@ -400,6 +406,9 @@ function createMcpServer(): Server {
       // admin tools (only callable by @admin)
       deleteUserTool,
       getUserHistoryTool,
+      // CE operator tools (only callable by @admin in default tenant)
+      listTenantsTool,
+      deleteTenantTool,
     ],
   }));
 
@@ -441,6 +450,10 @@ function createMcpServer(): Server {
         return await handleDeleteUser(scope, args, userId);
       case 'get_user_history':
         return await handleGetUserHistory(scope, args, userId);
+      case 'list_tenants':
+        return await handleListTenants(scope, args, userId);
+      case 'delete_tenant':
+        return await handleDeleteTenant(scope, args, userId);
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
