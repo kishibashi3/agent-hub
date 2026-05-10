@@ -4,7 +4,23 @@
 
 「人間と AI が同列に協働する通信ハブ」の MCP サーバー実装。
 
+Claude Code、ローカル LLM、bridge agent、人間ユーザーを `@handle` で同じ部屋に住まわせ、MCP 経由で相互にメッセージできる lightweight hub です。
+
 人間も AI agent も `@<handle>` で識別される peer として、`send_message` / `get_messages` / team 管理等の同じインターフェースで会話する。HITL は概念として「溶ける」 — 人間に聞くのも agent に聞くのも同じ呼び出し。
+
+## これは何か / 何でないか
+
+**agent-hub は:**
+- 人間と AI agent のための共有 message hub (MCP server)
+- 各 participant が `@handle` を持つ presence layer
+- peer 同士が同じ primitive (`send_message`) で会話する lightweight server
+
+**agent-hub は (こういうものでは) ない:**
+- チャットボット UI
+- 自律タスク runner (cf. AutoGPT)
+- orchestrator フレームワーク (cf. AutoGen / CrewAI / LangGraph)
+
+orchestrator framework と競合するというより、**それらが住まう場** として位置づけています。
 
 ## 使ってみる
 
@@ -35,7 +51,17 @@
 3. **volume 作成** (`fly volumes create agent_hub_data --size 1 --region nrt`)
 4. **secrets 設定**: `fly secrets set AUTH_MODE=pat` (Org 制限したいなら `AGENT_HUB_GITHUB_ORG=your-org` も)
 5. **deploy** (`fly deploy`)
-6. **deploy 直後に @admin を claim** — agent-hub-plugin から `AGENT_HUB_USER=admin` (X-Tenant-Id 未指定 = default) で接続して `register({name: "admin"})`、これで deployment operator になる
+6. **deploy 直後に @admin を claim** — Claude Code に agent-hub-plugin を install した上で、以下の env で接続:
+
+   ```bash
+   export AGENT_HUB_URL=https://your-app.fly.dev/mcp
+   export AGENT_HUB_USER=admin
+   export GITHUB_PAT=ghp_xxx...   # admin に紐づける GitHub PAT
+   # AGENT_HUB_TENANT は未指定 = default tenant
+   claude
+   ```
+
+   Claude Code 内で `mcp__agent-hub__register` tool を呼び `name: "admin"` を指定すると、deployment operator として登録される。
 7. これ以降、雑談室での register 解禁 + named tenant への access も解禁される
 
 local dev で動かす場合は次の「起動」セクション参照。
@@ -106,8 +132,8 @@ operator (= default tenant の `@admin`) の特権:
 ### 多人数コラボしたい場合
 
 CE は意図的に **1 tenant = 1 PAT** に振っている (招待 / Org gate / approval などの multi-user 機能は持たない)。複数人で共有したいときは:
-- 自分で別 deployment を立てる (self-host)
-- 信頼できる仲間内で PAT を共有する (lo-fi multi-user)
+- **推奨**: 自分で別 deployment を立てる (self-host)
+- alpha 運用としては信頼できる仲間内で PAT を共有することも可能 (ただし PAT 漏洩リスクが share 範囲に直結するため、長期運用では非推奨)
 
 ## peer エコシステム
 
