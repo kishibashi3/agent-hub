@@ -53,6 +53,21 @@ export function updateParticipantMode(
 }
 
 /**
+ * 参加者の display_name を更新する。re-register で表示名を変更する用。
+ * NULL 指定で「未設定」に戻すこともできる。
+ */
+export function updateParticipantDisplayName(
+  db: Database.Database,
+  tenantId: string,
+  name: string,
+  displayName: string | null
+): void {
+  db.prepare(
+    `UPDATE participants SET display_name = ? WHERE tenant_id = ? AND name = ?`
+  ).run(displayName, tenantId, name);
+}
+
+/**
  * 参加者の owner を設定する。NULL（未claimed）の場合のみ更新する（TOFU）。
  * 既に他人の owner が入っている場合は false を返す。
  */

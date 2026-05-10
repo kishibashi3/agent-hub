@@ -74,16 +74,27 @@ export async function handleRegister(
     if (!existing) {
       participant = scope.registerParticipant(input, githubLogin);
     } else if (existing.owner === githubLogin) {
+      // 自分が既に所有 → mode / display_name を更新可能
+      let changed = false;
       if (input.mode !== undefined && input.mode !== existing.mode) {
         scope.updateParticipantMode(handleName, input.mode);
-        participant = scope.getParticipantByName(handleName)!;
-      } else {
-        participant = existing;
+        changed = true;
       }
+      if (
+        input.display_name !== undefined &&
+        input.display_name !== existing.display_name
+      ) {
+        scope.updateParticipantDisplayName(handleName, input.display_name);
+        changed = true;
+      }
+      participant = changed ? scope.getParticipantByName(handleName)! : existing;
     } else if (existing.owner === null) {
       scope.claimOwnerIfUnowned(handleName, githubLogin);
       if (input.mode !== undefined) {
         scope.updateParticipantMode(handleName, input.mode);
+      }
+      if (input.display_name !== undefined) {
+        scope.updateParticipantDisplayName(handleName, input.display_name);
       }
       participant = scope.getParticipantByName(handleName)!;
     } else {

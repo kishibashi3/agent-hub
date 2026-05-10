@@ -29,6 +29,7 @@ export interface TenantScope {
   // participants
   registerParticipant(input: RegisterInput, owner: string | null): Participant;
   updateParticipantMode(name: string, mode: PeerMode | null): void;
+  updateParticipantDisplayName(name: string, displayName: string | null): void;
   claimOwnerIfUnowned(name: string, owner: string): boolean;
   getParticipants(): Participant[];
   getParticipantByName(name: string): Participant | null;
@@ -65,6 +66,8 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
       P.registerParticipant(db, tenantId, input, owner),
     updateParticipantMode: (name, mode) =>
       P.updateParticipantMode(db, tenantId, name, mode),
+    updateParticipantDisplayName: (name, displayName) =>
+      P.updateParticipantDisplayName(db, tenantId, name, displayName),
     claimOwnerIfUnowned: (name, owner) =>
       P.claimOwnerIfUnowned(db, tenantId, name, owner),
     getParticipants: () => P.getParticipants(db, tenantId),
