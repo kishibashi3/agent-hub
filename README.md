@@ -12,7 +12,8 @@
 - **認証**: 2 mode
   - `trust` (localhost): X-User-Id ヘッダーをそのまま信頼
   - `pat` (production): `Authorization: Bearer <github-pat>` を GitHub API で検証 + `X-User-Id` でハンドル override
-- **DB**: SQLite (better-sqlite3) でメッセージ・参加者・チーム・既読を永続化
+- **multi-tenant** (Community Edition): 1 deployment が複数 tenant を抱える。`X-Tenant-Id` header で識別。1 tenant = 1 GitHub user 所有 (= 1 PAT)、未指定なら `default` tenant (= 雑談室)
+- **DB**: SQLite (better-sqlite3) でメッセージ・参加者・チーム・既読を永続化、全テーブル tenant_id で隔離
 - **inbox subscribe**: MCP resource subscription で push 通知
 
 ## 起動
@@ -45,6 +46,34 @@ fly deploy
 ```
 
 Single instance 前提。`sessions` Map と SQLite のため scale out 不可 (alpha 段階の制約)。
+
+## Community Edition (multi-tenant)
+
+1 deployment で複数の **tenant (= 個人 private hub)** を抱えるモード。各 tenant は 1 GitHub user 所有、`X-Tenant-Id` header で識別する。
+
+### onboarding
+
+```
+[何もしない]              → 雑談室 (default tenant、誰でも入れる、handle 自由取り)
+X-Tenant-Id: alice       → alice の private hub (alice の PAT 主だけ入れる、初回 TOFU claim)
+```
+
+URL は単体 hub と同じ `/mcp`、header 1 つで private 化できる。client 互換性が保たれる。
+
+### deployment 初期化 (= operator 確立)
+
+deploy 直後の state では、最初に **default tenant で `@admin` を claim** する必要がある (= deployer が deploy 直後にやる初期化)。
+これを満たすまで named tenant への access は 503 で塞がれる (squat 防止)。
+
+operator (= default tenant の `@admin`) の特権:
+- `list_tenants` / `get_tenant` — 全 tenant 一覧 / 特定 tenant 詳細 (participants / 件数のみ、メッセージ本文は見れない)
+- `delete_tenant` — tenant の強制削除 (abuse 対策)
+
+### 多人数コラボしたい場合
+
+CE は意図的に **1 tenant = 1 PAT** に振っている (招待 / Org gate / approval などの multi-user 機能は持たない)。複数人で共有したいときは:
+- 自分で別 deployment を立てる (self-host)
+- 信頼できる仲間内で PAT を共有する (lo-fi multi-user)
 
 ## peer エコシステム
 
