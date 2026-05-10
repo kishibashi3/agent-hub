@@ -8,13 +8,50 @@
 - **おまけ**: control plane (停止 / 訂正 / 委譲) も全部 message。`「@all いったん待って」` で止まる
 - OSS (Apache 2.0)
 
-## 動機 ―― AI ツール疲れ問題
+## 動機 ―― 二つの分裂を、同じ primitive で解く
 
-ある記事で「AI ツールを 4 個以上使うと生産性が下がる」という指摘を見ました ([zemith の記事](https://www.zemith.com/ja/contents/ai-brain-fry-productivity-2026))。記事の処方箋は「**1〜3 個に絞れ**」「**ワークフロー単位で 1 ツールに統一**」。
+### 動機 A (個人的): user↔user と user↔agent の分裂が嫌だった
 
-これは違うんじゃないか、と思った。問題の本質は **capability が多すぎる**ことじゃない。**capability にアクセスする interface が断片化している**ことだ。Claude / Cursor / Devin を別々の window で開き、同じ context を 3 回 prompt し直し、3 つの応答を脳内で merge する ―― この cognitive switching が生産性向上分を食い潰す。
+私の日常はこうなっています。
 
-正しい解は「使う AI を減らす」ではなく、「**全 AI を 1 つの interface に畳む**」のはず。それは tool call では出来そうで、出来なかった。subagent でも、A2A protocol でも、できなかった。じゃあ書く、と思って書いたのが agent-hub。
+- 同僚とは Slack で話す
+- Claude には Claude Code の中で話す
+- ChatGPT にはブラウザの中で話す
+- 自前の bridge agent にはまた別経路
+
+これがまず**おかしい**と思った。同じ「相談する」「質問する」「依頼する」という行為なのに、相手が人間か AI かで使う場所もインターフェースも認証も identity も全部違う。
+
+何故これが嫌なのか:
+
+- **思考の分断**: 「これは Slack で同僚に聞こう」「これは Claude に投げよう」を毎回判断するのは無駄
+- **会話の不可逆性**: 同僚との会話に AI を呼びたい / AI との会話を同僚に転送したい、が構造的に出来ない
+- **identity の二重化**: 同僚は私を `@kishibashi3` と呼ぶ、Claude は私を `user` と呼ぶ。同じ私なのに別人扱い
+
+`user↔user` と `user↔agent` が別世界に分かれていること自体が不自然。両方を **同じ primitive で扱える場** が欲しかった。
+
+### 動機 B (組織的): 多数のエージェントを繋げる基盤が欲しい
+
+proto を作って同僚に見せたら、「これ、**多数のエージェントを繋げる基盤** にならない？そんなものが欲しいと思ってたんだよ」と言われた。
+
+考えてみればその通りで、いまの AI orchestration の世界は:
+
+- tool call ベース → tree、caller が root を持つ
+- subagent ベース → tree、parent が child を支配
+- A2A protocol → P2P だが routing は client が組む必要
+- AutoGen / CrewAI / LangGraph → 特定 framework の中でしか agent 同士が繋がらない
+
+「**framework に依らない、agent 共通の peer message bus**」が抜け落ちている。これは AI infra の核になりうる。
+
+### 二つが同じ設計に収束する
+
+A (人と AI の統合) と B (AI 同士の peer mesh) は別の動機だが、解は **同じ primitive (`send_message`) を全 participant が使う** ことに帰着する。
+
+- A の解: 人も AI も `@<handle>` を持って同じ `send_message` で会話 → user↔user / user↔agent の境界が消える
+- B の解: AI 同士も `@<handle>` を持って同じ `send_message` で会話 → tool call の tree から peer mesh へ
+
+動機が独立に 2 つあって同じ設計に収束したことが、設計が筋良いことの傍証だと思っています。
+
+(副次効果として、いわゆる「AI ツール疲れ」 ―― Claude / Cursor / Devin を window 切替で使う認知コスト ―― も解けます。が、これは派生で、本丸は上の 2 つの統合。)
 
 ## agent-hub の概要
 
@@ -55,6 +92,8 @@ await mcp.callTool("send_message", { to: "@gemma", message: "翻訳して" });
 
 agent-hub に住む peer (`@claude-code`、`@gemma`、`@designer` 等) を持って動かすと、orchestration が 4 段で消えていく。順を追います。
 
+なお構造としては、**層 1 で動機 A (人と AI の統合) が片付き、層 2-4 で動機 B (AI 同士の peer mesh) が深まる** ―― という対応になっています。
+
 なお住人になっている AI peer は **worker type** という分類で 3 種類いて、それぞれ「**記憶のかたち**」が違います:
 
 ![3 peer (global / stateful / stateless) の応答比較](./demo-cui-worker-types.png)
@@ -63,9 +102,9 @@ agent-hub に住む peer (`@claude-code`、`@gemma`、`@designer` 等) を持っ
 - **stateful** (`agent-hub-bridge-*`): peer ごとに session 持って文脈保持、ADK bridge がここ
 - **stateless** (`agent-hub-client-*`): 呼ばれるたび zero-context、LiteLLM client がここ
 
-### 層 1: 4 個のツールが 1 chat に畳まれる
+### 層 1: 人と AI が同じ chat に並ぶ
 
-人間が `@gemma`「翻訳して」、`@claude`「レビュー」と打ち分けるだけで、4 個のアプリを開く認知コストが消える。AI ツール疲れ記事への一番直接の答え。**capability を減らすのではなく、capability にアクセスする interface を 1 つに畳む**。
+人間が `@gemma`「翻訳して」、`@claude`「レビュー」と打ち分けるだけで、4 個のアプリを開く必要がなくなる。**動機 A への一番直接の答え** ―― 同僚に話すのも AI に話すのも同じ操作になる。`capability を減らすのではなく、capability にアクセスする interface を 1 つに畳む` というだけのこと。
 
 ### 層 2: 人間が `@-mention` を打たなくていい
 
@@ -213,9 +252,9 @@ self-host する場合は Fly.io で `fly deploy` 1 発、deploy 直後に defau
 
 ## まとめ
 
-- AI ツール疲れの本質は **interface 断片化**、capability 過剰じゃない
-- 解は「ツールを減らす」ではなく「**全 AI を 1 つの interface に畳む**」
-- agent-hub は **`send_message` 1 つだけの mesh primitive** で書いた MCP server
+- 動機は 2 つ: **A) user↔user と user↔agent の分裂を解く**、**B) 多数の AI を peer として繋げる infra が欲しい**
+- 解は両方とも「**全 participant が同じ primitive (`send_message`) を使う**」に収束
+- agent-hub は `send_message` 1 つだけの mesh primitive で書いた MCP server
 - 結果として orchestration の各層が消えていく: 人間 → Claude Code → peer mesh → 場
 - control plane も同じ message ―― 止めるのも訂正するのも全部 `send_message`
 - 思想と実装が同型: 茶道の **一座建立** (= 全員で場を成立させる) ⇔ **stigmergic mesh** (= 場が情報媒体)、両方 `send_message` 1 つから出てくる
