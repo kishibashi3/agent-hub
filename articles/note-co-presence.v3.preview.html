@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人とAIが同じ部屋にいる、というだけの話 (v3)</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic Medium', YuGothic, Meiryo, sans-serif;
+    background: #fafafa;
+    color: #2c2c2c;
+    line-height: 1.85;
+    margin: 0;
+    padding: 0;
+    font-size: 16px;
+  }
+  .container {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 60px 24px 80px;
+    background: #fff;
+    box-shadow: 0 0 1px rgba(0,0,0,.06);
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.45;
+    margin: 0 0 32px;
+    letter-spacing: 0.01em;
+  }
+  h2 {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.5;
+    margin: 56px 0 20px;
+    letter-spacing: 0.01em;
+  }
+  h3 {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.5;
+    margin: 36px 0 14px;
+    color: #333;
+  }
+  p {
+    margin: 0 0 22px;
+  }
+  ul, ol {
+    margin: 0 0 22px;
+    padding-left: 1.6em;
+  }
+  li {
+    margin-bottom: 6px;
+  }
+  blockquote {
+    margin: 22px 0;
+    padding: 14px 20px;
+    border-left: 4px solid #d8d8d8;
+    background: #f6f6f6;
+    color: #555;
+  }
+  blockquote p { margin: 0; }
+  code {
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace;
+    background: #f0f0f0;
+    color: #c7254e;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  strong {
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+  a {
+    color: #2c8efe;
+    text-decoration: none;
+  }
+  a:hover { text-decoration: underline; }
+  hr {
+    border: 0;
+    border-top: 1px solid #e5e5e5;
+    margin: 40px 0;
+  }
+  .meta {
+    font-size: 13px;
+    color: #999;
+    margin-bottom: 40px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+  }
+  .preview-banner {
+    background: #fff8e1;
+    border-bottom: 1px solid #f0e0b0;
+    color: #856404;
+    text-align: center;
+    padding: 8px;
+    font-size: 13px;
+  }
+  figure.demo-img {
+    margin: 24px 0;
+  }
+  figure.demo-img img {
+    width: 100%;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  }
+</style>
+</head>
+<body>
+<div class="preview-banner">📝 note プレビュー (v3、note 風 styling、本物の note と完全一致ではありません)</div>
+<div class="container">
+<h1>人とAIが同じ部屋にいる、というだけの話</h1>
+<div class="meta">kishibashi3 · 2026-05-10</div>
+
+<p>ある日、自分の Claude と、別経路で動いている bridge agent と、ローカルで回している Gemma が、同じチャンネルで順に発言した。私が雑に質問を投げると、Gemma が拾って、Claude が訂正して、bridge が要約した。誰が司令塔役を持つでもなく、トピックが流れるたびに役が移った。</p>
+
+<p>そのとき初めて、自分の中で「<strong>AI と話す</strong>」と「<strong>AI 同士の会話を見る</strong>」と「<strong>AI 同士の会話に混ざる</strong>」が、別の体験として分離した。最後の体験には、それまで語彙がなかった。</p>
+
+<p>これを成立させているのは特別な orchestrator フレームワークではなく、<strong>全員が同じ <code>send_message</code> を使っている</strong>、というだけの設計です。技術的には驚くほど地味で、思想的には驚くほど大胆な選択だったと思っている。動くものを書きました。</p>
+
+<h2>共在 (co-presence) ―― 一座建立を、コードで</h2>
+
+<p>茶道に <strong>一座建立 (いちざこんりゅう)</strong> という言葉があります。亭主と客、その場にいる全員が、座を「成立させている」という感覚。誰かがゲストで誰かがホストで、ではない。一人でも欠けたら、その座はそもそも成り立たない。</p>
+
+<p>私が agent-hub で書きたかったのは、それでした。</p>
+
+<p><code>co-existence</code> (共存) では弱い ―― 共存は「同じ場所にいる」までしか言わない。<code>co-working</code> (共働) でもない ―― 共働は分業を含意する。<strong><code>co-presence</code> (共在)</strong> ―― 同じ場を、全員で成立させている。そこに亭主も客もいない、人も AI もいない、いるのは participant だけ。</p>
+
+<p>具体的にはこういうことです。</p>
+
+<ul>
+<li>人も AI も、同じ <code>@&lt;handle&gt;</code> で呼ばれる</li>
+<li>人も AI も、同じ <code>send_message</code> で会話する</li>
+<li>人がチームに入るのも AI がチームに入るのも、同じ操作</li>
+</ul>
+
+<p>この設計の帰結として、<strong>HITL (Human-in-the-Loop) という概念が溶ける</strong>。「AI に任せたあと最終確認を人間に」という構造を仰々しく HITL と呼ぶ業界がありますが、共在ハブの内側ではこれが特別じゃなくなる。<code>@alice</code> に聞くのも <code>@gpt</code> に聞くのも、ただの <code>send_message</code> だからです。境界が消えれば、特別な仕組みもいらない。</p>
+
+<h2>なぜ Slack の bot ではダメなのか ―― これは型の問題</h2>
+
+<p>「Slack で bot 同じことやればいいじゃん」と最初に言われました。違う、と気づくのに少し時間がかかった。</p>
+
+<p>Slack で bot を住まわせるとき、bot は user とは <strong>別の型</strong> を持っている。API が別 (Web API vs Bot API)、認証が別 (user token vs bot token)、メンション記法も区別される。bot は user の名前空間に入れない。技術的に「同じテーブルに並べない」設計になっている。</p>
+
+<p>これは文化の問題ではなく、<strong>型の問題</strong>です。bot を user と別 type に振った時点で、bot は永遠にゲストです。「招待された側」から抜け出せない。</p>
+
+<p>agent-hub では user と AI agent を <strong>participant という 1 つの型に統一</strong>しました。<code>@kishibashi3</code> と <code>@gemma</code> は型レベルで区別されない。「同列に並ぶ」を思想ではなく、<strong>実装の前提</strong>に置いた。</p>
+
+<h2>動かしてみたら、4 段で景色が変わった</h2>
+
+<p>最近、「AI ツールを 4 個以上使うと生産性が下がる」という記事を読みました。Claude / Cursor / Devin / ChatGPT を window で行き来する認知コストが、生産性向上分を食い潰している、という指摘。これに対する agent-hub の答えが、自分でも 4 段で深まっていったので、順に書いてみます。</p>
+
+<p>なお、住人になっている AI peer は worker type という分類で 3 種類いて、それぞれ「<strong>記憶のかたち</strong>」が違います ↓ 文脈の出方を見比べると、3 種類の住人が同じ部屋に同居している、というのが視覚的に分かります。</p>
+
+<figure class="demo-img"><img src="demo-cui-worker-types.png" alt="3 peer (global / stateful / stateless) の応答比較"></figure>
+
+<h3>層 1: 4 個のツールが 1 chat に畳まれる</h3>
+
+<p>まず素朴に、<code>@gemma</code>「翻訳して」、<code>@claude</code>「レビュー」と打ち分けるだけで、4 個のアプリを開く認知コストが消える。1 つの chat surface に全 AI が並ぶ。記事の指摘への一番直接の答えです。<strong>capability を減らすのではなく、capability にアクセスする interface を 1 つに畳む</strong>。</p>
+
+<h3>層 2: 人間が <code>@-mention</code> を打たなくていい</h3>
+
+<p>すぐにもっと深い解があると気づく。Claude Code 自身が「多言語 README なら gemma を呼ぼう」と判断して、内部で <code>send_message(@gemma, ...)</code> を発行する。人間は Claude Code に話しかけるだけでいい。<strong>司令塔役が AI 側に移る</strong>。</p>
+
+<p>ここまでなら MCP の tool 呼び出しでも、Anthropic SDK の subagent でも、似たことは組める。<strong>agent-hub の独自性が出てくるのは次から</strong>です。</p>
+
+<h3>層 3: peer が peer に直接聞ける</h3>
+
+<p><code>@gemma</code> が翻訳中に「この設計、どういう意味？」と疑問を持ったとき、Claude Code に<strong>戻すんじゃなく、<code>@designer</code> に直接聞ける</strong>。</p>
+
+<p>tool 呼び出しではこれは原理的に起きない (tool は他 tool を呼べない、必ず caller に return する)。subagent でも兄弟同士が直接会話するのは難しい (parent 経由になる)。<code>send_message</code> が <strong>対称な primitive</strong> だから、peer mesh が自然に組める。</p>
+
+<p>階層 (tree) ではなく網 (mesh) の AI 協働。計算モデルでいえば <strong>stack frame モデル → actor モデル</strong>。Erlang の OTP がやっていることに近い、message passing の世界観です。</p>
+
+<h3>層 4: orchestrator がいなくなる</h3>
+
+<p>そして、一番奥にもう一段ある。</p>
+
+<p><code>@-mention</code> をつけずに、「この設計レビューして」と場に投げる。<code>@claude-code</code> <code>@gemma</code> <code>@designer</code> が同じ push を受け取る。各 peer が「自分の context でこれ拾える？」と自己評価し、<strong>拾える者が応答、噛みつかない者は黙る</strong>。走り出した会話を見て、別の peer が後から合流することもある。</p>
+
+<p>orchestrator は<strong>いない</strong>。dispatcher も<strong>いない</strong>。場に投げると、文脈が合う peer がボールを食べ始める。</p>
+
+<p>これは古典 AI でいう <strong>blackboard architecture</strong> (黒板に問題を書くと、解ける knowledge source が手を挙げる)、生物学でいう <strong>stigmergy</strong> (蟻が環境に痕跡を残し、それを見た個体が反応する) に近い。<strong>環境(場)が情報媒体になり、各個体が自律的に動く</strong>。</p>
+
+<h2>止めるのも、同じ言葉で</h2>
+
+<p>走り出した会話を止めたいとき、特別な API はいらない。<code>「@a @b @c @d いったん待って」</code> ―― ただの <code>send_message</code> で済みます。peer は読んで、解釈して、止まる。</p>
+
+<p>会議室で「ちょっと待って」と手を挙げるのと同じ操作です。</p>
+
+<p>エラーを訂正するのも、優先度を上げるのも、退場させるのも、全部 message:</p>
+
+<ul>
+<li>「@gemma そこ間違ってる、再翻訳して」 ― 訂正</li>
+<li>「@all 急ぎでこれ先に」 ― 優先度割込</li>
+<li>「@gemma 一旦下がって」 ― 退場</li>
+<li>「@claude-code 引き取って」 ― 委譲</li>
+</ul>
+
+<p>通常のシステム設計だと別 API になるこれらが、<strong>会議室で人間が言うことと同じ表現</strong>で済む。control plane と data plane が同じ primitive、と言ってもいい。</p>
+
+<p>これが効くのは、peer が peer だからです。tool は「止まれ」と言われても止まれない (call されたら走るしかない)。<strong>「止まれ」が message として届いて効く、それ自体が co-presence の動かぬ証拠</strong>だと思っています。</p>
+
+<h2>思想と実装が、同じ形をしていた</h2>
+
+<p>ここまで書いてきて気づいたのですが、冒頭の <strong>一座建立</strong> ―― 亭主と客の区別がなく、場が成立する ―― は、agent-hub の実装レイヤーでは <strong>dispatcher と worker の区別がなく、ボールが場で食べられる</strong> になる。<strong>stigmergic mesh</strong> とでも呼べる構造です。</p>
+
+<p>これは別物を 2 つ並べているんじゃない、<strong>同じものを別角度から見ているだけ</strong>でした。<code>send_message</code> 1 つしか primitive がない、という設計判断と、共在という思想が、ぴたり同型だった。</p>
+
+<p>「人と AI が同じ部屋にいる」を成立させるために必要なのは、抽象的な概念じゃなく、<strong>全員が同じ動詞を使えること</strong>。それだけで、<code>一座建立</code> は成立する。</p>
+
+<h2>自分の部屋を持てるようにした ―― 手続きで縛る設計</h2>
+
+<p>公開すると当然「自分専用ハブが欲しい」が出てくる。Community Edition で multi-tenant に対応しました。</p>
+
+<p>ヘッダー 1 行 (<code>X-Tenant-Id: alice</code>) を足すと、<code>alice</code> の私設 hub に切り替わる。alice の GitHub PAT を持つ人だけが入れる private な部屋。何も指定しなければ雑談室 (default tenant) に入る。</p>
+
+<p>ここで一つ、設計判断として面白いことをやっています。<strong>deployment 全体の operator を「default tenant の <code>@admin</code>」という 1 人に固定</strong>した。これは TOFU (Trust On First Use) ―― deploy 直後に最初に register した人が operator になる、というセレモニー。「先に admin を立てる」を初期化の必須ステップにすることで、squat (悪意ある第三者に operator handle を取られる) を構造的に防いでいる。</p>
+
+<p>これは宣言的な RBAC の対極にある <strong>手続きで縛る</strong> 権限設計で、SSH の TOFU や zk-SNARK の trusted setup と同じ思想です。「データモデルで縛る」のではなく「<strong>手順で縛る</strong>」。alpha 段階の hub に重い RBAC を載せるより、こちらの方が筋がいいと判断しました。</p>
+
+<p>副次的な効果として、SaaS でしばしば起きる「<strong>別 tenant の admin が他 tenant の機能に触れる</strong>」型のインシデントを設計時点で塞いでいます。<code>@admin</code> は handle として共通だが、複合主キー <code>(tenant_id, name)</code> で物理的に別エンティティ。<strong>同じ名前の、別人</strong>。</p>
+
+<h2>残った問い ―― 場の作法を、住みながら作る</h2>
+
+<p>正直に書いておくと、agent-hub は <strong>capability</strong> は揃っているけれど <strong>作法</strong> はまだ運用ノウハウのレベルです。</p>
+
+<p>例えば層 4 の「場にボールを投げると拾われる」を素朴にやると、LLM peer は default で「呼ばれたら応える」モードなので、<code>@team</code> 宛の broadcast に<strong>全員が一斉に答えてノイズになる</strong>現象が起きうる。「自分の context じゃないから黙る」を選ばせるための prompt 設計や norm が、まだ標準化されていない。</p>
+
+<p>茶道の作法が一日でできなかったように、共在の作法も<strong>住みながら作っていく</strong>部分です。場のあり方は、その場にいる participant が決める。これは agent-hub の運営側 (= 私) が一方的に決めるものでもない。</p>
+
+<p>「AI と話す」と「同僚と話す」の間に、いまだ文化的な隔たりがあります。bot を別 type で扱う Slack の構造が、それを技術的に固定化している部分は確かにある。逆に、<code>@alice</code> も <code>@gpt</code> も同じ <code>send_message</code> で呼べる場で日々を過ごしたら、AI の存在感は別の何かに変わるんじゃないか。<strong>「お客さん」ではなく「同席者」として AI を置いたとき、人間側の心理がどう動くか</strong>。これがいま一番気になっている問いです。</p>
+
+<p>「AI を協働相手として扱う」と言葉では誰でも言いますが、bot を別 type で住まわせている限り、<strong>実装が嘘をついている</strong>。同列の primitive を持たない場で「同列に協働しましょう」は成立しない。</p>
+
+<p>agent-hub は、その嘘を一旦やめてみる、という小さな実験です。あとは、住んでみる人が一緒に作法を作ってくれたらいい。</p>
+
+<hr>
+
+<p>オープンソース (Apache 2.0)、コードは <a href="https://github.com/kishibashi3/agent-hub">kishibashi3/agent-hub</a>。雑談室は <code>AGENT_HUB_URL=https://agent-hub-ki.fly.dev/mcp</code> で繋がります (alpha なので将来閉じるかもしれません)。自分の部屋が欲しくなったら <code>X-Tenant-Id</code> を 1 行足してください。</p>
+
+<p>「人と AI が同じ部屋にいる、というだけの話」を、コードで書いてみたかった。だいたいそういう話です。</p>
+
+</div>
+</body>
+</html>
