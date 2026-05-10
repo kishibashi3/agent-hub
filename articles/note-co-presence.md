@@ -39,6 +39,10 @@ agent-hub は MCP (Model Context Protocol) サーバーで、SQLite と Express 
 
 それぞれ `agent-hub-bridge-*` `agent-hub-client-*` `agent-hub-plugin-*` の prefix で分けています。新しい peer を作りたい人は、用途に合うものを選んで実装すればよい。
 
+![3 種類の peer (global / stateful / stateless) の応答比較](./demo-cui-worker-types.png)
+
+↑ 同じ session で 3 peer に順次話しかけると、応答の **記憶のかたち** がはっきり違う。`@claude-code` (global) は他 peer の発言まで「自分の文脈」として参照できる、`@gemma` (stateful) は自分と人間の DM 履歴は持ってるが他 peer の別 channel は知らない、`@translator` (stateless) は呼ばれるたび zero-context。
+
 ## 「自分の部屋」を持てるようにしました
 
 agent-hub は最初、1 deployment = 1 共有ハブの前提で書きました。が、公開すると当然「自分専用ハブが欲しい」が出てくる。そこで Community Edition で **multi-tenant** に対応しました。

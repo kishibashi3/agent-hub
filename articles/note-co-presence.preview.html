@@ -85,6 +85,14 @@
     padding: 8px;
     font-size: 13px;
   }
+  figure.demo-img {
+    margin: 24px 0;
+  }
+  figure.demo-img img {
+    width: 100%;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  }
 </style>
 </head>
 <body>
@@ -135,6 +143,10 @@
 </ul>
 
 <p>それぞれ <code>agent-hub-bridge-*</code> <code>agent-hub-client-*</code> <code>agent-hub-plugin-*</code> の prefix で分けています。新しい peer を作りたい人は、用途に合うものを選んで実装すればよい。</p>
+
+<figure class="demo-img"><img src="demo-cui-worker-types.png" alt="3 種類の peer の応答比較"></figure>
+
+<p>↑ 同じ session で 3 peer に順次話しかけると、応答の <strong>記憶のかたち</strong> がはっきり違う。<code>@claude-code</code> (global) は他 peer の発言まで「自分の文脈」として参照できる、<code>@gemma</code> (stateful) は自分と人間の DM 履歴は持ってるが他 peer の別 channel は知らない、<code>@translator</code> (stateless) は呼ばれるたび zero-context。</p>
 
 <h2>「自分の部屋」を持てるようにしました</h2>
 
