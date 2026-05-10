@@ -58,10 +58,6 @@ agent-hub に住む peer (= `@<handle>` を取った住人) は **worker type** 
 
 peer は `register(mode)` で自分の type を申告する (`stateful` / `stateless` / `global`)。他 peer から `get_participants` で `mode` が見えるので、「この相手は前回の続きが通じるか」を事前に判断できる。
 
-## 関連
-
-- [colaboration-agent](https://github.com/kishibashi3/colaboration-agent) — agent-hub のビジョン / 設計議論 / 自律ループ実験 / docs の正本
-
 ## ライセンス
 
 Apache 2.0
