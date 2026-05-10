@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-hub demo — 3 種の peer の違い</title>
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #1a1a1a;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Hiragino Kaku Gothic ProN', 'Yu Gothic Medium', monospace;
+    font-size: 14px;
+    line-height: 1.65;
+    color: #d4d4d4;
+  }
+  .terminal {
+    max-width: 760px;
+    margin: 0 auto;
+    background: #0d0d0d;
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+    overflow: hidden;
+    border: 1px solid #2a2a2a;
+  }
+  .titlebar {
+    background: #1f1f1f;
+    padding: 10px 16px;
+    border-bottom: 1px solid #2a2a2a;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #888;
+    font-size: 12px;
+  }
+  .titlebar .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+  }
+  .dot.r { background: #ff5f56; }
+  .dot.y { background: #ffbd2e; }
+  .dot.g { background: #27c93f; }
+  .titlebar .label { margin-left: 12px; }
+  .body {
+    padding: 20px 24px;
+  }
+  .system { color: #6a737d; }
+  .user { color: #58a6ff; }
+  .agent { color: #79c0ff; }
+  .agent.global { color: #d2a8ff; }
+  .agent.stateful { color: #7ee787; }
+  .agent.stateless { color: #ff7b72; }
+  .prompt { color: #888; }
+  .arrow { color: #555; }
+  .badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    margin-left: 8px;
+    background: #2a2a2a;
+  }
+  .badge.global { color: #d2a8ff; }
+  .badge.stateful { color: #7ee787; }
+  .badge.stateless { color: #ff7b72; }
+  pre {
+    margin: 4px 0 16px;
+    padding: 0;
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .divider {
+    border: 0;
+    border-top: 1px dashed #2a2a2a;
+    margin: 18px 0;
+  }
+  .annot {
+    color: #6a737d;
+    font-size: 12px;
+    font-style: italic;
+    margin: 4px 0 14px 0;
+  }
+  .header-note {
+    text-align: center;
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header-note">同じ質問を 3 種類の peer に投げると、応答の「記憶のかたち」がはっきり違う。</div>
+
+<div class="terminal">
+  <div class="titlebar">
+    <span class="dot r"></span>
+    <span class="dot y"></span>
+    <span class="dot g"></span>
+    <span class="label">claude-code · @kishibashi3 · default tenant</span>
+  </div>
+  <div class="body">
+<pre><span class="system">[skill] agent-hub-plugin loaded
+[monitor] inbox://@kishibashi3 subscribed</span>
+
+<span class="prompt">$</span> <span class="user">@claude-code さっきの設計の続き、コード書いて</span>
+
+<span class="agent global">@claude-code</span><span class="badge global">global</span>
+<span class="arrow">→</span> 了解。@gemma が翻訳した spec と、さっき @ouroboros が出してきた
+   roadmap も踏まえて TypeScript で書きます:
+
+   class Container {
+     private services = new Map&lt;string, unknown&gt;();
+     register&lt;T&gt;(key: string, factory: () =&gt; T) { ... }
+     resolve&lt;T&gt;(key: string): T { ... }
+   }
+
+   続きで Resolver pattern も足しますか?
+</pre>
+<div class="annot">↑ global は同じ session に全 peer の発言が流れてくるので、
+   @gemma の翻訳も @ouroboros の roadmap も「見て覚えてる」前提で答える。</div>
+
+<hr class="divider">
+
+<pre><span class="prompt">$</span> <span class="user">@gemma さっきの設計の続き、コード書いて</span>
+
+<span class="agent stateful">@gemma</span><span class="badge stateful">stateful</span>
+<span class="arrow">→</span> 前回 DM でやり取りした DI パターンの続きですね。私と
+   @kishibashi3 さんの会話履歴に沿って、TypeScript で:
+
+   class Container { ... }
+
+   (※ @ouroboros の roadmap や @claude-code の最新 review は
+    私の context に入ってないので、共有していただければ反映します)
+</pre>
+<div class="annot">↑ stateful は @kishibashi3 との 1 対 1 の文脈は持ってる。
+   ただし他 peer (@ouroboros, @claude-code) の発言は別 channel なので見てない。</div>
+
+<hr class="divider">
+
+<pre><span class="prompt">$</span> <span class="user">@translator さっきの設計の続き、コード書いて</span>
+
+<span class="agent stateless">@translator</span><span class="badge stateless">stateless</span>
+<span class="arrow">→</span> 申し訳ありません、私は単発呼び出しで動作しているため、
+   過去の会話を記憶していません。
+   また、私の用途は翻訳に特化しています。
+   翻訳したい原文を直接お送りいただけますか。
+</pre>
+<div class="annot">↑ stateless は呼ばれるたび zero-context、しかも specialty 特化。
+   「さっきの続き」は通じない、というのが設計の前提。</div>
+
+  </div>
+</div>
+
+</body>
+</html>
