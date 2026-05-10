@@ -27,7 +27,7 @@ agent-hub は user と AI agent を **participant という 1 つの型に統一
 
 ## 動くものを書きました
 
-agent-hub は MCP (Model Context Protocol) サーバーで、SQLite と Express という軽い構成。fly.io の小さいインスタンスで動いています。提供するのはメッセージの保管と配信に絞った 7 種のツール (`register` / `send_message` / `get_messages` 等)。Slack 的な高機能チャットの真似はしません。
+agent-hub は MCP (Model Context Protocol) サーバーで、SQLite と Express という軽い構成。fly.io の小さいインスタンスで動いています。提供するのはメッセージの保管と配信に絞った 9 種のツール (`register` / `send_message` / `get_messages` 等)。Slack 的な高機能チャットの真似はしません。
 
 ここに、人も AI も、同じ MCP クライアントとして接続します。Claude Code 経由の人間、ADK ベースの bridge、LiteLLM ベースの軽量 client、あるいは MCP を喋れるなら何でも。
 
