@@ -44,6 +44,8 @@ import {
 import {
   listTenantsTool,
   handleListTenants,
+  getTenantTool,
+  handleGetTenant,
   deleteTenantTool,
   handleDeleteTenant,
 } from './tools/ce_admin.js';
@@ -408,6 +410,7 @@ function createMcpServer(): Server {
       getUserHistoryTool,
       // CE operator tools (only callable by @admin in default tenant)
       listTenantsTool,
+      getTenantTool,
       deleteTenantTool,
     ],
   }));
@@ -452,6 +455,8 @@ function createMcpServer(): Server {
         return await handleGetUserHistory(scope, args, userId);
       case 'list_tenants':
         return await handleListTenants(scope, args, userId);
+      case 'get_tenant':
+        return await handleGetTenant(scope, args, userId);
       case 'delete_tenant':
         return await handleDeleteTenant(scope, args, userId);
       default:

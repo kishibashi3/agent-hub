@@ -4,7 +4,11 @@ import { initDatabase } from '../../../db/migrations.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
 import { handleRegister } from '../register.js';
 import { handleSendMessage } from '../send_message.js';
-import { handleListTenants, handleDeleteTenant } from '../ce_admin.js';
+import {
+  handleListTenants,
+  handleGetTenant,
+  handleDeleteTenant,
+} from '../ce_admin.js';
 
 describe('CE operator tools', () => {
   let db: Database.Database;
@@ -58,6 +62,66 @@ describe('CE operator tools', () => {
       expect(r.isError).toBe(true);
       const body = JSON.parse(r.content[0].text as string);
       expect(body.error).toBe('forbidden');
+    });
+  });
+
+  describe('get_tenant', () => {
+    it('default の @admin から呼ぶと named tenant の詳細が返る', async () => {
+      const scope = scopeToTenant(db, 'default');
+      const r = await handleGetTenant(scope, { domain: 'acme' }, '@admin');
+      expect(r.isError).toBeUndefined();
+      const body = JSON.parse(r.content[0].text as string);
+      expect(body.domain).toBe('acme');
+      expect(body.owner).toBe('kishibashi');
+      expect(body.message_count).toBe(1);
+      expect(body.team_count).toBe(0);
+      expect(body.participants).toHaveLength(2);
+      const names = body.participants.map(
+        (p: { name: string }) => p.name
+      );
+      expect(names).toContain('@admin');
+      expect(names).toContain('@bob');
+      // owner / mode も含まれる
+      const adminP = body.participants.find(
+        (p: { name: string }) => p.name === '@admin'
+      );
+      expect(adminP.owner).toBe('kishibashi');
+    });
+
+    it('default tenant 自体も get できる (owner=NULL)', async () => {
+      const scope = scopeToTenant(db, 'default');
+      const r = await handleGetTenant(scope, { domain: 'default' }, '@admin');
+      expect(r.isError).toBeUndefined();
+      const body = JSON.parse(r.content[0].text as string);
+      expect(body.domain).toBe('default');
+      expect(body.owner).toBeNull();
+      expect(body.participants.length).toBeGreaterThan(0);
+    });
+
+    it('存在しない tenant は 404 相当', async () => {
+      const scope = scopeToTenant(db, 'default');
+      const r = await handleGetTenant(scope, { domain: 'ghost' }, '@admin');
+      expect(r.isError).toBe(true);
+      const body = JSON.parse(r.content[0].text as string);
+      expect(body.message).toContain("'ghost'");
+    });
+
+    it('default tenant の非 @admin からは forbidden', async () => {
+      const scope = scopeToTenant(db, 'default');
+      const r = await handleGetTenant(
+        scope,
+        { domain: 'acme' },
+        '@kishibashi3'
+      );
+      expect(r.isError).toBe(true);
+      const body = JSON.parse(r.content[0].text as string);
+      expect(body.error).toBe('forbidden');
+    });
+
+    it('named tenant の @admin からは forbidden', async () => {
+      const scope = scopeToTenant(db, 'acme');
+      const r = await handleGetTenant(scope, { domain: 'acme' }, '@admin');
+      expect(r.isError).toBe(true);
     });
   });
 

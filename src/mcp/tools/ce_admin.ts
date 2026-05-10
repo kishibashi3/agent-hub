@@ -107,6 +107,102 @@ export async function handleListTenants(
   return ok({ tenants: rows, count: rows.length });
 }
 
+// ---- get_tenant -------------------------------------------------------------
+
+const getTenantInput = z.object({
+  domain: z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9_-]{1,64}$/i, 'invalid domain'),
+});
+
+export const getTenantTool = {
+  name: 'get_tenant',
+  description:
+    '[CE operator] 特定 tenant の詳細を取得する。participants 一覧 (name / owner / mode / 作成日)、message 数を含む。default tenant の @admin だけ呼べる。プライバシー保護のためメッセージ本文は返さない。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      domain: {
+        type: 'string',
+        description: '対象 tenant domain',
+      },
+    },
+    required: ['domain'],
+  },
+};
+
+interface TenantParticipantRow {
+  name: string;
+  owner: string | null;
+  mode: string | null;
+  created_at: string;
+}
+
+export async function handleGetTenant(
+  scope: TenantScope,
+  args: unknown,
+  userId: string
+): Promise<CallToolResult> {
+  const denied = ensureCeOperator(userId, scope.tenantId);
+  if (denied) return denied;
+
+  let input: z.infer<typeof getTenantInput>;
+  try {
+    input = getTenantInput.parse(args);
+  } catch (error) {
+    return errorResult(
+      'get_tenant failed',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  const tenant = scope.db
+    .prepare(
+      'SELECT domain, owner, created_at FROM tenants WHERE domain = ?'
+    )
+    .get(input.domain) as
+    | { domain: string; owner: string | null; created_at: string }
+    | undefined;
+
+  if (!tenant) {
+    return errorResult(
+      'get_tenant failed',
+      `tenant '${input.domain}' は存在しません`
+    );
+  }
+
+  const participants = scope.db
+    .prepare(
+      `SELECT name, owner, mode, created_at
+       FROM participants
+       WHERE tenant_id = ? AND deleted_at IS NULL
+       ORDER BY created_at ASC`
+    )
+    .all(input.domain) as TenantParticipantRow[];
+
+  const messageCount = (
+    scope.db
+      .prepare('SELECT COUNT(*) AS c FROM messages WHERE tenant_id = ?')
+      .get(input.domain) as { c: number }
+  ).c;
+
+  const teamCount = (
+    scope.db
+      .prepare('SELECT COUNT(*) AS c FROM teams WHERE tenant_id = ?')
+      .get(input.domain) as { c: number }
+  ).c;
+
+  return ok({
+    domain: tenant.domain,
+    owner: tenant.owner,
+    created_at: tenant.created_at,
+    participants,
+    message_count: messageCount,
+    team_count: teamCount,
+  });
+}
+
 // ---- delete_tenant ----------------------------------------------------------
 
 const deleteTenantInput = z.object({
