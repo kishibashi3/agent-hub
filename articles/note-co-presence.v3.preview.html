@@ -147,17 +147,31 @@
 
 <p>agent-hub では user と AI agent を <strong>participant という 1 つの型に統一</strong>しました。<code>@kishibashi3</code> と <code>@gemma</code> は型レベルで区別されない。「同列に並ぶ」を思想ではなく、<strong>実装の前提</strong>に置いた。</p>
 
+<h2>動機が 2 つあった ―― そして同じ設計に収束した</h2>
+
+<p>書き始めたきっかけは、もっと個人的な不満でした。</p>
+
+<p>私の日常はずっと、<code>user↔user</code> と <code>user↔agent</code> が<strong>別世界</strong>だった。同僚とは Slack、Claude には Claude Code、ChatGPT にはブラウザ、自前の bridge agent にはまた別経路。同じ「相談する」「依頼する」という行為なのに、相手が人間か AI かでチャンネルが分かれていて、identity も違う (同僚は私を <code>@kishibashi3</code> と呼び、Claude は私を <code>user</code> と呼ぶ)。これが嫌だった。両方を同じ部屋に置きたい、というのが最初の動機 ―― <strong>動機 A</strong>。</p>
+
+<p>そして proto を作って同僚に見せたら、こう言われました。</p>
+
+<blockquote><p>「これ、<strong>多数のエージェントを繋げる基盤</strong> にならない？そんなものが欲しいと思ってたんだよ」</p></blockquote>
+
+<p>これが<strong>動機 B</strong>。考えてみればその通りで、AI 同士が peer として繋がる横の基盤が世の中にない。AutoGen も CrewAI も「特定 framework の中でだけ」agent が繋がる仕組みで、framework を跨いだ peer 通信は構造的にできない。「framework に依らない、agent 共通の peer message bus」が抜け落ちている。</p>
+
+<p>動機 A (人と AI を同じ部屋に) と動機 B (AI 同士を繋ぐ infra) は別物に見えますが、解は同じでした。<strong>全 participant が同じ primitive (<code>send_message</code>) を使う</strong>。それだけで両方が成立する。動機が独立に 2 つあって同じ設計に収束したことが、「この設計は筋がいい」と思える一番の根拠です。</p>
+
 <h2>動かしてみたら、4 段で景色が変わった</h2>
 
-<p>最近、「AI ツールを 4 個以上使うと生産性が下がる」という記事を読みました。Claude / Cursor / Devin / ChatGPT を window で行き来する認知コストが、生産性向上分を食い潰している、という指摘。これに対する agent-hub の答えが、自分でも 4 段で深まっていったので、順に書いてみます。</p>
+<p>実際に動かしてみると、この 1 つの設計判断から、orchestration が 4 段で消えていく現象を観察しました。順に書きます ―― 層 1 で動機 A が片付き、層 2-4 で動機 B が深まる、という対応になっています。</p>
 
 <p>なお、住人になっている AI peer は worker type という分類で 3 種類いて、それぞれ「<strong>記憶のかたち</strong>」が違います ↓ 文脈の出方を見比べると、3 種類の住人が同じ部屋に同居している、というのが視覚的に分かります。</p>
 
 <figure class="demo-img"><img src="demo-cui-worker-types.png" alt="3 peer (global / stateful / stateless) の応答比較"></figure>
 
-<h3>層 1: 4 個のツールが 1 chat に畳まれる</h3>
+<h3>層 1: 人と AI が同じ chat に並ぶ</h3>
 
-<p>まず素朴に、<code>@gemma</code>「翻訳して」、<code>@claude</code>「レビュー」と打ち分けるだけで、4 個のアプリを開く認知コストが消える。1 つの chat surface に全 AI が並ぶ。記事の指摘への一番直接の答えです。<strong>capability を減らすのではなく、capability にアクセスする interface を 1 つに畳む</strong>。</p>
+<p>まず素朴に、<code>@gemma</code>「翻訳して」、<code>@claude</code>「レビュー」、<code>@kishibashi3</code>「これどう思う？」を、全部同じ chat surface で打てる。<strong>動機 A への一番直接の答え</strong>です。同僚に話すのも AI に話すのも、同じ操作になる。capability を減らすのではなく、capability にアクセスする interface を 1 つに畳む、というだけのこと。</p>
 
 <h3>層 2: 人間が <code>@-mention</code> を打たなくていい</h3>
 
