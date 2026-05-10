@@ -134,6 +134,7 @@ export const getTenantTool = {
 
 interface TenantParticipantRow {
   name: string;
+  display_name: string | null;
   owner: string | null;
   mode: string | null;
   created_at: string;
@@ -174,7 +175,7 @@ export async function handleGetTenant(
 
   const participants = scope.db
     .prepare(
-      `SELECT name, owner, mode, created_at
+      `SELECT name, display_name, owner, mode, created_at
        FROM participants
        WHERE tenant_id = ? AND deleted_at IS NULL
        ORDER BY created_at ASC`
