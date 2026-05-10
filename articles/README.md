@@ -16,11 +16,14 @@ agent-hub の launch announcement、note 公開用。共在 (co-presence) の発
 | v2 | 構成見直し版 (型の問題 → 共在 の順、TOFU の再配置) | [note-co-presence.v2.md](./note-co-presence.v2.md) | — | — |
 | **v3 (最新・推奨)** | v2 + 4 段の orchestration removal + start/stop 対称性 + 思想 ⇔ 実装 の同型 | [note-co-presence.v3.md](./note-co-presence.v3.md) | [note-co-presence.v3.xml](./note-co-presence.v3.xml) | **[📝 v3 preview](https://htmlpreview.github.io/?https://github.com/kishibashi3/agent-hub/blob/main/articles/note-co-presence.v3.preview.html)** |
 
-### AI agent の orchestration から orchestrator を消す (qiita)
+### qiita 版 (技術寄り 2 段構え)
 
-note 版の技術寄り再構成。tool call / subagent / A2A / agent-hub のアーキ比較表、code 例、actor model / blackboard / stigmergy 観点、制約セクションを含む。
+| version | 想定読者 | 構成 | 字数 | ファイル |
+|---|---|---|---|---|
+| **intro (推奨入口)** | 初見の Qiita 読者、5 分で何かを掴みたい | CUI demo (PR レビュー workflow) → 仕組み → 触り方 → deep dive リンク | ~3.9k | [qiita-intro.md](./qiita-intro.md) |
+| deep dive | intro を読んで興味を持った人、設計詳細を知りたい開発者 | 動機 / アーキ比較表 / 4 段の orchestrator 解消 / control plane / TOFU / 制約 | ~11.7k | [qiita-co-presence.md](./qiita-co-presence.md) |
 
-[qiita-co-presence.md](./qiita-co-presence.md)
+intro は demo 起点で hook、deep dive は actor model / blackboard / stigmergy の観点まで踏み込む。Qiita 投稿は intro を出して、興味を持った人が deep dive へ流れる動線を想定。
 
 ### worker type デモ (note 記事内に組み込み用、screenshot して img として upload)
 
