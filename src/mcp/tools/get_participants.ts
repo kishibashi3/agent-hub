@@ -1,5 +1,4 @@
-import type { Database } from 'better-sqlite3';
-import { getParticipants } from '../../db/participants.js';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -31,13 +30,12 @@ export const getParticipantsTool = {
  * @returns MCP CallToolResult
  */
 export async function handleGetParticipants(
-  db: Database,
+  scope: TenantScope,
   _args: unknown,
   _userId: string
 ): Promise<CallToolResult> {
   try {
-    // 全参加者を取得
-    const participants = getParticipants(db);
+    const participants = scope.getParticipants();
 
     // TODO: チーム情報も取得して統合する（現時点では participants のみ）
     const result = participants.map((p) => ({

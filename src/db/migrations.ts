@@ -134,7 +134,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 5;
+  const targetVersion = 6;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -189,6 +189,113 @@ export function applyMigrations(db: Database.Database): void {
         ALTER TABLE participants ADD COLUMN deleted_at TEXT;
         INSERT INTO schema_version (version, description)
         VALUES (5, 'add deleted_at column to participants');
+      `,
+    });
+  }
+
+  // v5 → v6: multi-tenant 化 (tenants table + tenant_id 列 + 複合 PK)
+  // SQLite は ALTER で PK 変更できないので、各テーブル recreate + データ backfill。
+  // FK 整合のため foreign_keys を一時 OFF。既存データは tenant_id='default' 扱い。
+  if (currentVersion < 6) {
+    runMigration(db, {
+      version: 6,
+      description: 'multi-tenant: tenants table + tenant_id columns + composite PKs',
+      sql: `
+        -- FK を一時無効化 (recreate 中の整合維持のため)
+        PRAGMA foreign_keys = OFF;
+
+        -- tenants 登録テーブル新設
+        CREATE TABLE tenants (
+          domain TEXT PRIMARY KEY,
+          owner TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+        );
+        INSERT INTO tenants (domain, owner) VALUES ('default', NULL);
+
+        -- participants
+        CREATE TABLE participants_new (
+          tenant_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          display_name TEXT,
+          owner TEXT,
+          mode TEXT,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          PRIMARY KEY (tenant_id, name)
+        );
+        INSERT INTO participants_new (tenant_id, name, display_name, owner, mode, deleted_at, created_at)
+        SELECT 'default', name, display_name, owner, mode, deleted_at, created_at FROM participants;
+        DROP TABLE participants;
+        ALTER TABLE participants_new RENAME TO participants;
+
+        -- teams
+        CREATE TABLE teams_new (
+          tenant_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          owner TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          PRIMARY KEY (tenant_id, name),
+          FOREIGN KEY (tenant_id, owner) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO teams_new (tenant_id, name, owner, created_at)
+        SELECT 'default', name, owner, created_at FROM teams;
+        DROP TABLE teams;
+        ALTER TABLE teams_new RENAME TO teams;
+
+        -- team_members
+        CREATE TABLE team_members_new (
+          tenant_id TEXT NOT NULL,
+          team_name TEXT NOT NULL,
+          member_name TEXT NOT NULL,
+          joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          PRIMARY KEY (tenant_id, team_name, member_name),
+          FOREIGN KEY (tenant_id, team_name) REFERENCES teams(tenant_id, name) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id, member_name) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO team_members_new (tenant_id, team_name, member_name, joined_at)
+        SELECT 'default', team_name, member_name, joined_at FROM team_members;
+        DROP TABLE team_members;
+        ALTER TABLE team_members_new RENAME TO team_members;
+        CREATE INDEX idx_team_members_member ON team_members(tenant_id, member_name);
+
+        -- messages
+        CREATE TABLE messages_new (
+          tenant_id TEXT NOT NULL,
+          id TEXT NOT NULL,
+          sender TEXT NOT NULL,
+          recipient TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          PRIMARY KEY (tenant_id, id),
+          FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO messages_new (tenant_id, id, sender, recipient, body, created_at)
+        SELECT 'default', id, sender, recipient, body, created_at FROM messages;
+        DROP TABLE messages;
+        ALTER TABLE messages_new RENAME TO messages;
+        CREATE INDEX idx_messages_recipient ON messages(tenant_id, recipient);
+        CREATE INDEX idx_messages_sender ON messages(tenant_id, sender);
+        CREATE INDEX idx_messages_created_at ON messages(tenant_id, created_at);
+
+        -- read_receipts
+        CREATE TABLE read_receipts_new (
+          tenant_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          reader TEXT NOT NULL,
+          read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          PRIMARY KEY (tenant_id, message_id, reader),
+          FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
+          FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO read_receipts_new (tenant_id, message_id, reader, read_at)
+        SELECT 'default', message_id, reader, read_at FROM read_receipts;
+        DROP TABLE read_receipts;
+        ALTER TABLE read_receipts_new RENAME TO read_receipts;
+
+        PRAGMA foreign_keys = ON;
+
+        INSERT INTO schema_version (version, description)
+        VALUES (6, 'multi-tenant: tenants table + tenant_id columns + composite PKs');
       `,
     });
   }

@@ -1,6 +1,5 @@
-import type { Database } from 'better-sqlite3';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import { z } from 'zod';
-import { deleteTeam } from '../../db/teams.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -45,7 +44,7 @@ export const deleteTeamTool = {
  * @returns MCP CallToolResult
  */
 export async function handleDeleteTeam(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -57,7 +56,7 @@ export async function handleDeleteTeam(
     const requester = userId;
 
     // チーム削除
-    const result = deleteTeam(db, input.name, requester);
+    const result = scope.deleteTeam(input.name, requester);
 
     return {
       content: [

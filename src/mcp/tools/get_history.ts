@@ -1,5 +1,4 @@
-import type { Database } from 'better-sqlite3';
-import { getHistory } from '../../db/messages.js';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import { getHistoryInputSchema } from '../../types/schema.js';
 
 /**
@@ -34,7 +33,7 @@ export const getHistoryTool = {
  * get_history ツールのハンドラー
  */
 export async function handleGetHistory(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<{
@@ -48,7 +47,7 @@ export async function handleGetHistory(
     const input = getHistoryInputSchema.parse(args);
 
     // DB から履歴を取得
-    const messages = getHistory(db, input, userId);
+    const messages = scope.getHistory(input, userId);
 
     // MCP レスポンス形式に変換
     return {

@@ -1,6 +1,5 @@
-import type { Database } from 'better-sqlite3';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import { createTeamInputSchema } from '../../types/schema.js';
-import { createTeam } from '../../db/teams.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -46,7 +45,7 @@ export const createTeamTool = {
  * @returns MCP CallToolResult
  */
 export async function handleCreateTeam(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -58,12 +57,10 @@ export async function handleCreateTeam(
     const requester = userId;
 
     // チーム作成
-    const team = createTeam(db, input, requester);
+    const team = scope.createTeam(input, requester);
 
     // メンバー一覧を取得
-    const members = db
-      .prepare('SELECT member_name FROM team_members WHERE team_name = ? ORDER BY joined_at')
-      .all(team.name) as { member_name: string }[];
+    const members = scope.getTeamMembers(team.name);
 
     return {
       content: [
@@ -73,7 +70,7 @@ export async function handleCreateTeam(
             {
               name: team.name,
               owner: team.owner,
-              members: members.map(m => m.member_name),
+              members,
               created_at: team.created_at,
             },
             null,

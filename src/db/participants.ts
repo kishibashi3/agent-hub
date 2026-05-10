@@ -2,43 +2,34 @@ import Database from 'better-sqlite3';
 import { Participant, PeerMode, RegisterInput, registerInputSchema } from '../types/schema.js';
 
 /**
- * 参加者を登録する
- * @param db データベースインスタンス
- * @param input 登録情報（name は @ なし）
- * @param owner 所有者（GitHub login）。trust モードでは null を渡す。
- * @returns 登録された参加者情報（name は @ 付き）
- * @throws バリデーションエラー、または重複エラー
+ * 参加者を登録する (tenant 内 unique)
  */
 export function registerParticipant(
   db: Database.Database,
+  tenantId: string,
   input: RegisterInput,
   owner: string | null = null
 ): Participant {
-  // 入力バリデーション
   const validated = registerInputSchema.parse(input);
 
-  // @ プレフィックスを付与
   const nameWithPrefix = `@${validated.name}`;
   const displayName = validated.display_name ?? null;
   const mode = validated.mode ?? null;
 
   try {
-    // INSERT
-    const stmt = db.prepare(`
-      INSERT INTO participants (name, display_name, owner, mode)
-      VALUES (?, ?, ?, ?)
-    `);
+    db.prepare(
+      `INSERT INTO participants (tenant_id, name, display_name, owner, mode)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(tenantId, nameWithPrefix, displayName, owner, mode);
 
-    stmt.run(nameWithPrefix, displayName, owner, mode);
-
-    // 登録された参加者を取得して返す
     const result = db
-      .prepare(`SELECT * FROM participants WHERE name = ?`)
-      .get(nameWithPrefix) as Participant;
+      .prepare(
+        `SELECT * FROM participants WHERE tenant_id = ? AND name = ?`
+      )
+      .get(tenantId, nameWithPrefix) as Participant;
 
     return result;
   } catch (error) {
-    // UNIQUE 制約違反（重複）
     if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) {
       throw new Error(`参加者 '${nameWithPrefix}' は既に登録されています`);
     }
@@ -52,117 +43,120 @@ export function registerParticipant(
  */
 export function updateParticipantMode(
   db: Database.Database,
+  tenantId: string,
   name: string,
   mode: PeerMode | null
 ): void {
-  db.prepare(`UPDATE participants SET mode = ? WHERE name = ?`).run(mode, name);
+  db.prepare(
+    `UPDATE participants SET mode = ? WHERE tenant_id = ? AND name = ?`
+  ).run(mode, tenantId, name);
 }
 
 /**
  * 参加者の owner を設定する。NULL（未claimed）の場合のみ更新する（TOFU）。
  * 既に他人の owner が入っている場合は false を返す。
- * @returns true: 更新成功（または既に同じ owner）、false: 他人所有のため拒否
  */
 export function claimOwnerIfUnowned(
   db: Database.Database,
+  tenantId: string,
   name: string,
   owner: string
 ): boolean {
   const current = db
-    .prepare(`SELECT owner FROM participants WHERE name = ?`)
-    .get(name) as { owner: string | null } | undefined;
+    .prepare(
+      `SELECT owner FROM participants WHERE tenant_id = ? AND name = ?`
+    )
+    .get(tenantId, name) as { owner: string | null } | undefined;
 
   if (!current) return false;
   if (current.owner === owner) return true;
   if (current.owner === null) {
-    db.prepare(`UPDATE participants SET owner = ? WHERE name = ?`).run(
-      owner,
-      name
-    );
+    db.prepare(
+      `UPDATE participants SET owner = ? WHERE tenant_id = ? AND name = ?`
+    ).run(owner, tenantId, name);
     return true;
   }
   return false;
 }
 
 /**
- * 全参加者を取得する (active のみ、soft delete されたものは除外)
- * @param db データベースインスタンス
- * @returns 参加者リスト（作成日時の降順）
+ * 全参加者を取得する (active のみ、tenant 内、作成日時の降順)
  */
-export function getParticipants(db: Database.Database): Participant[] {
-  const stmt = db.prepare(`
-    SELECT * FROM participants
-    WHERE deleted_at IS NULL
-    ORDER BY created_at DESC, rowid DESC
-  `);
-
-  return stmt.all() as Participant[];
+export function getParticipants(
+  db: Database.Database,
+  tenantId: string
+): Participant[] {
+  const stmt = db.prepare(
+    `SELECT * FROM participants
+     WHERE tenant_id = ? AND deleted_at IS NULL
+     ORDER BY created_at DESC, rowid DESC`
+  );
+  return stmt.all(tenantId) as Participant[];
 }
 
 /**
- * 特定の参加者を名前で取得する (active のみ、soft delete されたものは null 扱い)
- * @param db データベースインスタンス
- * @param name 参加者名（@ プレフィックス付き）
- * @returns 参加者情報、存在しない or 削除済の場合は null
+ * 特定の参加者を名前で取得する (active のみ、tenant 内)
  */
 export function getParticipantByName(
   db: Database.Database,
+  tenantId: string,
   name: string
 ): Participant | null {
-  const stmt = db.prepare(`
-    SELECT * FROM participants WHERE name = ? AND deleted_at IS NULL
-  `);
-
-  const result = stmt.get(name) as Participant | undefined;
+  const stmt = db.prepare(
+    `SELECT * FROM participants
+     WHERE tenant_id = ? AND name = ? AND deleted_at IS NULL`
+  );
+  const result = stmt.get(tenantId, name) as Participant | undefined;
   return result ?? null;
 }
 
 /**
- * 参加者を soft delete する。FK 制約を破らずに論理削除するため、
- * 行は残るが deleted_at がセットされ getParticipants からは見えなくなる。
- * 既に削除済 / 存在しない場合は false。
+ * 参加者を soft delete する。
  */
 export function softDeleteParticipant(
   db: Database.Database,
+  tenantId: string,
   name: string
 ): boolean {
   const stmt = db.prepare(
     `UPDATE participants
        SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
-       WHERE name = ? AND deleted_at IS NULL`
+       WHERE tenant_id = ? AND name = ? AND deleted_at IS NULL`
   );
-  const info = stmt.run(name);
+  const info = stmt.run(tenantId, name);
   return info.changes > 0;
 }
 
 /**
- * deleted_at の有無に関わらず参加者を取得 (revive 判定用)。
- * 通常の場面では使わない、auth 層が「同じ owner が再接続したか」を
- * 判定するための内部 API。
+ * deleted_at の有無に関わらず参加者を取得 (revive 判定用、auth 層内部 API)。
  */
 export function getParticipantByNameIncludingDeleted(
   db: Database.Database,
+  tenantId: string,
   name: string
 ): Participant | null {
-  const stmt = db.prepare(`SELECT * FROM participants WHERE name = ?`);
-  const result = stmt.get(name) as Participant | undefined;
+  const stmt = db.prepare(
+    `SELECT * FROM participants WHERE tenant_id = ? AND name = ?`
+  );
+  const result = stmt.get(tenantId, name) as Participant | undefined;
   return result ?? null;
 }
 
 /**
  * 参加者を蘇生 (revive) する。owner が一致する soft-deleted 行に対してのみ
- * deleted_at = NULL に戻す。owner 不一致 / 既に active / 存在しない場合は false。
+ * deleted_at = NULL に戻す。
  */
 export function reviveParticipant(
   db: Database.Database,
+  tenantId: string,
   name: string,
   owner: string
 ): boolean {
   const stmt = db.prepare(
     `UPDATE participants
        SET deleted_at = NULL
-       WHERE name = ? AND owner = ? AND deleted_at IS NOT NULL`
+       WHERE tenant_id = ? AND name = ? AND owner = ? AND deleted_at IS NOT NULL`
   );
-  const info = stmt.run(name, owner);
+  const info = stmt.run(tenantId, name, owner);
   return info.changes > 0;
 }

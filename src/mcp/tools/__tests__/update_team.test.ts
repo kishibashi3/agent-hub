@@ -4,6 +4,7 @@ import { handleUpdateTeam } from '../update_team.js';
 import { handleCreateTeam } from '../create_team.js';
 import { registerParticipant } from '../../../db/participants.js';
 import { initDatabase } from '../../../db/migrations.js';
+import { scopeToTenant } from '../../../db/tenant-scope.js';
 
 describe('update_team ツール', () => {
   let db: Database.Database;
@@ -13,14 +14,14 @@ describe('update_team ツール', () => {
     initDatabase(db);
 
     // テスト用参加者を登録
-    registerParticipant(db, { name: 'alice', display_name: 'Alice' });
-    registerParticipant(db, { name: 'bob', display_name: 'Bob' });
-    registerParticipant(db, { name: 'carol', display_name: 'Carol' });
-    registerParticipant(db, { name: 'dave', display_name: 'Dave' });
+    registerParticipant(db, 'default', { name: 'alice', display_name: 'Alice' });
+    registerParticipant(db, 'default', { name: 'bob', display_name: 'Bob' });
+    registerParticipant(db, 'default', { name: 'carol', display_name: 'Carol' });
+    registerParticipant(db, 'default', { name: 'dave', display_name: 'Dave' });
 
     // テスト用チームを作成
     handleCreateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', members: ['bob'] },
       'alice'
     );
@@ -28,7 +29,7 @@ describe('update_team ツール', () => {
 
   it('正常系: メンバーを追加できる', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', add: ['carol'] },
       'alice'
     );
@@ -41,7 +42,7 @@ describe('update_team ツール', () => {
 
   it('正常系: メンバーを削除できる', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', remove: ['bob'] },
       'alice'
     );
@@ -55,7 +56,7 @@ describe('update_team ツール', () => {
 
   it('正常系: 追加と削除を同時に実行できる', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', add: ['carol', 'dave'], remove: ['bob'] },
       'alice'
     );
@@ -69,13 +70,13 @@ describe('update_team ツール', () => {
 
   it('正常系: 冪等性 — 既にいるメンバーを追加しても変わらない', async () => {
     await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', add: ['carol'] },
       'alice'
     );
 
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', add: ['carol'] },
       'alice'
     );
@@ -87,7 +88,7 @@ describe('update_team ツール', () => {
 
   it('正常系: 冪等性 — いないメンバーを削除してもエラーにならない', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', remove: ['dave'] },
       'alice'
     );
@@ -97,7 +98,7 @@ describe('update_team ツール', () => {
 
   it('エラー: オーナー以外は更新できない', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', add: ['carol'] },
       'bob'
     );
@@ -110,7 +111,7 @@ describe('update_team ツール', () => {
 
   it('エラー: オーナー自身は削除できない', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', remove: ['alice'] },
       'alice'
     );
@@ -124,14 +125,14 @@ describe('update_team ツール', () => {
   it('エラー: オーナー自身は最後のメンバーでも削除できない', async () => {
     // bob を削除して alice (オーナー) だけにする
     await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', remove: ['bob'] },
       'alice'
     );
 
     // alice (= オーナー自身) を削除しようとするとエラー
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', remove: ['alice'] },
       'alice'
     );
@@ -144,7 +145,7 @@ describe('update_team ツール', () => {
 
   it('エラー: 存在しないチームは更新できない', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'nonexistent', add: ['carol'] },
       'alice'
     );
@@ -157,7 +158,7 @@ describe('update_team ツール', () => {
 
   it('エラー: 存在しない参加者を追加できない', async () => {
     const result = await handleUpdateTeam(
-      db,
+      scopeToTenant(db, 'default'),
       { name: 'team-alpha', add: ['nonexistent'] },
       'alice'
     );

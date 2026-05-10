@@ -21,5 +21,10 @@ declare module 'express-serve-static-core' {
      * PAT モードでは PAT を verify した結果、trust モードでは X-User-Id と同じ。
      */
     githubLogin?: string;
+    /**
+     * tenant 識別子 (X-Tenant-Id header の値)。未指定なら 'default' (雑談室)。
+     * authenticateUser middleware で TOFU + ownership check 通過後にセット。
+     */
+    tenantDomain?: string;
   }
 }

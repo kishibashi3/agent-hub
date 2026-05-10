@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initDatabase } from '../../../db/migrations.js';
+import { scopeToTenant } from '../../../db/tenant-scope.js';
 import { handleRegister } from '../register.js';
 import { handleGetParticipants } from '../get_participants.js';
 
@@ -12,15 +13,16 @@ describe('register ツール', () => {
     db = new Database(':memory:');
     initDatabase(db);
     // bootstrap: 他テストが @admin 不在エラーで弾かれないよう先に admin を作る
-    await handleRegister(db, { name: 'admin' }, 'admin', 'kishibashi');
+    await handleRegister(scopeToTenant(db, 'default'), { name: 'admin' }, 'admin', 'kishibashi');
   });
 
   describe('正常系', () => {
     it('name のみで登録できる', async () => {
       const result = await handleRegister(
-        db,
+        scopeToTenant(db, 'default'),
         { name: 'alice' },
-        'alice' // X-User-Id
+        'alice', // X-User-Id
+        'alice-gh'
       );
 
       expect(result.isError).toBeUndefined();
@@ -33,9 +35,10 @@ describe('register ツール', () => {
 
     it('name + display_name で登録できる', async () => {
       const result = await handleRegister(
-        db,
+        scopeToTenant(db, 'default'),
         { name: 'bob', display_name: 'ボブ' },
-        'bob'
+        'bob',
+        'bob-gh'
       );
 
       expect(result.isError).toBeUndefined();
@@ -46,11 +49,11 @@ describe('register ツール', () => {
 
     it('登録後に get_participants で取得できる', async () => {
       // 複数登録
-      await handleRegister(db, { name: 'alice' }, 'alice');
-      await handleRegister(db, { name: 'bob', display_name: 'ボブ' }, 'bob');
+      await handleRegister(scopeToTenant(db, 'default'), { name: 'alice' }, 'alice', 'alice-gh');
+      await handleRegister(scopeToTenant(db, 'default'), { name: 'bob', display_name: 'ボブ' }, 'bob', 'bob-gh');
 
       // 取得
-      const result = await handleGetParticipants(db, {}, 'alice');
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'alice');
       expect(result.isError).toBeUndefined();
 
       const participants = JSON.parse(result.content[0].text);
@@ -74,7 +77,7 @@ describe('register ツール', () => {
       initDatabase(freshDb);
       // @admin を登録せず、空の状態で alice の登録を試みる
 
-      const result = await handleRegister(freshDb, { name: 'alice' }, 'alice', 'someone');
+      const result = await handleRegister(scopeToTenant(freshDb, 'default'), { name: 'alice' }, 'alice', 'someone');
       expect(result.isError).toBe(true);
 
       const error = JSON.parse(result.content[0].text);
@@ -87,11 +90,11 @@ describe('register ツール', () => {
 
     it('他人が claim 済みのハンドルは登録できない', async () => {
       // 1回目: kishibashi が alice を claim
-      const first = await handleRegister(db, { name: 'alice' }, 'alice', 'kishibashi');
+      const first = await handleRegister(scopeToTenant(db, 'default'), { name: 'alice' }, 'alice', 'kishibashi');
       expect(first.isError).toBeUndefined();
 
       // 2回目: 別ユーザー (someone-else) が同じハンドルを取ろうとする → 拒否
-      const second = await handleRegister(db, { name: 'alice' }, 'alice', 'someone-else');
+      const second = await handleRegister(scopeToTenant(db, 'default'), { name: 'alice' }, 'alice', 'someone-else');
       expect(second.isError).toBe(true);
 
       const error = JSON.parse(second.content[0].text);
@@ -100,7 +103,7 @@ describe('register ツール', () => {
     });
 
     it('空文字列は拒否される', async () => {
-      const result = await handleRegister(db, { name: '' }, '');
+      const result = await handleRegister(scopeToTenant(db, 'default'), { name: '' }, '', 'someone');
       expect(result.isError).toBe(true);
 
       const error = JSON.parse(result.content[0].text);
@@ -108,7 +111,7 @@ describe('register ツール', () => {
     });
 
     it('不正文字（スペース）は拒否される', async () => {
-      const result = await handleRegister(db, { name: 'alice bob' }, 'alice bob');
+      const result = await handleRegister(scopeToTenant(db, 'default'), { name: 'alice bob' }, 'alice bob', 'someone');
       expect(result.isError).toBe(true);
 
       const error = JSON.parse(result.content[0].text);
@@ -116,7 +119,7 @@ describe('register ツール', () => {
     });
 
     it('不正文字（@）は拒否される', async () => {
-      const result = await handleRegister(db, { name: '@alice' }, '@alice');
+      const result = await handleRegister(scopeToTenant(db, 'default'), { name: '@alice' }, '@alice', 'someone');
       expect(result.isError).toBe(true);
 
       const error = JSON.parse(result.content[0].text);
@@ -129,9 +132,10 @@ describe('register ツール', () => {
     it('X-User-Id が @ 付きでも正規化して検証される', async () => {
       // @ 付き userId でも正規化されて検証される
       const result = await handleRegister(
-        db,
+        scopeToTenant(db, 'default'),
         { name: 'alice' },
-        '@alice' // @ 付き
+        '@alice', // @ 付き
+        'alice-gh'
       );
 
       // 成功すべき

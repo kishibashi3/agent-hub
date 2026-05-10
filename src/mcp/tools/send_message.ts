@@ -1,7 +1,5 @@
-import type { Database } from 'better-sqlite3';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import { sendMessageInputSchema } from '../../types/schema.js';
-import { sendMessage } from '../../db/messages.js';
-import { getTeamMembers } from '../../db/teams.js';
 import { notifyResourceUpdated, inboxUriFor } from '../server.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -45,7 +43,7 @@ export const sendMessageTool = {
  * @returns MCP CallToolResult
  */
 export async function handleSendMessage(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -57,11 +55,11 @@ export async function handleSendMessage(
     const sender = userId;
 
     // メッセージ送信
-    const message = sendMessage(db, input, sender);
+    const message = scope.sendMessage(input, sender);
 
     // リアルタイム通知発火（best-effort、失敗しても送信自体は成功扱い）
     try {
-      const teamMembers = getTeamMembers(db, message.recipient);
+      const teamMembers = scope.getTeamMembers(message.recipient);
       const recipients =
         teamMembers.length > 0
           ? teamMembers.filter((m) => m !== sender) // チーム宛: メンバー全員（送信者除く）

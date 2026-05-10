@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { handleMarkAsRead } from '../mark_as_read.js';
+import { scopeToTenant } from '../../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // UUID 形式の固定 ID（mark_as_read の UUID validation を通すため）
@@ -22,48 +23,54 @@ describe('mark_as_read ツール', () => {
     db.exec(schema);
 
     // テストデータ準備
-    db.prepare('INSERT INTO participants (name, display_name) VALUES (?, ?)').run(
+    db.prepare('INSERT INTO participants (tenant_id, name, display_name) VALUES (?, ?, ?)').run(
+      'default',
       '@alice',
       'Alice'
     );
-    db.prepare('INSERT INTO participants (name, display_name) VALUES (?, ?)').run(
+    db.prepare('INSERT INTO participants (tenant_id, name, display_name) VALUES (?, ?, ?)').run(
+      'default',
       '@bob',
       'Bob'
     );
-    db.prepare('INSERT INTO participants (name, display_name) VALUES (?, ?)').run(
+    db.prepare('INSERT INTO participants (tenant_id, name, display_name) VALUES (?, ?, ?)').run(
+      'default',
       '@charlie',
       'Charlie'
     );
 
     // チーム作成
-    db.prepare('INSERT INTO teams (name, owner) VALUES (?, ?)').run(
+    db.prepare('INSERT INTO teams (tenant_id, name, owner) VALUES (?, ?, ?)').run(
+      'default',
       '@team-alpha',
       '@alice'
     );
-    db.prepare('INSERT INTO team_members (team_name, member_name) VALUES (?, ?)').run(
+    db.prepare('INSERT INTO team_members (tenant_id, team_name, member_name) VALUES (?, ?, ?)').run(
+      'default',
       '@team-alpha',
       '@alice'
     );
-    db.prepare('INSERT INTO team_members (team_name, member_name) VALUES (?, ?)').run(
+    db.prepare('INSERT INTO team_members (tenant_id, team_name, member_name) VALUES (?, ?, ?)').run(
+      'default',
       '@team-alpha',
       '@bob'
     );
 
     // DM メッセージ（alice → bob）
     db.prepare(
-      'INSERT INTO messages (id, sender, recipient, body) VALUES (?, ?, ?, ?)'
-    ).run(MSG_001, '@alice', '@bob', 'Hello Bob!');
+      'INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)'
+    ).run('default', MSG_001, '@alice', '@bob', 'Hello Bob!');
 
     // チームメッセージ（alice → team-alpha）
     db.prepare(
-      'INSERT INTO messages (id, sender, recipient, body) VALUES (?, ?, ?, ?)'
-    ).run(MSG_002, '@alice', '@team-alpha', 'Team announcement');
+      'INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)'
+    ).run('default', MSG_002, '@alice', '@team-alpha', 'Team announcement');
   });
 
   describe('正常系', () => {
     it('DM を既読にできる', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_001 },
         '@bob'
       );
@@ -78,14 +85,14 @@ describe('mark_as_read ツール', () => {
 
       // DB 確認
       const receipt = db
-        .prepare('SELECT * FROM read_receipts WHERE message_id = ? AND reader = ?')
-        .get(MSG_001, '@bob');
+        .prepare('SELECT * FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?')
+        .get('default', MSG_001, '@bob');
       expect(receipt).toBeDefined();
     });
 
     it('チームメッセージを既読にできる（メンバー）', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_002 },
         '@bob'
       );
@@ -99,18 +106,18 @@ describe('mark_as_read ツール', () => {
 
       // DB 確認
       const receipt = db
-        .prepare('SELECT * FROM read_receipts WHERE message_id = ? AND reader = ?')
-        .get(MSG_002, '@bob');
+        .prepare('SELECT * FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?')
+        .get('default', MSG_002, '@bob');
       expect(receipt).toBeDefined();
     });
 
     it('重複した既読登録は無視される', async () => {
       // 1回目
-      await handleMarkAsRead(db, { message_id: MSG_001 }, '@bob');
+      await handleMarkAsRead(scopeToTenant(db, 'default'), { message_id: MSG_001 }, '@bob');
 
       // 2回目（同じメッセージ）
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_001 },
         '@bob'
       );
@@ -119,8 +126,8 @@ describe('mark_as_read ツール', () => {
 
       // DB 確認：レコードは1件のみ
       const receipts = db
-        .prepare('SELECT * FROM read_receipts WHERE message_id = ? AND reader = ?')
-        .all(MSG_001, '@bob');
+        .prepare('SELECT * FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?')
+        .all('default', MSG_001, '@bob');
       expect(receipts).toHaveLength(1);
     });
 
@@ -131,7 +138,7 @@ describe('mark_as_read ツール', () => {
 
   describe('異常系', () => {
     it('message_id が空文字の場合エラー', async () => {
-      const result = await handleMarkAsRead(db, { message_id: '' }, '@bob');
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), { message_id: '' }, '@bob');
 
       expect(result.isError).toBe(true);
       const response = JSON.parse(result.content[0].text);
@@ -140,7 +147,7 @@ describe('mark_as_read ツール', () => {
 
     it('message_id が UUID 形式でない場合エラー', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: 'invalid-id' },
         '@bob'
       );
@@ -152,7 +159,7 @@ describe('mark_as_read ツール', () => {
 
     it('存在しないメッセージの場合エラー', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: '00000000-0000-0000-0000-000000000000' },
         '@bob'
       );
@@ -164,7 +171,7 @@ describe('mark_as_read ツール', () => {
 
     it('他人宛の DM は既読にできない', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_001 },
         '@charlie' // 無関係な第三者
       );
@@ -176,7 +183,7 @@ describe('mark_as_read ツール', () => {
 
     it('非メンバーはチームメッセージを既読にできない', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_002 },
         '@charlie' // team-alpha の非メンバー
       );
@@ -188,7 +195,7 @@ describe('mark_as_read ツール', () => {
 
     it('未登録ユーザーはエラー', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_001 },
         '@unknown'
       );
@@ -200,7 +207,7 @@ describe('mark_as_read ツール', () => {
 
     it('引数が不正な場合エラー', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { wrong_field: 'value' },
         '@bob'
       );
@@ -214,7 +221,7 @@ describe('mark_as_read ツール', () => {
   describe('権限チェック', () => {
     it('送信者は自分が送ったメッセージを既読にできない（受信者でないため）', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_001 },
         '@alice' // 送信者
       );
@@ -226,7 +233,7 @@ describe('mark_as_read ツール', () => {
 
     it('チームメッセージの送信者は既読にできない（自分宛ではないため）', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: MSG_002 },
         '@alice' // チームメッセージの送信者（メンバーだが受信者ではない）
       );
@@ -247,11 +254,11 @@ describe('mark_as_read ツール', () => {
       // 大文字の UUID を挿入
       const upperCaseId = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
       db.prepare(
-        'INSERT INTO messages (id, sender, recipient, body) VALUES (?, ?, ?, ?)'
-      ).run(upperCaseId, '@alice', '@bob', 'Test');
+        'INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)'
+      ).run('default', upperCaseId, '@alice', '@bob', 'Test');
 
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: upperCaseId },
         '@bob'
       );
@@ -263,7 +270,7 @@ describe('mark_as_read ツール', () => {
 
     it('message_id に null は許可されない', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: null },
         '@bob'
       );
@@ -273,7 +280,7 @@ describe('mark_as_read ツール', () => {
 
     it('message_id に undefined は許可されない', async () => {
       const result = await handleMarkAsRead(
-        db,
+        scopeToTenant(db, 'default'),
         { message_id: undefined },
         '@bob'
       );

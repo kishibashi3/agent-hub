@@ -1,6 +1,5 @@
-import type { Database } from 'better-sqlite3';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import { updateTeamInputSchema } from '../../types/schema.js';
-import { updateTeam } from '../../db/teams.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -54,7 +53,7 @@ export const updateTeamTool = {
  * @returns MCP CallToolResult
  */
 export async function handleUpdateTeam(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -66,7 +65,7 @@ export async function handleUpdateTeam(
     const requester = userId;
 
     // チーム更新
-    const result = updateTeam(db, input, requester);
+    const result = scope.updateTeam(input, requester);
 
     return {
       content: [

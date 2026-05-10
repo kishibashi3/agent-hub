@@ -1,5 +1,4 @@
-import type { Database } from 'better-sqlite3';
-import { getUnreadMessages } from '../../db/messages.js';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -34,13 +33,13 @@ export const getMessagesTool = {
  * @returns MCP CallToolResult
  */
 export async function handleGetMessages(
-  db: Database,
+  scope: TenantScope,
   _args: unknown,
   userId: string
 ): Promise<CallToolResult> {
   try {
     // userId は authenticateUser middleware が canonical `@<name>` でセット済
-    const messages = getUnreadMessages(db, userId);
+    const messages = scope.getUnreadMessages(userId);
 
     // レスポンス形式に変換
     const formattedMessages = messages.map((msg) => ({

@@ -9,14 +9,9 @@
  * simple `userId === "admin"` check at the top of each handler. PAT auth
  * already ensures the caller actually owns the @admin handle.
  */
-import type { Database } from 'better-sqlite3';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-
-import {
-  getParticipantByName,
-  softDeleteParticipant,
-} from '../../db/participants.js';
 
 const ADMIN_HANDLE = '@admin';
 
@@ -73,7 +68,7 @@ export const deleteUserTool = {
 };
 
 export async function handleDeleteUser(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -96,7 +91,7 @@ export async function handleDeleteUser(
     return errorResult('delete_user failed', '@admin は削除できません');
   }
 
-  const participant = getParticipantByName(db, handleName);
+  const participant = scope.getParticipantByName(handleName);
   if (!participant) {
     return errorResult(
       'delete_user failed',
@@ -104,7 +99,7 @@ export async function handleDeleteUser(
     );
   }
 
-  const removed = softDeleteParticipant(db, handleName);
+  const removed = scope.softDeleteParticipant(handleName);
   if (!removed) {
     return errorResult(
       'delete_user failed',
@@ -140,7 +135,7 @@ export const getUserHistoryTool = {
 };
 
 export async function handleGetUserHistory(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -160,7 +155,7 @@ export async function handleGetUserHistory(
   const handleName = input.name.startsWith('@') ? input.name : `@${input.name}`;
   const limit = input.limit ?? 50;
 
-  const participant = getParticipantByName(db, handleName);
+  const participant = scope.getParticipantByName(handleName);
   if (!participant) {
     return errorResult(
       'get_user_history failed',
@@ -168,14 +163,14 @@ export async function handleGetUserHistory(
     );
   }
 
-  const messages = db
+  const messages = scope.db
     .prepare(
       `SELECT * FROM messages
-       WHERE sender = ? OR recipient = ?
+       WHERE tenant_id = ? AND (sender = ? OR recipient = ?)
        ORDER BY created_at DESC, rowid DESC
        LIMIT ?`
     )
-    .all(handleName, handleName, limit);
+    .all(scope.tenantId, handleName, handleName, limit) as unknown[];
 
   return ok({ user: handleName, count: messages.length, messages });
 }

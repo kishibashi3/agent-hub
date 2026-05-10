@@ -1,26 +1,7 @@
-import type { Database } from 'better-sqlite3';
 import { registerInputSchema } from '../../types/schema.js';
-import {
-  registerParticipant,
-  getParticipantByName,
-  claimOwnerIfUnowned,
-  updateParticipantMode,
-} from '../../db/participants.js';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-/**
- * register ツール定義
- *
- * 新規参加者を agent-hub に登録する。
- * - name: 参加者の識別子（@ プレフィックスなし）
- * - display_name: オプションの表示名
- * - mode: peer の worker type 宣言（stateful/stateless/global）。任意。
- *
- * 権限:
- * - 認証された GitHub login (= owner) で claim する
- * - 既に同じ owner なら mode のみ更新可能（display_name は最小実装で更新しない）
- * - 未claimed なら TOFU で claim、他人所有なら 409
- */
 export const registerTool = {
   name: 'register',
   description:
@@ -50,14 +31,13 @@ export const registerTool = {
 /**
  * register ツールのハンドラー
  *
- * @param db - データベースインスタンス
- * @param args - ツール引数（name, display_name?）
- * @param userId - 現在のセッションのハンドル（参考情報）
+ * @param scope - tenant scoped DB ハンドル
+ * @param args - ツール引数（name, display_name?, mode?）
+ * @param _userId - 現在のセッションのハンドル（参考情報）
  * @param githubLogin - PAT で検証された GitHub login。新規登録時の owner として使う
- * @returns MCP CallToolResult
  */
 export async function handleRegister(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   _userId: string,
   githubLogin: string
@@ -66,12 +46,10 @@ export async function handleRegister(
     const input = registerInputSchema.parse(args);
     const handleName = `@${input.name}`;
 
-    const existing = getParticipantByName(db, handleName);
+    const existing = scope.getParticipantByName(handleName);
 
     // Bootstrap gate: until @admin exists, only the @admin handle can register.
-    // After @admin exists, anyone can register normally. This prevents the hub
-    // from being usable before its operator has claimed the admin role.
-    const adminExists = getParticipantByName(db, '@admin') !== null;
+    const adminExists = scope.getParticipantByName('@admin') !== null;
     if (!existing && !adminExists && input.name !== 'admin') {
       return {
         content: [
@@ -94,25 +72,21 @@ export async function handleRegister(
 
     let participant;
     if (!existing) {
-      // 新規登録（owner = githubLogin）
-      participant = registerParticipant(db, input, githubLogin);
+      participant = scope.registerParticipant(input, githubLogin);
     } else if (existing.owner === githubLogin) {
-      // 自分が既に所有 → mode のみ更新可能（display_name は最小実装で更新しない）
       if (input.mode !== undefined && input.mode !== existing.mode) {
-        updateParticipantMode(db, handleName, input.mode);
-        participant = getParticipantByName(db, handleName)!;
+        scope.updateParticipantMode(handleName, input.mode);
+        participant = scope.getParticipantByName(handleName)!;
       } else {
         participant = existing;
       }
     } else if (existing.owner === null) {
-      // 未claimed → claim、mode も指定があれば反映
-      claimOwnerIfUnowned(db, handleName, githubLogin);
+      scope.claimOwnerIfUnowned(handleName, githubLogin);
       if (input.mode !== undefined) {
-        updateParticipantMode(db, handleName, input.mode);
+        scope.updateParticipantMode(handleName, input.mode);
       }
-      participant = getParticipantByName(db, handleName)!;
+      participant = scope.getParticipantByName(handleName)!;
     } else {
-      // 他人所有
       return {
         content: [
           {
@@ -163,7 +137,7 @@ export async function handleRegister(
           ),
         },
       ],
-      isError: true,
+    isError: true,
     };
   }
 }

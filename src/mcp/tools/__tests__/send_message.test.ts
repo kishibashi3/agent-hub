@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { sendMessageTool, handleSendMessage } from '../send_message.js';
 import { applyMigrations } from '../../../db/migrations.js';
+import { scopeToTenant } from '../../../db/tenant-scope.js';
 
 describe('send_message tool', () => {
   let db: Database.Database;
@@ -31,31 +32,31 @@ describe('send_message tool', () => {
     beforeEach(() => {
       // 参加者を登録
       db.prepare(
-        'INSERT INTO participants (name, display_name, created_at) VALUES (?, ?, ?)'
-      ).run('@alice', 'Alice', new Date().toISOString());
+        'INSERT INTO participants (tenant_id, name, display_name, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@alice', 'Alice', new Date().toISOString());
       db.prepare(
-        'INSERT INTO participants (name, display_name, created_at) VALUES (?, ?, ?)'
-      ).run('@bob', 'Bob', new Date().toISOString());
+        'INSERT INTO participants (tenant_id, name, display_name, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@bob', 'Bob', new Date().toISOString());
       db.prepare(
-        'INSERT INTO participants (name, display_name, created_at) VALUES (?, ?, ?)'
-      ).run('@charlie', 'Charlie', new Date().toISOString());
+        'INSERT INTO participants (tenant_id, name, display_name, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@charlie', 'Charlie', new Date().toISOString());
 
       // チームを作成
       const now = new Date().toISOString();
       db.prepare(
-        'INSERT INTO teams (name, owner, created_at) VALUES (?, ?, ?)'
-      ).run('@team-a', '@alice', now);
+        'INSERT INTO teams (tenant_id, name, owner, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@team-a', '@alice', now);
       db.prepare(
-        'INSERT INTO team_members (team_name, member_name) VALUES (?, ?)'
-      ).run('@team-a', '@alice');
+        'INSERT INTO team_members (tenant_id, team_name, member_name) VALUES (?, ?, ?)'
+      ).run('default', '@team-a', '@alice');
       db.prepare(
-        'INSERT INTO team_members (team_name, member_name) VALUES (?, ?)'
-      ).run('@team-a', '@bob');
+        'INSERT INTO team_members (tenant_id, team_name, member_name) VALUES (?, ?, ?)'
+      ).run('default', '@team-a', '@bob');
     });
 
     it('should send DM to another participant', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@bob', message: 'Hello Bob!' },
         '@alice'
       );
@@ -74,7 +75,7 @@ describe('send_message tool', () => {
 
     it('should accept sender without @ prefix', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@bob', message: 'Test' },
         'alice'
       );
@@ -86,7 +87,7 @@ describe('send_message tool', () => {
 
     it('should send message to team', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@team-a', message: 'Team message!' },
         '@alice'
       );
@@ -100,7 +101,7 @@ describe('send_message tool', () => {
 
     it('should allow team member to send to team', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@team-a', message: 'From Bob' },
         '@bob'
       );
@@ -116,25 +117,25 @@ describe('send_message tool', () => {
     beforeEach(() => {
       // 参加者を登録
       db.prepare(
-        'INSERT INTO participants (name, display_name, created_at) VALUES (?, ?, ?)'
-      ).run('@alice', 'Alice', new Date().toISOString());
+        'INSERT INTO participants (tenant_id, name, display_name, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@alice', 'Alice', new Date().toISOString());
       db.prepare(
-        'INSERT INTO participants (name, display_name, created_at) VALUES (?, ?, ?)'
-      ).run('@bob', 'Bob', new Date().toISOString());
+        'INSERT INTO participants (tenant_id, name, display_name, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@bob', 'Bob', new Date().toISOString());
 
       // チームを作成（alice のみメンバー）
       const now = new Date().toISOString();
       db.prepare(
-        'INSERT INTO teams (name, owner, created_at) VALUES (?, ?, ?)'
-      ).run('@team-a', '@alice', now);
+        'INSERT INTO teams (tenant_id, name, owner, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@team-a', '@alice', now);
       db.prepare(
-        'INSERT INTO team_members (team_name, member_name) VALUES (?, ?)'
-      ).run('@team-a', '@alice');
+        'INSERT INTO team_members (tenant_id, team_name, member_name) VALUES (?, ?, ?)'
+      ).run('default', '@team-a', '@alice');
     });
 
     it('should reject if sender is not registered', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@bob', message: 'Test' },
         '@unknown'
       );
@@ -147,7 +148,7 @@ describe('send_message tool', () => {
 
     it('should reject if recipient does not exist', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@nonexistent', message: 'Test' },
         '@alice'
       );
@@ -159,7 +160,7 @@ describe('send_message tool', () => {
 
     it('should reject if non-member tries to send to team', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@team-a', message: 'Test' },
         '@bob'
       );
@@ -171,7 +172,7 @@ describe('send_message tool', () => {
 
     it('should reject if to is empty', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '', message: 'Test' },
         '@alice'
       );
@@ -183,7 +184,7 @@ describe('send_message tool', () => {
 
     it('should reject if message is empty', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@bob', message: '' },
         '@alice'
       );
@@ -195,7 +196,7 @@ describe('send_message tool', () => {
 
     it('should reject if to is missing', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { message: 'Test' },
         '@alice'
       );
@@ -207,7 +208,7 @@ describe('send_message tool', () => {
 
     it('should reject if message is missing', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         { to: '@bob' },
         '@alice'
       );
@@ -219,7 +220,7 @@ describe('send_message tool', () => {
 
     it('should reject if args is not an object', async () => {
       const result = await handleSendMessage(
-        db,
+        scopeToTenant(db, 'default'),
         'invalid',
         '@alice'
       );

@@ -34,11 +34,11 @@ function setupTestDB(): Database.Database {
  */
 function registerParticipants(db: Database.Database, names: string[]) {
   const insert = db.prepare(
-    'INSERT INTO participants (name, display_name) VALUES (?, ?)'
+    'INSERT INTO participants (tenant_id, name, display_name) VALUES (?, ?, ?)'
   );
   for (const name of names) {
     const fullName = name.startsWith('@') ? name : `@${name}`;
-    insert.run(fullName, null);
+    insert.run('default', fullName, null);
   }
 }
 
@@ -57,6 +57,7 @@ describe('teams CRUD', () => {
       // チームを作成
       const team = createTeam(
         db,
+        'default',
         { name: 'project-x', members: ['bob', 'charlie'] },
         'alice'
       );
@@ -65,7 +66,7 @@ describe('teams CRUD', () => {
       expect(team.owner).toBe('@alice');
 
       // メンバーを確認（owner も含まれる）
-      const members = getTeamMembers(db, '@project-x');
+      const members = getTeamMembers(db, 'default', '@project-x');
       expect(members).toHaveLength(3);
       expect(members).toContain('@alice');
       expect(members).toContain('@bob');
@@ -77,6 +78,7 @@ describe('teams CRUD', () => {
 
       const team = createTeam(
         db,
+        'default',
         { name: 'test-team', members: [] },
         'alice'
       );
@@ -90,11 +92,12 @@ describe('teams CRUD', () => {
 
       const team = createTeam(
         db,
+        'default',
         { name: 'solo-team', members: [] },
         'alice'
       );
 
-      const members = getTeamMembers(db, 'solo-team');
+      const members = getTeamMembers(db, 'default', 'solo-team');
       expect(members).toHaveLength(1);
       expect(members).toContain('@alice');
     });
@@ -104,11 +107,12 @@ describe('teams CRUD', () => {
 
       const team = createTeam(
         db,
+        'default',
         { name: 'team', members: ['alice', 'bob'] },
         'alice'
       );
 
-      const members = getTeamMembers(db, 'team');
+      const members = getTeamMembers(db, 'default', 'team');
       expect(members).toHaveLength(2);
       expect(members.filter(m => m === '@alice')).toHaveLength(1);
     });
@@ -119,6 +123,7 @@ describe('teams CRUD', () => {
       expect(() => {
         createTeam(
           db,
+          'default',
           { name: 'team', members: [] },
           'unknown'
         );
@@ -131,6 +136,7 @@ describe('teams CRUD', () => {
       expect(() => {
         createTeam(
           db,
+          'default',
           { name: 'team', members: ['bob'] },
           'alice'
         );
@@ -142,6 +148,7 @@ describe('teams CRUD', () => {
 
       createTeam(
         db,
+        'default',
         { name: 'team', members: [] },
         'alice'
       );
@@ -149,6 +156,7 @@ describe('teams CRUD', () => {
       expect(() => {
         createTeam(
           db,
+          'default',
           { name: 'team', members: [] },
           'alice'
         );
@@ -161,12 +169,14 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob', 'charlie', 'david']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
 
       const result = updateTeam(
         db,
+        'default',
         { name: 'team', add: ['charlie', 'david'] },
         'alice'
       );
@@ -180,12 +190,14 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob', 'charlie']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob', 'charlie'] },
         'alice'
       );
 
       const result = updateTeam(
         db,
+        'default',
         { name: 'team', remove: ['bob'] },
         'alice'
       );
@@ -200,6 +212,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
@@ -207,6 +220,7 @@ describe('teams CRUD', () => {
       // bob を再度追加
       const result = updateTeam(
         db,
+        'default',
         { name: 'team', add: ['bob'] },
         'alice'
       );
@@ -220,6 +234,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
@@ -227,6 +242,7 @@ describe('teams CRUD', () => {
       // charlie は存在しないが、削除操作はエラーにならない
       const result = updateTeam(
         db,
+        'default',
         { name: 'team', remove: ['charlie'] },
         'alice'
       );
@@ -240,6 +256,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
@@ -247,6 +264,7 @@ describe('teams CRUD', () => {
       expect(() => {
         updateTeam(
           db,
+          'default',
           { name: 'team', remove: ['alice'] },
           'alice'
         );
@@ -257,6 +275,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
@@ -264,6 +283,7 @@ describe('teams CRUD', () => {
       // bob を削除してから alice を削除しようとする
       updateTeam(
         db,
+        'default',
         { name: 'team', remove: ['bob'] },
         'alice'
       );
@@ -271,6 +291,7 @@ describe('teams CRUD', () => {
       expect(() => {
         updateTeam(
           db,
+          'default',
           { name: 'team', remove: ['alice'] },
           'alice'
         );
@@ -281,6 +302,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob', 'charlie']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob', 'charlie'] },
         'alice'
       );
@@ -288,6 +310,7 @@ describe('teams CRUD', () => {
       expect(() => {
         updateTeam(
           db,
+          'default',
           { name: 'team', add: ['alice'] },
           'bob'
         );
@@ -300,6 +323,7 @@ describe('teams CRUD', () => {
       expect(() => {
         updateTeam(
           db,
+          'default',
           { name: 'nonexistent', add: ['alice'] },
           'alice'
         );
@@ -310,6 +334,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
@@ -317,6 +342,7 @@ describe('teams CRUD', () => {
       expect(() => {
         updateTeam(
           db,
+          'default',
           { name: 'team', add: ['unknown'] },
           'alice'
         );
@@ -329,21 +355,22 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
 
-      const result = deleteTeam(db, 'team', 'alice');
+      const result = deleteTeam(db, 'default', 'team', 'alice');
       expect(result.deleted).toBe(true);
 
       // チームが削除されたことを確認
-      const teams = getTeams(db);
+      const teams = getTeams(db, 'default');
       expect(teams).toHaveLength(0);
 
       // team_members も CASCADE で削除されることを確認
       const members = db
-        .prepare('SELECT * FROM team_members WHERE team_name = ?')
-        .all('@team');
+        .prepare('SELECT * FROM team_members WHERE tenant_id = ? AND team_name = ?')
+        .all('default', '@team');
       expect(members).toHaveLength(0);
     });
   });
@@ -353,12 +380,13 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
 
       expect(() => {
-        deleteTeam(db, 'team', 'bob');
+        deleteTeam(db, 'default', 'team', 'bob');
       }).toThrow("チーム '@team' を削除できるのはオーナー '@alice' のみです");
     });
 
@@ -366,7 +394,7 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice']);
 
       expect(() => {
-        deleteTeam(db, 'nonexistent', 'alice');
+        deleteTeam(db, 'default', 'nonexistent', 'alice');
       }).toThrow("チーム '@nonexistent' は存在しません");
     });
   });
@@ -374,12 +402,12 @@ describe('teams CRUD', () => {
   describe('getTeams', () => {
     it('全チームを取得できる', () => {
       registerParticipants(db, ['alice', 'bob', 'charlie']);
-      
-      createTeam(db, { name: 'team1', members: [] }, 'alice');
-      createTeam(db, { name: 'team2', members: [] }, 'bob');
-      createTeam(db, { name: 'team3', members: [] }, 'charlie');
 
-      const teams = getTeams(db);
+      createTeam(db, 'default', { name: 'team1', members: [] }, 'alice');
+      createTeam(db, 'default', { name: 'team2', members: [] }, 'bob');
+      createTeam(db, 'default', { name: 'team3', members: [] }, 'charlie');
+
+      const teams = getTeams(db, 'default');
       expect(teams).toHaveLength(3);
       expect(teams.map(t => t.name)).toContain('@team1');
       expect(teams.map(t => t.name)).toContain('@team2');
@@ -387,7 +415,7 @@ describe('teams CRUD', () => {
     });
 
     it('チームが存在しない場合は空配列を返す', () => {
-      const teams = getTeams(db);
+      const teams = getTeams(db, 'default');
       expect(teams).toEqual([]);
     });
   });
@@ -397,11 +425,12 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob', 'charlie']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob', 'charlie'] },
         'alice'
       );
 
-      const members = getTeamMembers(db, 'team');
+      const members = getTeamMembers(db, 'default', 'team');
       expect(members).toHaveLength(3);
       expect(members).toContain('@alice');
       expect(members).toContain('@bob');
@@ -409,7 +438,7 @@ describe('teams CRUD', () => {
     });
 
     it('メンバーが存在しない場合は空配列を返す', () => {
-      const members = getTeamMembers(db, 'nonexistent');
+      const members = getTeamMembers(db, 'default', 'nonexistent');
       expect(members).toEqual([]);
     });
   });
@@ -419,28 +448,30 @@ describe('teams CRUD', () => {
       registerParticipants(db, ['alice', 'bob']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
 
-      expect(isTeamMember(db, 'team', 'alice')).toBe(true);
-      expect(isTeamMember(db, 'team', 'bob')).toBe(true);
+      expect(isTeamMember(db, 'default', 'team', 'alice')).toBe(true);
+      expect(isTeamMember(db, 'default', 'team', 'bob')).toBe(true);
     });
 
     it('メンバーでない場合は false を返す', () => {
       registerParticipants(db, ['alice', 'bob', 'charlie']);
       createTeam(
         db,
+        'default',
         { name: 'team', members: ['bob'] },
         'alice'
       );
 
-      expect(isTeamMember(db, 'team', 'charlie')).toBe(false);
+      expect(isTeamMember(db, 'default', 'team', 'charlie')).toBe(false);
     });
 
     it('チームが存在しない場合は false を返す', () => {
       registerParticipants(db, ['alice']);
-      expect(isTeamMember(db, 'nonexistent', 'alice')).toBe(false);
+      expect(isTeamMember(db, 'default', 'nonexistent', 'alice')).toBe(false);
     });
   });
 
@@ -452,34 +483,37 @@ describe('teams CRUD', () => {
       // 2. チームを作成
       const team = createTeam(
         db,
+        'default',
         { name: 'project', members: ['bob'] },
         'alice'
       );
       expect(team.name).toBe('@project');
-      expect(getTeamMembers(db, 'project')).toHaveLength(2); // alice, bob
+      expect(getTeamMembers(db, 'default', 'project')).toHaveLength(2); // alice, bob
 
       // 3. メンバーを追加
       updateTeam(
         db,
+        'default',
         { name: 'project', add: ['charlie', 'david'] },
         'alice'
       );
-      expect(getTeamMembers(db, 'project')).toHaveLength(4);
+      expect(getTeamMembers(db, 'default', 'project')).toHaveLength(4);
 
       // 4. メンバーを削除
       updateTeam(
         db,
+        'default',
         { name: 'project', remove: ['bob'] },
         'alice'
       );
-      const members = getTeamMembers(db, 'project');
+      const members = getTeamMembers(db, 'default', 'project');
       expect(members).toHaveLength(3);
       expect(members).not.toContain('@bob');
 
       // 5. チームを削除
-      deleteTeam(db, 'project', 'alice');
-      expect(getTeams(db)).toHaveLength(0);
-      expect(getTeamMembers(db, 'project')).toHaveLength(0);
+      deleteTeam(db, 'default', 'project', 'alice');
+      expect(getTeams(db, 'default')).toHaveLength(0);
+      expect(getTeamMembers(db, 'default', 'project')).toHaveLength(0);
     });
   });
 });

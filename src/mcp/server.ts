@@ -12,14 +12,14 @@ import {
 import express, { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
 import { getDatabase } from '../db/index.js';
-import { getUnreadMessages } from '../db/messages.js';
 import {
-  getParticipantByName,
-  getParticipantByNameIncludingDeleted,
-  registerParticipant,
-  claimOwnerIfUnowned,
-  reviveParticipant,
-} from '../db/participants.js';
+  DEFAULT_TENANT,
+  isValidTenantDomain,
+  getTenant,
+  claimTenantIfMissing,
+  isDeploymentInitialized,
+} from '../db/tenants.js';
+import { scopeToTenant } from '../db/tenant-scope.js';
 import {
   fetchUserInfo,
   fetchUserOrgs,
@@ -54,6 +54,7 @@ interface Session {
   server: Server;
   userId: string;          // 動作中のハンドル（例: '@alice' or '@kishibashi3'）
   githubLogin: string;     // PAT で検証された GitHub login。trust モードでは userId と同じ
+  tenantDomain: string;    // X-Tenant-Id (未指定なら 'default')。session 中は固定
   subscribedUris: Set<string>;
 }
 
@@ -82,6 +83,116 @@ interface PatCacheEntry {
 const patCache = new Map<string, PatCacheEntry>();
 const PAT_CACHE_TTL_MS = 5 * 60_000; // 5 分
 
+/**
+ * ユーザー / tenant 追加ルール (CE 全体の access policy)
+ *
+ *   ┌─────────────────────────────────────────────────────────────────┐
+ *   │ 1. deployment 初期化ゲート (= default tenant に @admin が claim される) │
+ *   │    - 未初期化中は named tenant への access を全部 503 で塞ぐ        │
+ *   │    - 未初期化中は default tenant でも @admin 以外の register を塞ぐ │
+ *   │    - 「先に operator が確立される」を強制し、squat 防止             │
+ *   ├─────────────────────────────────────────────────────────────────┤
+ *   │ 2. tenant 識別 (X-Tenant-Id header)                              │
+ *   │    - 未指定 → 'default' (雑談室、open lobby)                      │
+ *   │    - 'default' は常に open、tenants.owner=NULL                    │
+ *   │    - named tenant は TOFU: 初回接続で owner=githubLogin claim     │
+ *   │    - 以降 owner != githubLogin の PAT は 403                      │
+ *   ├─────────────────────────────────────────────────────────────────┤
+ *   │ 3. handle (= participant 名) の追加                              │
+ *   │    - handle base は X-User-Id (override)、無ければ githubLogin    │
+ *   │    - 同 tenant 内でユニーク、別 tenant の同名は別エンティティ      │
+ *   │    - active な行があれば owner 一致 (or null claim) チェック       │
+ *   │    - soft-deleted で同 owner なら revive                          │
+ *   │    - soft-deleted で別 owner なら 403                             │
+ *   │    - 新規なら auto-register (owner=githubLogin)                  │
+ *   ├─────────────────────────────────────────────────────────────────┤
+ *   │ 4. tenant 内 bootstrap (= 各 tenant の @admin claim 順序)         │
+ *   │    - register tool の per-tenant gate: tenant に @admin が居ない  │
+ *   │      限り、@admin 以外の handle は register できない               │
+ *   ├─────────────────────────────────────────────────────────────────┤
+ *   │ 5. operator 権限 (= deployment 全体管理)                          │
+ *   │    - default tenant の @admin = operator                          │
+ *   │    - operator 専用 tool (今後追加: list_tenants 等) は             │
+ *   │      `userId === '@admin' && tenantDomain === 'default'` でガード │
+ *   │    - @admin は **どの tenant でも削除不可** (admin.ts で enforce)  │
+ *   └─────────────────────────────────────────────────────────────────┘
+ */
+
+/**
+ * X-Tenant-Id を解決して tenant domain を返す。失敗時は null + res 送信。
+ * 上記ルール 1 (deployment 初期化ゲート) と 2 (tenant 識別 + TOFU) を扱う。
+ */
+function resolveTenant(
+  req: Request,
+  res: Response,
+  githubLogin: string
+): string | null {
+  const headerVal = req.headers['x-tenant-id'];
+  const raw = typeof headerVal === 'string' ? headerVal.trim() : '';
+  const domain = raw === '' ? DEFAULT_TENANT : raw;
+
+  if (!isValidTenantDomain(domain)) {
+    res.status(400).json({
+      error: 'BadRequest',
+      message: `invalid X-Tenant-Id '${domain}': must match [a-zA-Z0-9_-]{1,64}`,
+    });
+    return null;
+  }
+
+  const db = getDatabase();
+
+  // ルール 1: named tenant は deployment 初期化済みでないと触れない
+  if (domain !== DEFAULT_TENANT && !isDeploymentInitialized(db)) {
+    res.status(503).json({
+      error: 'deployment_not_initialized',
+      message:
+        'default tenant の @admin (= deployment operator) が未登録です。' +
+        '最初に default tenant (= X-Tenant-Id 未指定) で X-User-Id=admin として接続し、@admin を claim してください。',
+    });
+    return null;
+  }
+
+  if (domain === DEFAULT_TENANT) {
+    return domain;
+  }
+
+  // ルール 2: named tenant は TOFU claim or owner 一致チェック
+  const tenant = getTenant(db, domain);
+  if (!tenant) {
+    claimTenantIfMissing(db, domain, githubLogin);
+  } else if (tenant.owner !== null && tenant.owner !== githubLogin) {
+    res.status(403).json({
+      error: 'Forbidden',
+      message: `tenant '${domain}' is owned by another user`,
+    });
+    return null;
+  }
+
+  return domain;
+}
+
+/**
+ * deployment 初期化ゲートの second half: default tenant 内でも @admin 以外の
+ * 接続は init 完了まで塞ぐ。これで「最初の handle 追加は default tenant の
+ * @admin に限定」が完全に enforce される。
+ */
+function checkDeploymentInitGate(
+  res: Response,
+  tenantDomain: string,
+  handleName: string
+): boolean {
+  if (tenantDomain !== DEFAULT_TENANT) return true; // named は resolveTenant で処理済
+  if (isDeploymentInitialized(getDatabase())) return true;
+  if (handleName === '@admin') return true; // 初期化中の @admin claim は OK
+
+  res.status(503).json({
+    error: 'deployment_not_initialized',
+    message:
+      'default tenant の @admin が未登録です。先に X-User-Id=admin で接続して @admin を claim してください。',
+  });
+  return false;
+}
+
 async function authenticateUser(req: Request, res: Response, next: NextFunction) {
   const mode = (process.env.AUTH_MODE || 'trust').toLowerCase();
 
@@ -93,13 +204,18 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
         message: 'AUTH_MODE=trust: X-User-Id header is required',
       });
     }
-    // canonical 形に正規化: 常に `@<name>` で下流に渡す。
-    // PAT モード (下記) と契約を揃え、各 tool の defensive normalization を不要化。
     const trimmed = userId.trim();
     const handleName = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+    const githubLogin = handleName.slice(1);
+
+    const tenantDomain = resolveTenant(req, res, githubLogin);
+    if (tenantDomain === null) return;
+
+    if (!checkDeploymentInitGate(res, tenantDomain, handleName)) return;
+
     req.userId = handleName;
-    // trust モードでは PAT がないので handle (の @ 抜き) と同じにする
-    req.githubLogin = handleName.slice(1);
+    req.githubLogin = githubLogin;
+    req.tenantDomain = tenantDomain;
     return next();
   }
 
@@ -117,7 +233,6 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     const pat = auth.slice(7).trim();
     let githubLogin: string;
     try {
-      // キャッシュで GitHub API 呼び出しを抑制
       const cached = patCache.get(pat);
       let user: GithubUser;
       if (cached && Date.now() - cached.fetchedAt < PAT_CACHE_TTL_MS) {
@@ -136,7 +251,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
         }
         patCache.set(pat, { user, fetchedAt: Date.now() });
       }
-      githubLogin = user.login; // GitHub login (例: "kishibashi3")
+      githubLogin = user.login;
     } catch (err) {
       return res.status(401).json({
         error: 'Unauthorized',
@@ -144,8 +259,10 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       });
     }
 
-    // X-User-Id が指定されていればハンドル override（マルチペルソナ用）。
-    // 無ければデフォルトで github_login をハンドルとして使う。
+    const tenantDomain = resolveTenant(req, res, githubLogin);
+    if (tenantDomain === null) return;
+
+    // X-User-Id が指定されていればハンドル override（マルチペルソナ用）
     const overrideHeader = req.headers['x-user-id'];
     const override =
       typeof overrideHeader === 'string'
@@ -154,16 +271,16 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     const handleBase = override || githubLogin;
     const handleName = `@${handleBase}`;
 
+    if (!checkDeploymentInitGate(res, tenantDomain, handleName)) return;
+
     try {
-      const db = getDatabase();
-      const existing = getParticipantByName(db, handleName);
+      const scope = scopeToTenant(getDatabase(), tenantDomain);
+      const existing = scope.getParticipantByName(handleName);
       if (!existing) {
-        // active な行が無い → soft-deleted 行を確認して revive 判定
-        const deleted = getParticipantByNameIncludingDeleted(db, handleName);
+        const deleted = scope.getParticipantByNameIncludingDeleted(handleName);
         if (deleted && deleted.deleted_at !== null) {
-          // 同じ owner なら蘇生 (UNIQUE constraint も守られる)、別人なら拒否
           if (deleted.owner === githubLogin) {
-            reviveParticipant(db, handleName, githubLogin);
+            scope.reviveParticipant(handleName, githubLogin);
           } else {
             return res.status(403).json({
               error: 'Forbidden',
@@ -171,12 +288,10 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
             });
           }
         } else {
-          // 完全に新規 → auto-register（owner=自分）
-          registerParticipant(db, { name: handleBase }, githubLogin);
+          scope.registerParticipant({ name: handleBase }, githubLogin);
         }
       } else if (existing.owner === null) {
-        // v2 から移行した既存ハンドル → TOFU で claim
-        claimOwnerIfUnowned(db, handleName, githubLogin);
+        scope.claimOwnerIfUnowned(handleName, githubLogin);
       } else if (existing.owner !== githubLogin) {
         return res.status(403).json({
           error: 'Forbidden',
@@ -185,6 +300,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       }
       req.userId = handleName;
       req.githubLogin = githubLogin;
+      req.tenantDomain = tenantDomain;
       return next();
     } catch (err) {
       return res.status(500).json({
@@ -290,39 +406,41 @@ function createMcpServer(): Server {
   // ツール実行
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
-    const db = getDatabase();
 
     const sid = extra.sessionId;
     const session = sid ? sessions.get(sid) : undefined;
     const userId = session?.userId;
     const githubLogin = session?.githubLogin;
-    if (!userId || !githubLogin) {
+    const tenantDomain = session?.tenantDomain;
+    if (!userId || !githubLogin || !tenantDomain) {
       throw new Error('session is not authenticated (sessionId missing or session expired)');
     }
 
+    const scope = scopeToTenant(getDatabase(), tenantDomain);
+
     switch (name) {
       case 'register':
-        return await handleRegister(db, args, userId, githubLogin);
+        return await handleRegister(scope, args, userId, githubLogin);
       case 'get_participants':
-        return await handleGetParticipants(db, args, userId);
+        return await handleGetParticipants(scope, args, userId);
       case 'create_team':
-        return await handleCreateTeam(db, args, userId);
+        return await handleCreateTeam(scope, args, userId);
       case 'update_team':
-        return await handleUpdateTeam(db, args, userId);
+        return await handleUpdateTeam(scope, args, userId);
       case 'delete_team':
-        return await handleDeleteTeam(db, args, userId);
+        return await handleDeleteTeam(scope, args, userId);
       case 'send_message':
-        return await handleSendMessage(db, args, userId);
+        return await handleSendMessage(scope, args, userId);
       case 'get_messages':
-        return await handleGetMessages(db, args, userId);
+        return await handleGetMessages(scope, args, userId);
       case 'get_history':
-        return await handleGetHistory(db, args, userId);
+        return await handleGetHistory(scope, args, userId);
       case 'mark_as_read':
-        return await handleMarkAsRead(db, args, userId);
+        return await handleMarkAsRead(scope, args, userId);
       case 'delete_user':
-        return await handleDeleteUser(db, args, userId);
+        return await handleDeleteUser(scope, args, userId);
       case 'get_user_history':
-        return await handleGetUserHistory(db, args, userId);
+        return await handleGetUserHistory(scope, args, userId);
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -350,22 +468,22 @@ function createMcpServer(): Server {
   // resource の中身を返す。inbox://<name> なら getUnreadMessages の結果を JSON で返す
   server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
     const sid = extra.sessionId;
-    const userId = sid ? sessions.get(sid)?.userId : undefined;
-    if (!userId) {
+    const session = sid ? sessions.get(sid) : undefined;
+    if (!session) {
       throw new Error('session not found');
     }
+    const { userId, tenantDomain } = session;
     const uri = request.params.uri;
     const owner = uriToInboxOwner(uri);
     if (!owner) {
       throw new Error(`unsupported resource uri: ${uri}`);
     }
-    // 自分の inbox しか読めない (userId は authenticateUser middleware が常に
-    // canonical `@<name>` 形式でセットする契約)
     const ownerHandle = owner.startsWith('@') ? owner : `@${owner}`;
     if (ownerHandle !== userId) {
       throw new Error(`forbidden: cannot read another user's inbox`);
     }
-    const messages = getUnreadMessages(getDatabase(), userId);
+    const scope = scopeToTenant(getDatabase(), tenantDomain);
+    const messages = scope.getUnreadMessages(userId);
     return {
       contents: [
         {
@@ -447,14 +565,15 @@ export class MCPServer {
     this.app.post('/mcp', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       // authenticateUser middleware が必ずセットしている契約。型安全のため明示確認。
-      if (!req.userId || !req.githubLogin) {
+      if (!req.userId || !req.githubLogin || !req.tenantDomain) {
         res
           .status(401)
-          .json({ error: 'Unauthorized', message: 'authentication middleware did not set userId' });
+          .json({ error: 'Unauthorized', message: 'authentication middleware did not set userId/tenantDomain' });
         return;
       }
       const userId = req.userId;
       const githubLogin = req.githubLogin;
+      const tenantDomain = req.tenantDomain;
 
       try {
         if (sessionId && sessions.has(sessionId)) {
@@ -472,10 +591,11 @@ export class MCPServer {
                 server,
                 userId,
                 githubLogin,
+                tenantDomain,
                 subscribedUris: new Set(),
               });
               console.log(
-                `[MCP] session opened: ${sid} userId=${userId} githubLogin=${githubLogin}`
+                `[MCP] session opened: ${sid} userId=${userId} githubLogin=${githubLogin} tenant=${tenantDomain}`
               );
             },
           });

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initDatabase } from '../../../db/migrations.js';
+import { scopeToTenant } from '../../../db/tenant-scope.js';
 import { registerParticipant } from '../../../db/participants.js';
 import { createTeam } from '../../../db/teams.js';
 import { sendMessage } from '../../../db/messages.js';
@@ -21,14 +22,14 @@ describe('get_messages ツール', () => {
   describe('正常系', () => {
     it('自分宛の未読 DM を取得できる', async () => {
       // 参加者登録
-      registerParticipant(db, { name: 'alice' });
-      registerParticipant(db, { name: 'bob' });
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
 
       // alice → bob にメッセージ送信
-      sendMessage(db, { to: 'bob', message: 'こんにちは' }, 'alice');
+      sendMessage(db, 'default', { to: 'bob', message: 'こんにちは' }, 'alice');
 
       // bob が未読メッセージを取得
-      const result = await handleGetMessages(db, {}, 'bob');
+      const result = await handleGetMessages(scopeToTenant(db, 'default'), {}, 'bob');
 
       expect(result.isError).toBeUndefined();
       expect(result.content).toHaveLength(1);
@@ -43,18 +44,18 @@ describe('get_messages ツール', () => {
 
     it('チーム宛の未読メッセージを取得できる', async () => {
       // 参加者登録
-      registerParticipant(db, { name: 'alice' });
-      registerParticipant(db, { name: 'bob' });
-      registerParticipant(db, { name: 'carol' });
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+      registerParticipant(db, 'default', { name: 'carol' });
 
       // チーム作成（alice がオーナー、bob と carol がメンバー）
-      createTeam(db, { name: 'team-x', members: ['bob', 'carol'] }, 'alice');
+      createTeam(db, 'default', { name: 'team-x', members: ['bob', 'carol'] }, 'alice');
 
       // alice → team-x にメッセージ送信
-      sendMessage(db, { to: 'team-x', message: 'チーム全体への連絡' }, 'alice');
+      sendMessage(db, 'default', { to: 'team-x', message: 'チーム全体への連絡' }, 'alice');
 
       // bob が未読メッセージを取得（チーム宛メッセージが含まれる）
-      const result = await handleGetMessages(db, {}, 'bob');
+      const result = await handleGetMessages(scopeToTenant(db, 'default'), {}, 'bob');
 
       expect(result.isError).toBeUndefined();
       const messages = JSON.parse(result.content[0].text);
@@ -66,19 +67,19 @@ describe('get_messages ツール', () => {
 
     it('既読メッセージは取得されない', async () => {
       // 参加者登録
-      registerParticipant(db, { name: 'alice' });
-      registerParticipant(db, { name: 'bob' });
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
 
       // alice → bob にメッセージ送信
-      const message = sendMessage(db, { to: 'bob', message: 'テスト' }, 'alice');
+      const message = sendMessage(db, 'default', { to: 'bob', message: 'テスト' }, 'alice');
 
       // bob が既読にする
       db.prepare(
-        'INSERT INTO read_receipts (message_id, reader, read_at) VALUES (?, ?, ?)'
-      ).run(message.id, '@bob', new Date().toISOString());
+        'INSERT INTO read_receipts (tenant_id, message_id, reader, read_at) VALUES (?, ?, ?, ?)'
+      ).run('default', message.id, '@bob', new Date().toISOString());
 
       // bob が未読メッセージを取得（既読済みなので0件）
-      const result = await handleGetMessages(db, {}, 'bob');
+      const result = await handleGetMessages(scopeToTenant(db, 'default'), {}, 'bob');
 
       expect(result.isError).toBeUndefined();
       const messages = JSON.parse(result.content[0].text);
@@ -89,7 +90,7 @@ describe('get_messages ツール', () => {
   describe('異常系', () => {
     it('未登録の参加者はエラーになる', async () => {
       //未登録の bob が未読メッセージを取得しようとする
-      const result = await handleGetMessages(db, {}, 'bob');
+      const result = await handleGetMessages(scopeToTenant(db, 'default'), {}, 'bob');
 
       expect(result.isError).toBe(true);
       expect(result.content).toHaveLength(1);

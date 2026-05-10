@@ -23,7 +23,7 @@ describe('participants', () => {
         display_name: '岸橋',
       };
 
-      const result = registerParticipant(db, input);
+      const result = registerParticipant(db, 'default', input);
 
       expect(result.name).toBe('@kishibashi');
       expect(result.display_name).toBe('岸橋');
@@ -35,7 +35,7 @@ describe('participants', () => {
         name: 'agent-a',
       };
 
-      const result = registerParticipant(db, input);
+      const result = registerParticipant(db, 'default', input);
 
       expect(result.name).toBe('@agent-a');
       expect(result.display_name).toBeNull();
@@ -44,10 +44,10 @@ describe('participants', () => {
     it('異常系: 同名の参加者は登録できない', () => {
       const input = { name: 'kishibashi' };
 
-      registerParticipant(db, input);
+      registerParticipant(db, 'default', input);
 
       expect(() => {
-        registerParticipant(db, input);
+        registerParticipant(db, 'default', input);
       }).toThrow('既に登録されています');
     });
 
@@ -55,7 +55,7 @@ describe('participants', () => {
       const input = { name: '' };
 
       expect(() => {
-        registerParticipant(db, input);
+        registerParticipant(db, 'default', input);
       }).toThrow();
     });
 
@@ -63,7 +63,7 @@ describe('participants', () => {
       const input = { name: 'invalid name' }; // スペース含む
 
       expect(() => {
-        registerParticipant(db, input);
+        registerParticipant(db, 'default', input);
       }).toThrow();
     });
 
@@ -71,18 +71,18 @@ describe('participants', () => {
       const input = { name: '@kishibashi' }; // @ は付けない前提
 
       expect(() => {
-        registerParticipant(db, input);
+        registerParticipant(db, 'default', input);
       }).toThrow();
     });
   });
 
   describe('getParticipants', () => {
     it('正常系: 全参加者を取得できる', () => {
-      registerParticipant(db, { name: 'user1' });
-      registerParticipant(db, { name: 'user2' });
-      registerParticipant(db, { name: 'user3' });
+      registerParticipant(db, 'default', { name: 'user1' });
+      registerParticipant(db, 'default', { name: 'user2' });
+      registerParticipant(db, 'default', { name: 'user3' });
 
-      const results = getParticipants(db);
+      const results = getParticipants(db, 'default');
 
       expect(results).toHaveLength(3);
       expect(results[0].name).toBe('@user3'); // 降順
@@ -91,7 +91,7 @@ describe('participants', () => {
     });
 
     it('正常系: 参加者が0件の場合空配列を返す', () => {
-      const results = getParticipants(db);
+      const results = getParticipants(db, 'default');
 
       expect(results).toEqual([]);
     });
@@ -99,14 +99,14 @@ describe('participants', () => {
 
   describe('getParticipantByName', () => {
     beforeEach(() => {
-      registerParticipant(db, {
+      registerParticipant(db, 'default', {
         name: 'kishibashi',
         display_name: '岸橋',
       });
     });
 
     it('正常系: 存在する参加者を取得できる', () => {
-      const result = getParticipantByName(db, '@kishibashi');
+      const result = getParticipantByName(db, 'default', '@kishibashi');
 
       expect(result).not.toBeNull();
       expect(result?.name).toBe('@kishibashi');
@@ -114,13 +114,13 @@ describe('participants', () => {
     });
 
     it('正常系: 存在しない参加者は null を返す', () => {
-      const result = getParticipantByName(db, '@nonexistent');
+      const result = getParticipantByName(db, 'default', '@nonexistent');
 
       expect(result).toBeNull();
     });
 
     it('正常系: @ なしで検索した場合は null を返す', () => {
-      const result = getParticipantByName(db, 'kishibashi');
+      const result = getParticipantByName(db, 'default', 'kishibashi');
 
       expect(result).toBeNull();
     });
@@ -129,22 +129,22 @@ describe('participants', () => {
   describe('統合テスト', () => {
     it('登録→取得→名前検索の一連の流れ', () => {
       // 1. 複数登録
-      registerParticipant(db, { name: 'alice', display_name: 'アリス' });
-      registerParticipant(db, { name: 'bob' });
-      registerParticipant(db, { name: 'carol', display_name: 'キャロル' });
+      registerParticipant(db, 'default', { name: 'alice', display_name: 'アリス' });
+      registerParticipant(db, 'default', { name: 'bob' });
+      registerParticipant(db, 'default', { name: 'carol', display_name: 'キャロル' });
 
       // 2. 全取得
-      const all = getParticipants(db);
+      const all = getParticipants(db, 'default');
       expect(all).toHaveLength(3);
 
       // 3. 名前検索
-      const alice = getParticipantByName(db, '@alice');
+      const alice = getParticipantByName(db, 'default', '@alice');
       expect(alice?.display_name).toBe('アリス');
 
-      const bob = getParticipantByName(db, '@bob');
+      const bob = getParticipantByName(db, 'default', '@bob');
       expect(bob?.display_name).toBeNull();
 
-      const notFound = getParticipantByName(db, '@dave');
+      const notFound = getParticipantByName(db, 'default', '@dave');
       expect(notFound).toBeNull();
     });
   });

@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
  */
 export function sendMessage(
   db: Database,
+  tenantId: string,
   input: SendMessageInput,
   sender: string
 ): Message {
@@ -22,19 +23,19 @@ export function sendMessage(
 
   // 送信者が登録済みか確認
   const senderExists = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(senderName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, senderName);
   if (!senderExists) {
     throw new Error(`送信者 ${senderName} は登録されていません`);
   }
 
   // 宛先の存在確認（個人またはチーム）
   const recipientIsParticipant = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(recipientName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, recipientName);
   const recipientIsTeam = db
-    .prepare('SELECT name FROM teams WHERE name = ?')
-    .get(recipientName);
+    .prepare('SELECT name FROM teams WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, recipientName);
 
   if (!recipientIsParticipant && !recipientIsTeam) {
     throw new Error(`宛先 ${recipientName} は存在しません`);
@@ -43,8 +44,10 @@ export function sendMessage(
   // チーム宛の場合、送信者がメンバーか確認
   if (recipientIsTeam) {
     const isMember = db
-      .prepare('SELECT 1 FROM team_members WHERE team_name = ? AND member_name = ?')
-      .get(recipientName, senderName);
+      .prepare(
+        'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
+      )
+      .get(tenantId, recipientName, senderName);
     if (!isMember) {
       throw new Error(`チーム ${recipientName} に送信できるのはメンバーのみです`);
     }
@@ -55,54 +58,49 @@ export function sendMessage(
   const now = new Date().toISOString();
 
   db.prepare(
-    'INSERT INTO messages (id, sender, recipient, body, created_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(messageId, senderName, recipientName, input.message, now);
+    'INSERT INTO messages (tenant_id, id, sender, recipient, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(tenantId, messageId, senderName, recipientName, input.message, now);
 
   const message = db
-    .prepare('SELECT * FROM messages WHERE id = ?')
-    .get(messageId) as Message;
+    .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')
+    .get(tenantId, messageId) as Message;
 
   return message;
 }
 
 /**
  * メッセージIDで特定のメッセージを取得する
- * @param db データベースインスタンス
- * @param messageId メッセージID
- * @param requester リクエスター名（@ プレフィックス付き）
- * @returns メッセージ情報
- * @throws メッセージが存在しない、または閲覧権限がない場合
  */
 export function getMessage(
   db: Database,
+  tenantId: string,
   messageId: string,
   requester: string
 ): Message {
   const requesterName = requester.startsWith('@') ? requester : `@${requester}`;
 
-  // リクエスターが登録済みか確認
   const requesterExists = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(requesterName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, requesterName);
   if (!requesterExists) {
     throw new Error(`${requesterName} は登録されていません`);
   }
 
-  // メッセージを取得
   const message = db
-    .prepare('SELECT * FROM messages WHERE id = ?')
-    .get(messageId) as Message | undefined;
+    .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')
+    .get(tenantId, messageId) as Message | undefined;
 
   if (!message) {
     throw new Error(`メッセージ ${messageId} は存在しません`);
   }
 
-  // 閲覧権限の確認
   const isSender = message.sender === requesterName;
   const isRecipient = message.recipient === requesterName;
   const isTeamMember = db
-    .prepare('SELECT 1 FROM team_members WHERE team_name = ? AND member_name = ?')
-    .get(message.recipient, requesterName);
+    .prepare(
+      'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
+    )
+    .get(tenantId, message.recipient, requesterName);
 
   if (!isSender && !isRecipient && !isTeamMember) {
     throw new Error(`メッセージ ${messageId} を閲覧する権限がありません`);
@@ -120,14 +118,14 @@ export function getMessage(
  */
 export function getUnreadMessages(
   db: Database,
+  tenantId: string,
   reader: string
 ): Message[] {
   const readerName = reader.startsWith('@') ? reader : `@${reader}`;
 
-  // 読者が登録済みか確認
   const readerExists = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(readerName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, readerName);
   if (!readerExists) {
     throw new Error(`${readerName} は登録されていません`);
   }
@@ -137,91 +135,84 @@ export function getUnreadMessages(
       `SELECT m.*
        FROM messages m
        LEFT JOIN read_receipts rr
-         ON m.id = rr.message_id AND rr.reader = ?
-       WHERE rr.message_id IS NULL
+         ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
+       WHERE m.tenant_id = ?
+         AND rr.message_id IS NULL
          AND (
-           m.recipient = ?                          -- DM 宛
-           OR m.recipient IN (                        -- チーム宛
-             SELECT team_name FROM team_members WHERE member_name = ?
+           m.recipient = ?
+           OR m.recipient IN (
+             SELECT team_name FROM team_members
+             WHERE tenant_id = ? AND member_name = ?
            )
          )
-         AND m.sender != ?                          -- 自分の送信は除外
+         AND m.sender != ?
        ORDER BY m.created_at ASC`
     )
-    .all(readerName, readerName, readerName, readerName) as Message[];
+    .all(readerName, tenantId, readerName, tenantId, readerName, readerName) as Message[];
 
   return messages;
 }
 
 /**
  * 会話履歴を取得する
- * - 特定の相手/チームとの会話を送受信両方含めて時系列で返す
- * - DM: 当事者のみ閲覧可能
- * - チーム: メンバーのみ閲覧可能
  */
 export function getHistory(
   db: Database,
+  tenantId: string,
   input: GetHistoryInput,
   requester: string
 ): Message[] {
   const requesterName = requester.startsWith('@') ? requester : `@${requester}`;
   const targetName = input.to.startsWith('@') ? input.to : `@${input.to}`;
 
-  // リクエスターが登録済みか確認
   const requesterExists = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(requesterName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, requesterName);
   if (!requesterExists) {
     throw new Error(`${requesterName} は登録されていません`);
   }
 
-  // 宛先の存在確認
   const targetIsParticipant = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(targetName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, targetName);
   const targetIsTeam = db
-    .prepare('SELECT name FROM teams WHERE name = ?')
-    .get(targetName);
+    .prepare('SELECT name FROM teams WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, targetName);
 
   if (!targetIsParticipant && !targetIsTeam) {
     throw new Error(`宛先 ${targetName} は存在しません`);
   }
 
-  // 権限確認
   if (targetIsTeam) {
-    // チームの場合: メンバーのみ閲覧可能
     const isMember = db
-      .prepare('SELECT 1 FROM team_members WHERE team_name = ? AND member_name = ?')
-      .get(targetName, requesterName);
+      .prepare(
+        'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
+      )
+      .get(tenantId, targetName, requesterName);
     if (!isMember) {
       throw new Error(`チーム ${targetName} の履歴を閲覧できるのはメンバーのみです`);
     }
-  } else {
-    // DM の場合: 当事者のみ閲覧可能
-    // 自分が送信者または受信者である会話のみ取得
   }
 
-  // 履歴を取得
   let query: string;
-  let params: any[];
+  let params: unknown[];
 
   if (targetIsTeam) {
-    // チームの場合: チーム宛のメッセージ
     query = `
       SELECT * FROM messages
-      WHERE recipient = ?
+      WHERE tenant_id = ? AND recipient = ?
       ORDER BY created_at DESC, rowid DESC
       LIMIT ?`;
-    params = [targetName, input.limit];
+    params = [tenantId, targetName, input.limit];
   } else {
-    // DM の場合: 双方向の会話
     query = `
       SELECT * FROM messages
-      WHERE (sender = ? AND recipient = ?)
-         OR (sender = ? AND recipient = ?)
+      WHERE tenant_id = ?
+        AND ((sender = ? AND recipient = ?)
+          OR (sender = ? AND recipient = ?))
       ORDER BY created_at DESC, rowid DESC
       LIMIT ?`;
-    params = [requesterName, targetName, targetName, requesterName, input.limit];
+    params = [tenantId, requesterName, targetName, targetName, requesterName, input.limit];
   }
 
   const messages = db.prepare(query).all(...params) as Message[];
@@ -231,48 +222,45 @@ export function getHistory(
 
 /**
  * メッセージを既読にする
- * - 自分宛のメッセージのみ既読可能
- * - 重複した既読登録は無視（INSERT OR IGNORE）
  */
 export function markAsRead(
   db: Database,
+  tenantId: string,
   messageId: string,
   reader: string
 ): { read: true } {
   const readerName = reader.startsWith('@') ? reader : `@${reader}`;
 
-  // 読者が登録済みか確認
   const readerExists = db
-    .prepare('SELECT name FROM participants WHERE name = ?')
-    .get(readerName);
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, readerName);
   if (!readerExists) {
     throw new Error(`${readerName} は登録されていません`);
   }
 
-  // メッセージの存在確認
   const message = db
-    .prepare('SELECT * FROM messages WHERE id = ?')
-    .get(messageId) as Message | undefined;
+    .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')
+    .get(tenantId, messageId) as Message | undefined;
 
   if (!message) {
     throw new Error(`メッセージ ${messageId} は存在しません`);
   }
 
-  // 権限確認: 自分宛のメッセージか？
   const isRecipient = message.recipient === readerName;
   const isTeamMember = db
-    .prepare('SELECT 1 FROM team_members WHERE team_name = ? AND member_name = ?')
-    .get(message.recipient, readerName);
+    .prepare(
+      'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
+    )
+    .get(tenantId, message.recipient, readerName);
 
   if (!isRecipient && !isTeamMember) {
     throw new Error(`メッセージ ${messageId} を既読にできるのは受信者のみです`);
   }
 
-  // 既読を記録（重複は無視）
   const now = new Date().toISOString();
   db.prepare(
-    'INSERT OR IGNORE INTO read_receipts (message_id, reader, read_at) VALUES (?, ?, ?)'
-  ).run(messageId, readerName, now);
+    'INSERT OR IGNORE INTO read_receipts (tenant_id, message_id, reader, read_at) VALUES (?, ?, ?, ?)'
+  ).run(tenantId, messageId, readerName, now);
 
   return { read: true };
 }

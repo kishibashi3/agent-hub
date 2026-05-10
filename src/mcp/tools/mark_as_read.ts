@@ -1,6 +1,5 @@
-import type { Database } from 'better-sqlite3';
+import type { TenantScope } from '../../db/tenant-scope.js';
 import { markAsReadInputSchema } from '../../types/schema.js';
-import { markAsRead, getMessage } from '../../db/messages.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -41,7 +40,7 @@ export const markAsReadTool = {
  * @returns MCP CallToolResult
  */
 export async function handleMarkAsRead(
-  db: Database,
+  scope: TenantScope,
   args: unknown,
   userId: string
 ): Promise<CallToolResult> {
@@ -59,10 +58,10 @@ export async function handleMarkAsRead(
     const reader = userId;
 
     // メッセージの存在と権限を確認（getMessage で検証）
-    getMessage(db, input.message_id, reader);
+    scope.getMessage(input.message_id, reader);
 
     // 既読を記録
-    const result = markAsRead(db, input.message_id, reader);
+    const result = scope.markAsRead(input.message_id, reader);
 
     return {
       content: [
