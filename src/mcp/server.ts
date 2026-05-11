@@ -412,6 +412,49 @@ export function selectNotificationTargets<S extends NotifiableSession>(
 }
 
 /**
+ * presence (online/offline) 判定のための session の最小 shape (issue #1)。
+ *
+ * 「online」= 同 tenant 内の自分 handle 用 session が、自分の inbox URI を
+ * resource subscribe している状態。`Session` から `userId / tenantDomain /
+ * subscribedUris` だけを抜き出した形なので、test では実 Session を組み立てず
+ * 純粋関数として presence ロジックを検証できる。
+ */
+export interface PresenceSession {
+  tenantDomain: string;
+  userId: string;
+  subscribedUris: Set<string>;
+}
+
+/**
+ * `(tenantDomain, handleName)` の participant が現在 online か判定する純粋関数。
+ *
+ * Inbox URI は tenant 識別子を含まないため、tenantDomain が一致する session
+ * かつ userId が一致する session の中で、canonical inbox URI を subscribe して
+ * いるものが 1 つでもあれば online。
+ *
+ * 設計メモ (issue #1 depth A):
+ * - `register` 直後で未 subscribe の participant は `false` を返す
+ * - 同一 handle で複数 session があるケース (= multiple Claude Code 同時起動 等)
+ *   は 1 つでも subscribe 中なら `true`
+ * - SSE close 時には Session 自体が `sessions` Map から消えるため、自動で `false`
+ *   に転ぶ (= 専用 close hook 不要)
+ * - stateless peer は subscribe しないので常に `false` (issue 仕様として許容)
+ */
+export function isParticipantOnline<S extends PresenceSession>(
+  sessionEntries: Iterable<readonly [string, S]>,
+  tenantDomain: string,
+  handleName: string
+): boolean {
+  const inboxUri = inboxUriFor(handleName);
+  for (const [, session] of sessionEntries) {
+    if (session.tenantDomain !== tenantDomain) continue;
+    if (session.userId !== handleName) continue;
+    if (session.subscribedUris.has(inboxUri)) return true;
+  }
+  return false;
+}
+
+/**
  * 指定 resource を購読している session に `notifications/resources/updated` を流す。
  * send_message ハンドラ等から呼び出される。
  *
@@ -498,7 +541,9 @@ function createMcpServer(): Server {
       case 'register':
         return await handleRegister(scope, args, userId, githubLogin);
       case 'get_participants':
-        return await handleGetParticipants(scope, args, userId);
+        return await handleGetParticipants(scope, args, userId, (handleName) =>
+          isParticipantOnline(sessions, tenantDomain, handleName)
+        );
       case 'create_team':
         return await handleCreateTeam(scope, args, userId);
       case 'update_team':
