@@ -20,6 +20,7 @@ import {
   isDeploymentInitialized,
 } from '../db/tenants.js';
 import { scopeToTenant } from '../db/tenant-scope.js';
+import { getParticipantByName } from '../db/participants.js';
 import {
   fetchUserInfo,
   fetchUserOrgs,
@@ -161,6 +162,25 @@ function resolveTenant(
   }
 
   if (domain === DEFAULT_TENANT) {
+    // ルール 1b: AGENT_HUB_DISABLE_DEFAULT_TENANT=1 のとき、default tenant
+    // への外部からの新規参入を operator に限定する。bootstrap 中
+    // (= @admin 未 claim) は除外して @admin 初期化を可能にする。
+    if (
+      process.env.AGENT_HUB_DISABLE_DEFAULT_TENANT === '1' &&
+      isDeploymentInitialized(db)
+    ) {
+      const admin = getParticipantByName(db, DEFAULT_TENANT, '@admin');
+      if (admin && admin.owner !== githubLogin) {
+        res.status(403).json({
+          error: 'default_tenant_disabled',
+          message:
+            'default tenant access is restricted on this deployment. ' +
+            'Specify X-Tenant-Id header to access a named (private) tenant. ' +
+            '初回 access の場合、好きな名前で X-Tenant-Id を指定すれば TOFU で自分専用 tenant を claim できます。',
+        });
+        return null;
+      }
+    }
     return domain;
   }
 
