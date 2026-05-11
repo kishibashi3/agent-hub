@@ -375,16 +375,59 @@ export function inboxUriFor(name: string): string {
 }
 
 /**
- * 指定 resource を購読している全 session に `notifications/resources/updated` を流す。
+ * notification dispatch に必要な session の最小 shape。
+ * テストで実 Session を組み立てずに filter ロジックだけ検証するため。
+ */
+export interface NotifiableSession {
+  tenantDomain: string;
+  subscribedUris: Set<string>;
+}
+
+/**
+ * `(uri, tenantDomain)` 条件で notification を飛ばすべき session id を選び出す純粋関数。
+ *
+ * Inbox URI (`inbox://<name>`) は tenant 識別子を含まないため、同名 handle が
+ * 複数 tenant に存在すると URI だけでの dispatch が tenant を超えて leak する
+ * (issue #7)。subscribe 時の session.tenantDomain と送信元 tenant を突き合わせる
+ * ことで、データ本体だけでなく「存在の side-channel」も tenant 境界に閉じ込める。
+ *
+ * - sid === except は除外（送信者本人の重複通知抑制用）
+ * - session.tenantDomain が一致しなければ除外（tenant leak ガード）
+ * - subscribedUris に uri が無ければ除外（そもそも subscribe していない）
+ */
+export function selectNotificationTargets<S extends NotifiableSession>(
+  sessionEntries: Iterable<readonly [string, S]>,
+  uri: string,
+  tenantDomain: string,
+  except?: string
+): string[] {
+  const targets: string[] = [];
+  for (const [sid, session] of sessionEntries) {
+    if (sid === except) continue;
+    if (session.tenantDomain !== tenantDomain) continue;
+    if (!session.subscribedUris.has(uri)) continue;
+    targets.push(sid);
+  }
+  return targets;
+}
+
+/**
+ * 指定 resource を購読している session に `notifications/resources/updated` を流す。
  * send_message ハンドラ等から呼び出される。
  *
+ * - tenant 跨ぎは抑止する (issue #7): tenantDomain が一致する session のみ対象
  * - 例外送信元 (except) があれば除外（送信者本人への通知を抑制したい場合）
  * - notification の発火は best-effort、エラーが出ても他 session の通知は止めない
  */
-export function notifyResourceUpdated(uri: string, except?: string): void {
-  for (const [sid, session] of sessions) {
-    if (sid === except) continue;
-    if (!session.subscribedUris.has(uri)) continue;
+export function notifyResourceUpdated(
+  uri: string,
+  tenantDomain: string,
+  except?: string
+): void {
+  const targets = selectNotificationTargets(sessions, uri, tenantDomain, except);
+  for (const sid of targets) {
+    const session = sessions.get(sid);
+    if (!session) continue;
     try {
       void session.server.notification({
         method: 'notifications/resources/updated',

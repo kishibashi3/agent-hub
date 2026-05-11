@@ -58,6 +58,8 @@ export async function handleSendMessage(
     const message = scope.sendMessage(input, sender);
 
     // リアルタイム通知発火（best-effort、失敗しても送信自体は成功扱い）
+    // Inbox URI に tenant 識別子は載せず、dispatch 側で scope.tenantId と
+    // session.tenantDomain を突き合わせて tenant leak を防ぐ (issue #7)。
     try {
       const teamMembers = scope.getTeamMembers(message.recipient);
       const recipients =
@@ -65,7 +67,7 @@ export async function handleSendMessage(
           ? teamMembers.filter((m) => m !== sender) // チーム宛: メンバー全員（送信者除く）
           : [message.recipient]; // DM 宛
       for (const r of recipients) {
-        notifyResourceUpdated(inboxUriFor(r));
+        notifyResourceUpdated(inboxUriFor(r), scope.tenantId);
       }
     } catch (notifyErr) {
       console.error('[send_message] notify failed (non-fatal):', notifyErr);
