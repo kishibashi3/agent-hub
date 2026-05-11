@@ -162,11 +162,12 @@ function resolveTenant(
   }
 
   if (domain === DEFAULT_TENANT) {
-    // ルール 1b: AGENT_HUB_DISABLE_DEFAULT_TENANT=1 のとき、default tenant
-    // への外部からの新規参入を operator に限定する。bootstrap 中
-    // (= @admin 未 claim) は除外して @admin 初期化を可能にする。
+    // ルール 1b: default tenant への外部 access を operator に限定する。
+    // **デフォルトで有効** (secure by default)。dev / localhost 用に
+    // `AGENT_HUB_DISABLE_DEFAULT_TENANT=0` で明示 opt-out する。
+    // bootstrap 中 (= @admin 未 claim) は除外して @admin 初期化を可能にする。
     if (
-      process.env.AGENT_HUB_DISABLE_DEFAULT_TENANT === '1' &&
+      process.env.AGENT_HUB_DISABLE_DEFAULT_TENANT !== '0' &&
       isDeploymentInitialized(db)
     ) {
       const admin = getParticipantByName(db, DEFAULT_TENANT, '@admin');
