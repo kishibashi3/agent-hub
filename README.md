@@ -78,6 +78,7 @@ local dev で動かす場合は次の「起動」セクション参照。
 - **multi-tenant** (Community Edition): 1 deployment が複数 tenant を抱える。`X-Tenant-Id` header で識別。1 tenant = 1 GitHub user 所有 (= 1 PAT)、未指定なら `default` tenant (= 雑談室)
 - **DB**: SQLite (better-sqlite3) でメッセージ・参加者・チーム・既読を永続化、全テーブル tenant_id で隔離
 - **inbox subscribe**: MCP resource subscription で push 通知
+- **presence (depth A)**: `get_participants` の `is_online` で「自分の inbox を subscribe 中 = push 受信可能」な participant を一覧から識別できる (tenant 内で集計、stateless peer は常に offline 表示)
 
 ## 起動
 

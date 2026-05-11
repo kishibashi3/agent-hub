@@ -53,4 +53,43 @@ describe('get_participants ツール', () => {
 
     expect(participants[0].display_name).toBeNull();
   });
+
+  it('isOnline コールバック未指定なら全員 is_online: false (後方互換)', async () => {
+    // issue #1: 既存呼び出しコード (callback 渡さない) を壊さないこと。
+    registerParticipant(db, 'default', { name: 'alice' });
+    registerParticipant(db, 'default', { name: 'bob' });
+
+    const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+    const participants = JSON.parse(result.content[0].text);
+
+    expect(participants).toHaveLength(2);
+    participants.forEach((p: any) => {
+      expect(p.is_online).toBe(false);
+    });
+  });
+
+  it('isOnline コールバックの結果が is_online フィールドに反映される', async () => {
+    // issue #1: server.ts 側で sessions Map から組み立てた closure を渡される。
+    registerParticipant(db, 'default', { name: 'alice' });
+    registerParticipant(db, 'default', { name: 'bob' });
+    registerParticipant(db, 'default', { name: 'charlie' });
+
+    // @alice だけ online、他は offline と判定するモック
+    const isOnline = (handle: string) => handle === '@alice';
+
+    const result = await handleGetParticipants(
+      scopeToTenant(db, 'default'),
+      {},
+      'system',
+      isOnline
+    );
+    const participants = JSON.parse(result.content[0].text);
+
+    const byName = Object.fromEntries(
+      participants.map((p: any) => [p.name, p])
+    );
+    expect(byName['@alice'].is_online).toBe(true);
+    expect(byName['@bob'].is_online).toBe(false);
+    expect(byName['@charlie'].is_online).toBe(false);
+  });
 });
