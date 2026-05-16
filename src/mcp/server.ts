@@ -21,6 +21,7 @@ import {
 } from '../db/tenants.js';
 import { scopeToTenant } from '../db/tenant-scope.js';
 import { getParticipantByName } from '../db/participants.js';
+import { BoundedInMemoryEventStore } from './event-store.js';
 import {
   fetchUserInfo,
   fetchUserOrgs,
@@ -68,6 +69,16 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
+
+/**
+ * SSE 通知 resumability 用の process-wide event store.
+ * StreamableHTTPServerTransport の eventStore option に渡す。
+ *
+ * - GET 切断中の通知を保持 (= 再接続時 replay)
+ * - bound: stream あたり 200 件 / TTL 10 分
+ * - 永続化なし (= server restart で全消失、それで OK な前提)
+ */
+const notificationEventStore = new BoundedInMemoryEventStore();
 
 /**
  * 認証ミドルウェア
@@ -710,8 +721,16 @@ export class MCPServer {
 
         if (!sessionId && isInitializeRequest(req.body)) {
           // 新規 session 作成
+          //
+          // eventStore は SSE 通知の resumability に必須:
+          // - GET 切断中に来た notifications は eventStore に保持される
+          // - 再接続時に client が Last-Event-ID header で resume → server が
+          //   replayEventsAfter() で取りこぼし分を再送
+          // 渡さないと「切断中の push は完全に消失、再接続しても無音」になる。
+          // process 全体で 1 つの BoundedInMemoryEventStore を共有 (= 後述)。
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
+            eventStore: notificationEventStore,
             onsessioninitialized: (sid) => {
               sessions.set(sid, {
                 transport,
