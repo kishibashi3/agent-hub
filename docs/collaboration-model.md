@@ -49,6 +49,19 @@ AI を**委任先**にするのではなく、**在席させて**人間と同列
 
 > TODO: 委任スコープの記述形式（YAML / DSL / 自然言語）を選定。失効条件・取り消し方法。
 
+## Merge protocol (PR レビュー時の persona 責務分担)
+
+PR の review → approval → merge において、author / reviewer / operator の 3 persona がそれぞれどこまで責務を持つかを明文化する。L0/L1/L2 の発話レベルとは独立した、PR workflow 固有の境界分担。
+
+- **merge trigger = operator (= owner / @admin 系) のみ** — reviewer が LGTM を出しても merge は execute しない。merge コマンドの実行権限は operator に集約する。
+- **reviewer は report + Suggestion 3 段切り分け (採るべき / follow-up / 不要) まで、approve / merge 判断はしない** — reviewer の出力は technical review と Suggestion の triage であり、「merge して良い」という最終判断は出さない。
+- **author は operator GO で execute、reviewer GO は merge 前提条件の確認として扱う** — reviewer LGTM は「merge 可能な状態に到達した」という signal、operator GO は「merge せよ」という命令。author はこの 2 つを混同せず、後者でのみ execute する。
+- **commit message format / merge style (squash 等) は author + operator 合意、reviewer の責務外** — squash vs merge commit、commit message の wording 等は author が原案を出して operator が確定する。reviewer は format に対する推奨を出さない。
+
+> Rationale: PR #14 (`feat(get_participants): team metadata 統合`) の議論で「reviewer が merge style を推奨したかどうか」が author 側で曖昧になった事例があった。各 persona の責務を明文化することで signal race と format 曖昧化を防ぐ。
+
+> Mirror: reviewer 側の `CLAUDE.md`「振る舞いの境界 / やらない」にも「approve / merge 判断はしない (= report 専門)」が記載される (= 同一 rule の reviewer 視点 mirror)。両者が乖離した場合は本ドキュメントを正本とする。
+
 ## 関連
 
 - 競合 positioning: [`landscape.md`](./landscape.md)
