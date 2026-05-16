@@ -4,16 +4,25 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 /**
  * get_participants ツール定義
  *
- * 登録済みの全参加者を取得する。
- * チーム情報も含めて返す（将来的にはチーム管理機能と統合）。
+ * 登録済みの全参加者 (person) とチーム (team) を 1 つの一覧で返す。
+ * 返却値は type フィールドで判別可能な discriminated union:
+ *
+ *   - type: 'person' → { name, type, display_name, mode, is_online }
+ *   - type: 'team'   → { name, type, owner, members, created_at }
+ *
+ * 並び順は person → team の固定 order (UI 側の重複ソートを避けるため)。
+ * person はこれまで通り created_at 降順、team は created_at 降順 (teams.ts 既定)。
  *
  * 権限:
- * - 誰でも取得可能
+ * - 誰でも取得可能 (同 tenant 内に限る; tenant 境界は TenantScope が enforce)
  */
 export const getParticipantsTool = {
   name: 'get_participants',
   description:
-    '登録済みの全参加者を取得する。name, type (person/team), display_name, mode (peer の worker type), is_online (= 自分の inbox を SSE subscribe 中かどうか) を含む。',
+    '登録済みの全参加者 (person) とチーム (team) を返す。' +
+    'person は name, type, display_name, mode (peer の worker type), is_online (= 自分の inbox を SSE subscribe 中) を持ち、' +
+    'team は name, type, owner, members (= @handle 配列), created_at を持つ。' +
+    'type フィールドで person/team を判別する。',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -29,6 +38,35 @@ export const getParticipantsTool = {
  * 「全員 offline」(= subscribe 経路がない状態) として扱う。
  */
 export type IsOnlineFn = (handleName: string) => boolean;
+
+/**
+ * get_participants の返却 entry。
+ *
+ * person と team で持つフィールドが異なるため discriminated union として表現する。
+ * `type` でナローイング可能。
+ *
+ * 設計メモ:
+ * - `is_online` は **person だけ**にある。team の online 判定 (= メンバーの誰か
+ *   1 人でも online を team の online と見做すか、全員 online かなど) は意味論が
+ *   分岐するため意図的に scope 外とした。必要になった時点で別 issue で議論する。
+ *   ここで一旦 false を埋めておく案もあるが、「実装側で online 判定をしていない」
+ *   ことを `field の不在` で表現する方が誤読が起きにくい。
+ */
+export type ParticipantEntry =
+  | {
+      name: string;
+      type: 'person';
+      display_name: string | null;
+      mode: string | null;
+      is_online: boolean;
+    }
+  | {
+      name: string;
+      type: 'team';
+      owner: string;
+      members: string[];
+      created_at: string;
+    };
 
 /**
  * get_participants ツールのハンドラー
@@ -48,15 +86,28 @@ export async function handleGetParticipants(
 ): Promise<CallToolResult> {
   try {
     const participants = scope.getParticipants();
+    const teams = scope.getTeams();
 
-    // TODO: チーム情報も取得して統合する（現時点では participants のみ）
-    const result = participants.map((p) => ({
+    const personEntries: ParticipantEntry[] = participants.map((p) => ({
       name: p.name,
       type: 'person' as const,
       display_name: p.display_name,
       mode: p.mode,
       is_online: isOnline(p.name),
     }));
+
+    // 各 team について members を都度 fetch する。
+    // 件数が増えたら N+1 が問題になるが、CE alpha 段階ではチーム数も
+    // 高々数十件 / tenant 想定なので素朴に実装する (将来 JOIN 化候補)。
+    const teamEntries: ParticipantEntry[] = teams.map((t) => ({
+      name: t.name,
+      type: 'team' as const,
+      owner: t.owner,
+      members: scope.getTeamMembers(t.name),
+      created_at: t.created_at,
+    }));
+
+    const result: ParticipantEntry[] = [...personEntries, ...teamEntries];
 
     return {
       content: [
