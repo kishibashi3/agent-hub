@@ -207,10 +207,24 @@ describe('get_participants ツール', () => {
       );
       registerParticipant(db, 'tenant-b', { name: 'bob' });
 
+      // (1) positive 側: tenant-a 自身からは @secret が 1 件見える
+      //     (これがないと「team の作成自体が失敗していて、たまたま空配列が
+      //     返って test が通る」誤検知を見落とす。reviewer suggestion #1)
+      const insideResult = await handleGetParticipants(
+        scopeToTenant(db, 'tenant-a'),
+        {},
+        'system'
+      );
+      const insideEntries = JSON.parse(insideResult.content[0].text);
+      const insideTeams = insideEntries.filter((e: any) => e.type === 'team');
+      expect(insideTeams).toHaveLength(1);
+      expect(insideTeams[0].name).toBe('@secret');
+      expect(insideTeams[0].owner).toBe('@alice');
+
+      // (2) negative 側: tenant-b には person 1 件 (@bob) のみ、team は無い
       const result = await handleGetParticipants(scopeToTenant(db, 'tenant-b'), {}, 'system');
       const entries = JSON.parse(result.content[0].text);
 
-      // tenant-b には person 1 件 (@bob) のみ、team は無い
       const persons = entries.filter((e: any) => e.type === 'person');
       const teams = entries.filter((e: any) => e.type === 'team');
       expect(persons.map((p: any) => p.name)).toEqual(['@bob']);

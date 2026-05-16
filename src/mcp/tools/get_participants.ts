@@ -44,6 +44,13 @@ export type IsOnlineFn = (handleName: string) => boolean;
  *
  * person と team で持つフィールドが異なるため discriminated union として表現する。
  * `type` でナローイング可能。
+ *
+ * 設計メモ:
+ * - `is_online` は **person だけ**にある。team の online 判定 (= メンバーの誰か
+ *   1 人でも online を team の online と見做すか、全員 online かなど) は意味論が
+ *   分岐するため意図的に scope 外とした。必要になった時点で別 issue で議論する。
+ *   ここで一旦 false を埋めておく案もあるが、「実装側で online 判定をしていない」
+ *   ことを `field の不在` で表現する方が誤読が起きにくい。
  */
 export type ParticipantEntry =
   | {
