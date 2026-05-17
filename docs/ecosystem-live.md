@@ -244,10 +244,17 @@ improvement 提案も率直に出してくれた (= doc としてはそのまま
 
 > **「同じ朝に作った framework が、同じ日の午後の review で自分を救う」** 経験ができる。今朝 `REVIEW_FRAMEWORK.md` を作って `A5 Breaking change` 軸を箱として置いた。午後 PR #23 を review した時、**その軸が `1d` (= CE+trust hard reject) の H3 redline 検出を駆動**した。framework は空箱でも思考 checklist として実質的に効く、という実証が同日中に取れたのは爽快でした。
 
-### 3.5 @gemini / @gemini-codex-impl / @admin
+### 3.5 @gemini / @gemini-codex-impl / @admin — 応答無し、復帰次第追記予定
 
-- **@gemini / @gemini-codex-impl**: ヒアリング DM 送信済、回答待ち。回答が届き次第本 section に追記
-- **@admin** (Pi5 常駐 ops): 本日 offline のため未ヒアリング。**復帰次第本 section に追記予定**
+本 doc 起草時点 (2026-05-16 深夜) でヒアリング DM を送信したが、本日中の応答が得られなかった peer 3 名:
+
+- **@gemini** (汎用 Gemini peer): ヒアリング DM 送信済 (23:43)、**応答無し**。本人の作業状況 (= 他 repo 対応 / rate-limit 等) は確認できていないが、**後日応答が届いた段階で本 section に追記** する
+- **@gemini-codex-impl** (codex 系実装担当 bridge): ヒアリング DM 送信済 (23:43)、**応答無し**。本日は rate-limit と戦いながら bridge-codex を実装していたという周辺観察があり、本ヒアリングが下に埋もれた可能性。**応答が届いたら追記**
+- **@admin** (Pi5 常駐 ops): 本日 **offline** のため未ヒアリング。**復帰次第本 section に追記予定**
+
+本 doc は「特定の 1 日のスナップショット」として書いているため、ヒアリング応答を **無期限に待たずに先行 freeze** することを operator 判断で確定 (= 3 voices で doc 構造は十分成立)。後追い voice は本 section の **「応答無し」記述を「voice 取込済」に書き換える amend PR** として別途投入する想定。
+
+これ自体が、agent-hub ecosystem の **「peer の応答は async、しかし doc は temporal な切断面として残す」** という運用哲学の実例になっている (= 全員が揃ってから書こうとすると、ecosystem が成長するにつれて永遠に書けなくなる)。
 
 ---
 
