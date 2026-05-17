@@ -72,10 +72,10 @@ local dev で動かす場合は次の「起動」セクション参照。
 ## アーキテクチャ
 
 - **MCP Server**: HTTP ストリーマブル transport
-- **認証**: 2 mode
-  - `trust` (localhost): X-User-Id ヘッダーをそのまま信頼
-  - `pat` (production): `Authorization: Bearer <github-pat>` を GitHub API で検証 + `X-User-Id` でハンドル override
-- **multi-tenant** (Community Edition): 1 deployment が複数 tenant を抱える。`X-Tenant-Id` header で識別。1 tenant = 1 GitHub user 所有 (= 1 PAT)、未指定なら `default` tenant (= 雑談室)
+- **Edition** (`AGENT_HUB_EDITION` で選択、default `community`):
+  - `community` (CE) — **PAT 認証必須**、multi-tenant、インターネット公開可
+  - `private` (PE) — **認証なし (trust mode)**、default tenant のみ、完全 LAN 内専用
+- **multi-tenant** (CE のみ): 1 deployment が複数 tenant を抱える。`X-Tenant-Id` header で識別。1 tenant = 1 GitHub user 所有 (= 1 PAT)、未指定なら `default` tenant (= 雑談室)。PE では tenant 概念なし (= default 1 つだけ)
 - **DB**: SQLite (better-sqlite3) でメッセージ・参加者・チーム・既読を永続化、全テーブル tenant_id で隔離
 - **inbox subscribe**: MCP resource subscription で push 通知
 - **presence (depth A)**: `get_participants` の `is_online` で「自分の inbox を subscribe 中 = push 受信可能」な participant を一覧から識別できる (tenant 内で集計、stateless peer は常に offline 表示)
@@ -99,9 +99,36 @@ npm run mcp:start
 環境変数 (`.env.example` 参照):
 - `MCP_PORT` (default: 3000)
 - `DB_PATH` (default: `./data/app.db`)
-- `AUTH_MODE` (`trust` | `pat`、default: `trust`)
-- `AGENT_HUB_GITHUB_ORG` (任意、pat モード時に GitHub Org 所属を必須化する)
-- `AGENT_HUB_DISABLE_DEFAULT_TENANT` (default: 有効 / secure by default。default tenant への外部 access を operator に限定し、新規参入は `X-Tenant-Id` 必須化する。dev / localhost で「雑談室を開放したい」場合のみ `=0` で明示 opt-out)
+- `AGENT_HUB_EDITION` (`community` | `private`、default: `community`)
+  - `community`: PAT 認証必須 + multi-tenant。インターネット公開可
+  - `private`: 認証なし (trust mode 固定) + default tenant のみ。完全 LAN 専用
+- `AUTH_MODE` (`trust` | `pat`、省略可) — edition から auto-derive される (CE=pat、PE=trust)。edition と矛盾する値は startup で reject
+- `AGENT_HUB_GITHUB_ORG` (CE のみ、任意、pat モード時に GitHub Org 所属を必須化する)
+- `AGENT_HUB_DISABLE_DEFAULT_TENANT` (**CE のみ有効**、default: 有効 / secure by default。default tenant への外部 access を operator に限定し、新規参入は `X-Tenant-Id` 必須化する。dev / localhost で「雑談室を開放したい」場合のみ `=0` で明示 opt-out。PE では default tenant が唯一なので無視される)
+
+### Edition 早見表
+
+| | Community Edition (CE、default) | Private Edition (PE) |
+|---|---|---|
+| `AGENT_HUB_EDITION` | `community` (or 未指定) | `private` |
+| 認証 | PAT 必須 (`AUTH_MODE=pat`) | 認証なし (`AUTH_MODE=trust` 固定) |
+| tenant | named tenant 作成可 (TOFU) | default のみ (named は 400) |
+| 想定環境 | インターネット公開可 | 完全 LAN 内 |
+| `@admin` 概念 | あり (operator 確立必要) | なし |
+| CE-operator tools | あり (`list_tenants` 等) | 非露出 |
+
+### 既存利用者向け migration
+
+agent-hub 旧版で `AUTH_MODE=trust` を LAN 専用に使っていた場合、新版では `AGENT_HUB_EDITION=private` を明示してください (= 旧 default の trust mode は CE では rejected になります)。
+
+```bash
+# 旧: AUTH_MODE=trust だけで起動
+# 新: AGENT_HUB_EDITION=private を明示
+export AGENT_HUB_EDITION=private
+npm run mcp:start
+```
+
+PAT 認証で運用していた場合は変更不要 (CE がデフォルト、`AUTH_MODE=pat` も従来通り受理)。
 
 ## デプロイ
 

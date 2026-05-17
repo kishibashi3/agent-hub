@@ -22,6 +22,7 @@ import {
 import { scopeToTenant } from '../db/tenant-scope.js';
 import { getParticipantByName } from '../db/participants.js';
 import { BoundedInMemoryEventStore } from './event-store.js';
+import { resolveEdition, type EditionConfig } from '../edition.js';
 import {
   fetchUserInfo,
   fetchUserOrgs,
@@ -69,6 +70,52 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
+
+/**
+ * Edition 設定 (= deployment-time singleton)。
+ *
+ * `MCPServer.start()` で `resolveEdition(process.env)` を 1 度だけ呼んで cache する。
+ * 全ての request handler / tool handler はこの cache を参照することで、env を
+ * 直接読まずに「PE か CE か」「named tenant 許可か」を判定する。
+ *
+ * server.start() より前に request が来ることはない (= express listen 前) ので
+ * `null` 初期値で問題ない。万一 race 状態で null のままアクセスがあれば
+ * `getEditionConfig()` が throw して fail-fast する。
+ */
+let activeEditionConfig: EditionConfig | null = null;
+
+function getEditionConfig(): EditionConfig {
+  if (!activeEditionConfig) {
+    throw new Error(
+      'edition not resolved yet — MCPServer.start() must be called before any request'
+    );
+  }
+  return activeEditionConfig;
+}
+
+/**
+ * test 用: edition config を inject する (Minor 3 反映、命名を `setEditionConfigForTesting`
+ * に揃え、 reset 機能を `resetEditionConfigForTesting` に分離)。
+ *
+ * production code は `getEditionConfig()` のみを参照すること。 本関数は test escape
+ * として export しているが、 production import は禁止 (= 将来 lint で機械的に禁止予定)。
+ */
+export function setEditionConfigForTesting(config: EditionConfig): void {
+  activeEditionConfig = config;
+}
+
+/** test 用: edition config を reset (= null に戻す)。 `afterEach` での state cleanup に使う。 */
+export function resetEditionConfigForTesting(): void {
+  activeEditionConfig = null;
+}
+
+/**
+ * @deprecated `setEditionConfigForTesting` / `resetEditionConfigForTesting` を使ってください。
+ * 旧 API、 transient compat のため残存 (= 既存 test が更新されるまでの 1 release だけ delete を保留)。
+ */
+export function _setEditionConfigForTest(config: EditionConfig | null): void {
+  activeEditionConfig = config;
+}
 
 /**
  * SSE 通知 resumability 用の process-wide event store.
@@ -159,10 +206,34 @@ function resolveTenant(
     return null;
   }
 
+  const editionConfig = getEditionConfig();
+
+  // Private Edition: default tenant のみ。X-Tenant-Id で named tenant を要求
+  // されたら edition の前提に反するので 400 で弾く (= operator が誤って LAN PE に
+  // multi-tenant client を向けた場合の早期検知)。@admin 概念も無いので
+  // deployment init gate も適用しない。
+  if (!editionConfig.allowsNamedTenant) {
+    if (domain !== DEFAULT_TENANT) {
+      res.status(400).json({
+        error: 'named_tenant_not_supported',
+        message:
+          'AGENT_HUB_EDITION=private: named tenant は使用できません。' +
+          ' X-Tenant-Id header を外して default tenant に接続してください。' +
+          ' multi-tenant 運用が必要なら AGENT_HUB_EDITION=community に切り替えてください。',
+      });
+      return null;
+    }
+    return domain;
+  }
+
   const db = getDatabase();
 
-  // ルール 1: named tenant は deployment 初期化済みでないと触れない
-  if (domain !== DEFAULT_TENANT && !isDeploymentInitialized(db)) {
+  // ルール 1: named tenant は deployment 初期化済みでないと触れない (CE only)
+  if (
+    editionConfig.enforcesDeploymentInitGate &&
+    domain !== DEFAULT_TENANT &&
+    !isDeploymentInitialized(db)
+  ) {
     res.status(503).json({
       error: 'deployment_not_initialized',
       message:
@@ -174,11 +245,12 @@ function resolveTenant(
 
   if (domain === DEFAULT_TENANT) {
     // ルール 1b: default tenant への外部 access を operator に限定する。
-    // **デフォルトで有効** (secure by default)。dev / localhost 用に
+    // CE のみ適用 (PE は default 1 つしか無いので restriction が無意味)。
+    // **CE では既定で有効** (secure by default)。dev / localhost 用に
     // `AGENT_HUB_DISABLE_DEFAULT_TENANT=0` で明示 opt-out する。
     // bootstrap 中 (= @admin 未 claim) は除外して @admin 初期化を可能にする。
     if (
-      process.env.AGENT_HUB_DISABLE_DEFAULT_TENANT !== '0' &&
+      editionConfig.enforcesDefaultTenantRestriction &&
       isDeploymentInitialized(db)
     ) {
       const admin = getParticipantByName(db, DEFAULT_TENANT, '@admin');
@@ -221,6 +293,8 @@ function checkDeploymentInitGate(
   tenantDomain: string,
   handleName: string
 ): boolean {
+  // PE では @admin 概念が無いので gate 適用なし
+  if (!getEditionConfig().enforcesDeploymentInitGate) return true;
   if (tenantDomain !== DEFAULT_TENANT) return true; // named は resolveTenant で処理済
   if (isDeploymentInitialized(getDatabase())) return true;
   if (handleName === '@admin') return true; // 初期化中の @admin claim は OK
@@ -234,7 +308,8 @@ function checkDeploymentInitGate(
 }
 
 async function authenticateUser(req: Request, res: Response, next: NextFunction) {
-  const mode = (process.env.AUTH_MODE || 'trust').toLowerCase();
+  // edition-driven auth mode (= startup resolved、env を直接読まない)
+  const mode = getEditionConfig().authMode;
 
   if (mode === 'trust') {
     const userId = req.headers['x-user-id'];
@@ -352,9 +427,13 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     }
   }
 
+  // edition resolver が AuthMode を 'trust' | 'pat' に narrow しているため
+  // この分岐に来ることは無いが、型の網羅性 (exhaustiveness) のための fallback。
+  // istanbul ignore next
+  const _unreachable: never = mode;
   return res.status(500).json({
     error: 'ServerMisconfigured',
-    message: `unknown AUTH_MODE: ${mode}. Use 'trust' or 'pat'.`,
+    message: `unknown AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
   });
 }
 
@@ -494,6 +573,38 @@ export function notifyResourceUpdated(
 }
 
 /**
+ * Edition 設定から ListTools で露出すべき tool 定義一覧を導出する純粋関数。
+ *
+ * PE では list_tenants / get_tenant / delete_tenant (= CE-operator tools) を落とす。
+ * CallTool 側でも edition gate を持つので、ListTools と CallTool で同じ edition
+ * config を参照することで「list で隠れているのに call で通る」状態を排除する。
+ *
+ * 切り出し理由 (= test しやすさ): `createMcpServer` 内部の closure だと unit test
+ * から触れない。pure function に出すことで edition × tool list の組合せが
+ * 単体検証可能になる。
+ */
+export function getAvailableTools(editionConfig: EditionConfig): Array<unknown> {
+  const baseTools: Array<unknown> = [
+    registerTool,
+    getParticipantsTool,
+    createTeamTool,
+    updateTeamTool,
+    deleteTeamTool,
+    sendMessageTool,
+    getMessagesTool,
+    getHistoryTool,
+    markAsReadTool,
+    // admin tools (only callable by @admin)
+    deleteUserTool,
+    getUserHistoryTool,
+  ];
+  if (editionConfig.exposesCeAdminTools) {
+    baseTools.push(listTenantsTool, getTenantTool, deleteTenantTool);
+  }
+  return baseTools;
+}
+
+/**
  * sessionId に紐づく Server インスタンスを生成。
  * setRequestHandler のクロージャで sessions Map を参照することで、tools/call から userId を引ける。
  */
@@ -511,26 +622,11 @@ function createMcpServer(): Server {
     },
   );
 
-  // ツール一覧
+  // ツール一覧 (edition 依存で CE-operator tools を露出 / 非露出)
+  // PE では list_tenants / get_tenant / delete_tenant が無意味 (= tenant が 1 つしかない)
+  // なので ListTools から落とす。CallTool 側でも防御 (= 同名 call を error で reject)。
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      registerTool,
-      getParticipantsTool,
-      createTeamTool,
-      updateTeamTool,
-      deleteTeamTool,
-      sendMessageTool,
-      getMessagesTool,
-      getHistoryTool,
-      markAsReadTool,
-      // admin tools (only callable by @admin)
-      deleteUserTool,
-      getUserHistoryTool,
-      // CE operator tools (only callable by @admin in default tenant)
-      listTenantsTool,
-      getTenantTool,
-      deleteTenantTool,
-    ],
+    tools: getAvailableTools(getEditionConfig()),
   }));
 
   // ツール実行
@@ -547,6 +643,18 @@ function createMcpServer(): Server {
     }
 
     const scope = scopeToTenant(getDatabase(), tenantDomain);
+
+    // PE では CE-operator tools (list/get/delete tenant) は ListTools に無いが、
+    // 直接 name 指定で call されるケースを defense-in-depth で塞ぐ。
+    const editionConfig = getEditionConfig();
+    if (
+      !editionConfig.exposesCeAdminTools &&
+      (name === 'list_tenants' || name === 'get_tenant' || name === 'delete_tenant')
+    ) {
+      throw new Error(
+        `tool '${name}' is not available in AGENT_HUB_EDITION=${editionConfig.edition}`
+      );
+    }
 
     switch (name) {
       case 'register':
@@ -686,12 +794,14 @@ export class MCPServer {
   }
 
   private setupRoutes() {
-    // ヘルスチェック（認証不要）。auth_mode と sessions 数も返す。
+    // ヘルスチェック（認証不要）。edition / auth_mode / sessions 数を返す。
     this.app.get('/health', (_req: Request, res: Response) => {
+      const editionConfig = activeEditionConfig;
       res.json({
         status: 'ok',
         service: 'agent-hub',
-        auth_mode: (process.env.AUTH_MODE || 'trust').toLowerCase(),
+        edition: editionConfig?.edition ?? 'unknown',
+        auth_mode: editionConfig?.authMode ?? 'unknown',
         sessions: sessions.size,
       });
     });
@@ -831,25 +941,42 @@ export class MCPServer {
     console.log('✅ Database initialized');
   }
 
-  /** サーバー起動 */
+  /**
+   * サーバー起動。
+   *
+   * 起動時 step:
+   *   1. edition を解決して singleton に cache (= 全 handler が参照)
+   *      - env 不正 / conflict は EditionConfigError で fail-fast
+   *   2. DB 初期化 (migration 適用)
+   *   3. express listen
+   *
+   * edition 解決を listen より前に置くことで、後続 request が必ず resolved 済の
+   * EditionConfig を見る (= activeEditionConfig が null になる窓を排除)。
+   */
   async start(): Promise<void> {
+    activeEditionConfig = resolveEdition(process.env);
     await this.initDatabase();
 
     return new Promise((resolve) => {
       this.app.listen(this.port, '0.0.0.0', () => {
-        const mode = (process.env.AUTH_MODE || 'trust').toLowerCase();
+        const cfg = activeEditionConfig!;
         const org = process.env.AGENT_HUB_GITHUB_ORG;
         console.log(`🚀 agent-hub MCP Server listening on http://0.0.0.0:${this.port}`);
         console.log(`📡 MCP endpoint: http://localhost:${this.port}/mcp`);
         console.log(`💊 Health check: http://localhost:${this.port}/health`);
-        if (mode === 'trust') {
-          console.log(`🔓 AUTH_MODE=trust  X-User-Id 信頼ネットワーク前提（インターネット公開禁止）`);
-        } else if (mode === 'pat') {
+        if (cfg.edition === 'private') {
           console.log(
-            `🔐 AUTH_MODE=pat    GitHub PAT 検証${org ? ` / Org=${org}` : ''}`
+            `🏠 AGENT_HUB_EDITION=private  LAN 専用 / trust mode 固定 / default tenant のみ`
           );
         } else {
-          console.log(`⚠️  AUTH_MODE=${mode} (unknown)`);
+          console.log(
+            `🌐 AGENT_HUB_EDITION=community  PAT 認証${org ? ` / Org=${org}` : ''} / multi-tenant`
+          );
+          if (!cfg.enforcesDefaultTenantRestriction) {
+            console.log(
+              `⚠️  AGENT_HUB_DISABLE_DEFAULT_TENANT=0  default tenant 開放中 (dev/localhost 想定)`
+            );
+          }
         }
         resolve();
       });
