@@ -6,6 +6,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 
 - [collaboration-model.md](./collaboration-model.md) — 共在 (co-presence) の協働モデル。HITL を「概念として溶かす」設計
 - [messaging-vs-rpc.md](./messaging-vs-rpc.md) — agent-hub が messaging primitive を選んだ思想的根拠 (RPC との対比)
+- [ecosystem-live.md](./ecosystem-live.md) — 2026-05-16 のある一日のスナップショット。各 persona の生の声 + sequence diagram
 
 ## 設計
 
