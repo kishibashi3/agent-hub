@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveEdition, EditionConfigError } from '../edition.js';
+
+// console.warn を spy するための共通 setup (v2 設計の WARN-only path / opt-in path で検証)
+let warnSpy: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(() => {
+  warnSpy.mockRestore();
+});
 
 describe('resolveEdition', () => {
   describe('AGENT_HUB_EDITION の解釈', () => {
@@ -48,10 +57,33 @@ describe('resolveEdition', () => {
       expect(cfg.authMode).toBe('pat');
     });
 
-    it('AUTH_MODE=trust は conflict として弾く', () => {
-      expect(() =>
-        resolveEdition({ AGENT_HUB_EDITION: 'community', AUTH_MODE: 'trust' })
-      ).toThrow(/AGENT_HUB_EDITION=private/); // 移行先 hint を含む
+    // v2 設計 1d=(B): CE+trust は v1 で WARN-only、v2 で hard reject (= migration anchor)
+    it('AUTH_MODE=trust は v1 では WARN-only で許容 (= 起動成功)', () => {
+      const cfg = resolveEdition({
+        AGENT_HUB_EDITION: 'community',
+        AUTH_MODE: 'trust',
+      });
+      expect(cfg.edition).toBe('community');
+      expect(cfg.authMode).toBe('trust'); // legacy mode で起動許可
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = String(warnSpy.mock.calls[0][0]);
+      expect(msg).toMatch(/次バージョン \(v2\) から reject/);
+      expect(msg).toMatch(/AGENT_HUB_EDITION=private/); // LAN への移行 hint
+      expect(msg).toMatch(/AUTH_MODE=pat/); // PAT 公開への移行 hint
+      expect(msg).toMatch(/AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1/); // opt-in path 明示
+    });
+
+    it("AUTH_MODE=trust + AGENT_HUB_ALLOW_LEGACY_CE_TRUST='1' で audit-friendly opt-in WARN に切替え", () => {
+      const cfg = resolveEdition({
+        AGENT_HUB_EDITION: 'community',
+        AUTH_MODE: 'trust',
+        AGENT_HUB_ALLOW_LEGACY_CE_TRUST: '1',
+      });
+      expect(cfg.authMode).toBe('trust');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = String(warnSpy.mock.calls[0][0]);
+      expect(msg).toMatch(/legacy CE\+trust mode running under explicit opt-in/);
+      expect(msg).toMatch(/v2 でも WARN-only で延命/);
     });
 
     it('DISABLE_DEFAULT_TENANT 未指定 → restriction 有効 (secure-by-default)', () => {
@@ -85,18 +117,39 @@ describe('resolveEdition', () => {
       expect(cfg.authMode).toBe('trust');
     });
 
-    it('AUTH_MODE=pat は conflict として弾く', () => {
+    // v2 設計: PE+pat は設計矛盾、常に hard reject (= 1d の inverse 側、v1/v2 共通)
+    it('AUTH_MODE=pat は v1/v2 共通で hard reject (= 設計矛盾)', () => {
       expect(() =>
         resolveEdition({ AGENT_HUB_EDITION: 'private', AUTH_MODE: 'pat' })
-      ).toThrow(/AGENT_HUB_EDITION=community/); // 移行先 hint を含む
+      ).toThrow(EditionConfigError);
+      try {
+        resolveEdition({ AGENT_HUB_EDITION: 'private', AUTH_MODE: 'pat' });
+      } catch (err) {
+        const msg = String((err as Error).message);
+        // 両方向 hint を検証 (Sug 3 反映)
+        expect(msg).toMatch(/AUTH_MODE 指定を削除/); // LAN 専用への path
+        expect(msg).toMatch(/AGENT_HUB_EDITION=community/); // PAT 公開への path
+      }
     });
 
-    it('DISABLE_DEFAULT_TENANT は無視される (PE では意味を持たない)', () => {
+    // v2 設計 Minor 4: PE で AGENT_HUB_DISABLE_DEFAULT_TENANT が設定されていたら WARN log
+    it('DISABLE_DEFAULT_TENANT は無視される + WARN log を出す (silent ignore 廃止)', () => {
       const cfg = resolveEdition({
         AGENT_HUB_EDITION: 'private',
         AGENT_HUB_DISABLE_DEFAULT_TENANT: '1',
       });
       expect(cfg.enforcesDefaultTenantRestriction).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = String(warnSpy.mock.calls[0][0]);
+      expect(msg).toMatch(
+        /\[PE\] AGENT_HUB_DISABLE_DEFAULT_TENANT is set but has no effect/
+      );
+    });
+
+    it('DISABLE_DEFAULT_TENANT 未設定なら WARN log は出ない', () => {
+      const cfg = resolveEdition({ AGENT_HUB_EDITION: 'private' });
+      expect(cfg.enforcesDefaultTenantRestriction).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
     });
   });
 

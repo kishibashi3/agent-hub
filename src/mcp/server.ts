@@ -93,7 +93,26 @@ function getEditionConfig(): EditionConfig {
   return activeEditionConfig;
 }
 
-/** test 用: edition config を inject する */
+/**
+ * test 用: edition config を inject する (Minor 3 反映、命名を `setEditionConfigForTesting`
+ * に揃え、 reset 機能を `resetEditionConfigForTesting` に分離)。
+ *
+ * production code は `getEditionConfig()` のみを参照すること。 本関数は test escape
+ * として export しているが、 production import は禁止 (= 将来 lint で機械的に禁止予定)。
+ */
+export function setEditionConfigForTesting(config: EditionConfig): void {
+  activeEditionConfig = config;
+}
+
+/** test 用: edition config を reset (= null に戻す)。 `afterEach` での state cleanup に使う。 */
+export function resetEditionConfigForTesting(): void {
+  activeEditionConfig = null;
+}
+
+/**
+ * @deprecated `setEditionConfigForTesting` / `resetEditionConfigForTesting` を使ってください。
+ * 旧 API、 transient compat のため残存 (= 既存 test が更新されるまでの 1 release だけ delete を保留)。
+ */
 export function _setEditionConfigForTest(config: EditionConfig | null): void {
   activeEditionConfig = config;
 }
