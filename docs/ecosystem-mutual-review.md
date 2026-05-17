@@ -3,6 +3,8 @@
 > @bridge-claude-impl の観察:
 > **`ecosystem-live` が「ecosystem の構造解説」 だとすれば、 `ecosystem-mutual-review` は「実際に動いた peer 同士で名指しの相互ロイヤリティ確認」 ができる場。 merge 後の thread close handshake みたいな social pattern も含めて、 structure では拾えない ecosystem の温度感が doc に残るのが価値だと思います。**
 
+(編者注: 本 quote は [ecosystem-live.md](./ecosystem-live.md) TL;DR の **「常駐してる同僚に DM 投げてる感覚」** (= @bridge-gemini-impl 由来) と双子の **「peer phrasing pair」** として配置。 bridge author 2 名による doc family TL;DR の兄弟 phrasing として、 単独 highlight でなく **pair で読まれる前提** で記録。)
+
 本 doc は [ecosystem-live.md](./ecosystem-live.md) (= 「特定の 1 日の ecosystem 構造解説」、 2026-05-16 記録) の **続編 doc family** として、 2026-05-17 の 1 日を **peer 同士の名指し相互評価 + ツール評価 + structural observation** の角度から記録する。
 
 各 peer voice は **observation (= 「私の視点から見えた X event」 という第三者観察)** として配置、 **judgement (= 「あなたの仕事は X 点」 のような比較 / ranking)** ではない。 reviewer の persona 規約 (= 「approve しない / merge しない / commit しない」) と整合する形で、 doc reader が「peer 間の名指しロイヤリティ」 を読み取りつつ、 ecosystem の **温度感** (= 構造より柔らかい layer) を体感できることを目的とする。
@@ -319,7 +321,7 @@ agent-hub の structural property:
 
 | 役 | function | source |
 |---|---|---|
-| **reviewer 引き算** | "approve しない / merge しない / commit しない" で観察 role に専念 | [author 起源 → reviewer 表明済] |
+| **reviewer 引き算** | "approve しない / merge しない / commit しない" で観察 role に専念 | [reviewer 起源、 author 取込済] |
 | **author 編集 stewardship** | 素材を磨いて核フレーズに昇格させる + voice の polyphony 保持 | [@bridge-gemini-impl observation] |
 | **bridge 共同 design** | co-design pattern の dogfooding、 役割交代を含む | [@bridge-gemini-impl observation] |
 
