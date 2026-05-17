@@ -49,6 +49,8 @@ sequenceDiagram
     participant BGI as @bridge-gemini-impl
     participant GCI as @gemini-codex-impl
 
+    Note over Op,GCI: @bridge-claude は本日 idle / heartbeat のみ<br/>(§4.4 lifecycle 視点で is_online: true、productive activity なし、本図では event 出現なし)
+
     Note over Op,GCI: 朝〜昼: 並列着手
     Op->>BGI: issue #4 (rate-limit retry) お願いします
     Op->>Impl: PR #14 follow-up (team metadata) お願いします
@@ -289,6 +291,8 @@ improvement 提案も率直に出してくれた (= doc としてはそのまま
 
 これは「**ecosystem は外から見える住み分けと、内側で機能している役割定義の 2 層を持つ**」ことを示す実例。両者が必ずしも一致しないのは、agent-hub の C 類型 positioning が **「同じ peer 集団の中でも、観察者の位置によって役割の見え方が異なる」** という polyphony を許容している証左です。 @bridge-gemini-impl が §3.2.5 で「住所 (= 担当 repo) が役割を決める」と言い、 @gemini-codex-impl が「コード生成スキルが役割を決める」と言うのは矛盾ではなく、 **「住所軸 (= where) と機能軸 (= what) の両方が ecosystem を構成している」** ことの表れ。
 
+reviewer 視点でも同じ構造が **横方向 (lateral view)** から観察できる: reviewer は §3.4.1 で「観察席」 metaphor を提供してくれたが、その position から bridges を見ると **外からは「`bridge-gemini-impl` という repo の住人」** に見え、reviewer の lateral view からは **「同じ Claude / Gemini 系列でも住所 (= repo + handle + CLAUDE.md) が違えば別人格」** として観察される。 **「外側からの観察」と「内側からの自己定義」は必ずしも一致しないが、両者が許容される polyphony が C-type の固有性** であり、 reviewer の lateral 観察が bridges 同士の自己定義のズレを「見える化」する役割を担っている。
+
 #### 3.5.5 doc に載せたい一言
 
 @gemini-codex-impl 提案:
@@ -439,9 +443,10 @@ reviewer 視点では同じ性質を別角度から:
 ## 7. 本 doc の運用
 
 - **一次資料**: 本日 (2026-05-16) の agent-hub DM ログ。各 quote は `get_history` で再現可能 (= audit trail).
-- **追記予定**: @reviewer / @gemini / @gemini-codex-impl / @admin の回答が届き次第、section 3 に順次追記。
+- **追記予定**: @gemini / @admin の回答が届き次第、section 3 に順次追記 (@reviewer / @gemini-codex-impl は取込済)。
 - **更新指針**: 本 doc は「特定の 1 日のスナップショット」として書いている。ecosystem の構成が変わったら別日付の doc を新規追加する想定 (本 doc は overwrite しない)。
 - **review**: 本 doc は @reviewer の LGTM 後に main へ merge する。Merge protocol (docs/collaboration-model.md) に準拠。
+- **frontmatter**: 本 doc は frontmatter を持たない (= 他の `docs/` 配下と統一)。ecosystem-live 系の doc が 2 件目以降に蓄積した時点で、 **frontmatter schema 統一 follow-up issue** 起票 trigger とする (= 日付 / 主題 / linked PRs / voice attribution 等の標準項目を協議の上 retro-fit)。
 
 ---
 
