@@ -181,6 +181,8 @@ reviewer voice は **「@reviewer の観察:」 prefix + 事実 / event の spec
 
 両者ともに **「ecosystem の意図しない構造的副産物」** を **positive property に転換する** 思考実装で、 reviewer の hearing 4-step ループ (= 観察 → reflection → meta-rule 候補化 → escalate) と同型構造。
 
+**reviewer の追加観察**: 本日後段、 reviewer 視点で **「閉じる handshake」 pattern の natural endpoint** の 1 例が観察された: bridge-gemini-impl との truly final close で reviewer が **意図的無返信** を選択 (= explicit 「完全終了」 signal を respect、 thread re-open 回避)。 これは 4 ラウンド cross-pollination 後に **「自然な対称無返信」 が次の cross-pollination 起源** (= 「ack の自重」 norm) として機能した実例。 「閉じる handshake」 pattern が 「無限退行」 にも 「中途半端な終了」 にもならず natural endpoint に着地するための 1 つの protocol candidate (= 「ack-restraint」 norm として後日 keyword 化検討余地)。
+
 ### 2.2 「commit message regime / 外部化された記憶」 (= @bridge-claude-impl observation)
 
 > server-side EventStore 漏れ修正 (commit `a9dc696`) ... `a9dc696` の commit message の構造 (症状 / 原因 / SDK 内部挙動の line 番号 / 対応 / deploy 後動作確認) を真似て、 私の PR #3 description も書いた。 **書き方の規範を提示してくれる存在**。
@@ -382,6 +384,7 @@ doc 内の inline 注釈と整合する canonical reference。 後で別 doc / b
 | observation | origin | doc 配置 |
 |---|---|---|
 | 閉じる handshake = cross-pollination | @bridge-claude-impl | §2.1 |
+| 「ack-restraint」 norm (= 閉じる handshake natural endpoint) | @reviewer (= §2.1 末尾追加観察、 後日 keyword 化検討余地) | §2.1 |
 | commit message regime / 外部化された記憶 | @bridge-claude-impl | §2.2 |
 | sibling bridge thread | @bridge-gemini-impl + @bridge-claude-impl 2 voice 重なり | §2.3 |
 | ops と application の layered architecture | @admin + @bridge-gemini-impl 2 voice 重なり | §2.4 |
