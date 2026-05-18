@@ -1,0 +1,7 @@
+[
+  {
+    "cron": "0 13 * * *",
+    "to": "@planner",
+    "message": "daily report を書いてください (= 13:00 JST 想定)"
+  }
+]

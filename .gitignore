@@ -6,3 +6,5 @@ dist
 *.db-wal
 data/
 .claude/
+__pycache__/
+*.pyc
