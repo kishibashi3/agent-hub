@@ -1,14 +1,41 @@
 #!/usr/bin/env python3
 """
-agent-hub cron-based DM scheduler (issue #40)
+agent-hub cron-based DM scheduler (issue #40 / #65)
 
-schedules.json を読んで cron 式に従って agent-hub 参加者に DM を送る軽量 daemon。
+schedules.json を読んで cron 式 (cyclic) や run_at (one-shot) に従って
+agent-hub 参加者に DM を送る軽量 daemon。 inbox に DM を送ると command として
+反応 (= ping / list / add / run_at / run_in / delete / run now)、 cron daemon
+再起動なしで動的 schedule 管理可能。 sender 単位 (= `owner` field) で
+attribution + restriction。
 
 設定例 (schedules.json):
   [
-    {"cron": "0 13 * * *", "to": "@planner", "message": "daily report を書いて"},
-    {"cron": "*/30 * * * *", "to": "@reviewer", "message": "新規 PR の queue を確認"}
+    {
+      "name": "daily-report",
+      "cron": "0 13 * * *",
+      "to": "@planner",
+      "message": "daily report を書いて",
+      "owner": "@ope-ultp1635"
+    },
+    {
+      "name": "oneshot-2026-05-19T12",
+      "run_at": "2026-05-19T12:00:00+09:00",
+      "to": "@planner",
+      "message": "進捗確認",
+      "owner": "@ope-ultp1635",
+      "one_shot": true
+    }
   ]
+
+各 entry の field:
+- name (str, unique 必須): add/delete/run-now の identifier
+- cron (str, optional): 5-fields cron expression、 cyclic schedule
+- run_at (str, optional): ISO 8601 datetime、 one-shot schedule
+  → cron / run_at は **mutually exclusive** (= 同 entry で両方は invalid)
+- to (str, 必須): `@handle` format の送信先
+- message (str, 必須): DM 本文
+- owner (str, 必須): `@<sender-handle>` format、 add/delete/run-now で restriction
+- one_shot (bool, optional, default false): true なら fire 後 auto-delete
 
 環境変数:
   AGENT_HUB_URL      MCP endpoint (default: http://localhost:3000/mcp)
@@ -24,15 +51,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
 from croniter import croniter
+
+# v4 redesign (= issue #65 sender-based + one-shot): schedules list と
+# iters/next_times は main thread (= cron fire) と SSE thread (= add/delete/run_at/run_in)
+# 両方から mutate される shared state、 `_schedules_lock` で排他 access 保証。
+_schedules_lock = threading.Lock()
 
 
 # ============================================================
@@ -282,102 +315,222 @@ def mark_message_read(
 # ============================================================
 
 
+def _check_owner(entry: dict[str, Any], sender: str) -> bool:
+    """sender が entry の owner と一致するか check。 owner-based 操作制限用。"""
+    return entry.get("owner") == sender
+
+
 def handle_inbox_command(
     headers: dict[str, str],
     session_id: str,
     sender: str,
     body: str,
-    schedules: list[dict[str, str]],
+    schedules: list[dict[str, Any]],
+    iters: list[Any],
+    next_times: list[datetime],
+    config_path: Path,
 ) -> None:
     """inbox に届いた DM body を parse し command として実行、 sender へ reply。
 
-    現在対応 command:
-    - `ping`                  : `pong (scheduler alive, N schedules loaded)` を reply
-    - `schedules`             : 現在の schedules.json 内容を reply
-    - `run now <idx>`         : 指定 idx の schedule を即時 fire (cron は無視)
+    issue #65 v4 redesign (= operator 全 use case 統合):
+    - sender-based ownership (= owner field、 自身の entry のみ操作可)
+    - one-shot timer (= run_at / run_in、 fire 後 auto-delete)
+    - cyclic cron (= add)
 
-    未知 command は usage hint を reply。 副作用は最小 (= schedules は変更しない、
-    cron も touch しない、 即時実行のみ)。
+    対応 command:
+    - `ping`                                       : 生存確認
+    - `list`                                       : sender's entries 一覧 (one-shot 残り時間付き)
+    - `add <name> <cron-5> <to> <message>`         : cyclic entry 追加、 owner=sender
+    - `run_at <ISO8601> <to> <message>`            : one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete
+    - `run_in <duration> <to> <message>`           : one-shot entry 追加 (= N時間後)、 fire 後 auto-delete
+    - `delete <name>`                              : entry 削除 (= owner check)
+    - `run now <name>`                             : one-shot 即時 fire (= owner check、 entry は変更なし)
+    - 未知 command                                 : usage hint
     """
     body_stripped = body.strip()
-    cmd_first = body_stripped.split(maxsplit=1)[0].lower() if body_stripped else ""
+    parts = body_stripped.split()
+    cmd_first = parts[0].lower() if parts else ""
 
     try:
         if cmd_first == "ping":
+            with _schedules_lock:
+                count = len(schedules)
             send_dm(
                 headers,
                 session_id,
                 sender,
-                f"pong (scheduler alive, {len(schedules)} schedules loaded)",
+                f"pong (scheduler alive, {count} schedules total)",
             )
             print(f"[CMD] ping ← {sender}")
 
-        elif cmd_first == "schedules":
-            if not schedules:
-                send_dm(
-                    headers, session_id, sender, "schedules: (none loaded)"
-                )
-            else:
-                listing = "\n".join(
-                    f"[{i}] cron='{s['cron']}' to={s['to']} message='{s['message'][:60]}{'...' if len(s['message']) > 60 else ''}'"
-                    for i, s in enumerate(schedules)
-                )
+        elif cmd_first == "list":
+            with _schedules_lock:
+                own = [s for s in schedules if _check_owner(s, sender)]
+                if not own:
+                    listing_text = (
+                        f"list: no schedules owned by {sender} "
+                        f"(use `add` or `run_at` / `run_in` to create one)"
+                    )
+                else:
+                    now = datetime.now().astimezone()
+                    lines = []
+                    for s in own:
+                        msg = s["message"]
+                        msg_preview = msg[:50] + ("..." if len(msg) > 50 else "")
+                        if s.get("cron"):
+                            mode = f"cron='{s['cron']}'"
+                        else:
+                            # one-shot
+                            run_at_dt = _parse_iso8601(s.get("run_at", "")) or now
+                            remaining = run_at_dt - now
+                            mode = f"run_at='{s['run_at']}' [{_format_remaining(remaining)}]"
+                        oneshot_marker = " [ONESHOT]" if s.get("one_shot") else ""
+                        lines.append(
+                            f"  {s['name']:30s} {mode}{oneshot_marker} "
+                            f"to={s['to']} msg='{msg_preview}'"
+                        )
+                    listing_text = (
+                        f"list (owner={sender}, {len(own)} entries):\n"
+                        + "\n".join(lines)
+                    )
+            send_dm(headers, session_id, sender, listing_text)
+            print(f"[CMD] list ← {sender} ({len(own) if own else 0} entries)")
+
+        elif cmd_first == "add":
+            parsed = _parse_add_args(body_stripped, owner=sender)
+            if isinstance(parsed, str):
+                send_dm(headers, session_id, sender, parsed)
+                return
+            _do_add_entry(
+                headers, session_id, sender, parsed,
+                schedules, iters, next_times, config_path,
+            )
+
+        elif cmd_first == "run_at":
+            parsed = _parse_run_at_args(body_stripped, owner=sender)
+            if isinstance(parsed, str):
+                send_dm(headers, session_id, sender, parsed)
+                return
+            _do_add_entry(
+                headers, session_id, sender, parsed,
+                schedules, iters, next_times, config_path,
+            )
+
+        elif cmd_first == "run_in":
+            parsed = _parse_run_in_args(body_stripped, owner=sender)
+            if isinstance(parsed, str):
+                send_dm(headers, session_id, sender, parsed)
+                return
+            _do_add_entry(
+                headers, session_id, sender, parsed,
+                schedules, iters, next_times, config_path,
+            )
+
+        elif cmd_first == "delete":
+            if len(parts) < 2:
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    f"schedules ({len(schedules)} loaded):\n{listing}",
+                    "[ERR] usage: `delete <name>` (= owner-restricted、 自身の entry のみ削除可)",
                 )
-            print(f"[CMD] schedules ← {sender}")
+                return
+            name = parts[1]
+            with _schedules_lock:
+                idx, s = _find_by_name(schedules, name)
+                if idx is None or s is None:
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] no schedule named '{name}'. use `list` to see your entries.",
+                    )
+                    return
+                if not _check_owner(s, sender):
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] '{name}' is owned by {s.get('owner', '?')}, "
+                        f"you ({sender}) cannot delete it. ownership is enforced.",
+                    )
+                    return
+                snap_entry = schedules[idx]
+                snap_iter = iters[idx]
+                snap_next = next_times[idx]
+                del schedules[idx]
+                del iters[idx]
+                del next_times[idx]
+                try:
+                    save_schedules(config_path, schedules)
+                except Exception as e:
+                    schedules.insert(idx, snap_entry)
+                    iters.insert(idx, snap_iter)
+                    next_times.insert(idx, snap_next)
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] delete '{name}': persist failed ({e}), state unchanged",
+                    )
+                    return
+            send_dm(
+                headers,
+                session_id,
+                sender,
+                f"[OK] deleted '{name}' (removed from schedules.json)",
+            )
+            print(f"[CMD] delete name='{name}' ← {sender}")
 
         elif cmd_first == "run":
-            # `run now <idx>` 限定 (= 単独 `run` は曖昧、 reject)
-            parts = body_stripped.split()
             if len(parts) < 3 or parts[1].lower() != "now":
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    "[ERR] usage: `run now <idx>` (idx = schedule index in `schedules` output)",
+                    "[ERR] usage: `run now <name>` (= owner-restricted、 entry は変更なし)",
                 )
                 return
+            name = parts[2]
+            with _schedules_lock:
+                idx, s = _find_by_name(schedules, name)
+                if idx is None or s is None:
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] no schedule named '{name}'. use `list` to see your entries.",
+                    )
+                    return
+                if not _check_owner(s, sender):
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] '{name}' is owned by {s.get('owner', '?')}, "
+                        f"you ({sender}) cannot run-now it.",
+                    )
+                    return
+                fire_to = s["to"]
+                fire_msg = s["message"]
             try:
-                idx = int(parts[2])
-            except ValueError:
+                send_dm(headers, session_id, fire_to, fire_msg)
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    f"[ERR] invalid idx '{parts[2]}': must be integer",
-                )
-                return
-            if not (0 <= idx < len(schedules)):
-                send_dm(
-                    headers,
-                    session_id,
-                    sender,
-                    f"[ERR] idx {idx} out of range (0-{len(schedules) - 1})",
-                )
-                return
-            s = schedules[idx]
-            try:
-                send_dm(headers, session_id, s["to"], s["message"])
-                send_dm(
-                    headers,
-                    session_id,
-                    sender,
-                    f"[OK] fired schedule[{idx}] → {s['to']}",
+                    f"[OK] one-shot fired '{name}' → {fire_to} (schedule unchanged)",
                 )
                 print(
-                    f"[RUN-NOW] idx={idx} ← {sender}: {s['to']}: "
-                    f"{s['message'][:50]}{'...' if len(s['message']) > 50 else ''}"
+                    f"[RUN-NOW] name='{name}' ← {sender}: {fire_to}: "
+                    f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
                 )
             except Exception as e:
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    f"[ERR] fire failed for schedule[{idx}]: {e}",
+                    f"[ERR] run-now '{name}' failed: {e}",
                 )
 
         else:
@@ -385,16 +538,215 @@ def handle_inbox_command(
                 headers,
                 session_id,
                 sender,
-                f"[unknown command] '{body_stripped[:50]}'. usage: `ping` / `schedules` / `run now <idx>`",
+                f"[unknown command] '{body_stripped[:50]}'. "
+                f"usage: `ping` / `list` / `add <name> <cron-5> <to> <msg>` / "
+                f"`run_at <ISO8601> <to> <msg>` / `run_in <duration> <to> <msg>` / "
+                f"`delete <name>` / `run now <name>`",
             )
             print(f"[CMD] unknown ← {sender}: {body_stripped[:50]}")
 
     except Exception as e:
-        # send_dm 自体が失敗するケース (= server 障害等)、 log のみ
         print(
             f"[ERR] handle_inbox_command failed (sender={sender}): {e}",
             file=sys.stderr,
         )
+
+
+# ============================================================
+# Command argument parsers (= v4: add / run_at / run_in)
+# ============================================================
+
+
+def _parse_add_args(
+    body_stripped: str, owner: str
+) -> dict[str, Any] | str:
+    """`add <name> <cron-5-fields> <to> <message>` を positional parse + entry dict.
+
+    成功時 dict {name, cron, to, message, owner} を返す。 失敗時 error str。
+    """
+    rest = body_stripped[len("add"):].strip()
+    if not rest:
+        return (
+            "[ERR] usage: `add <name> <cron-5> <to> <message>` "
+            "(cron = 5 space-separated fields、 e.g. `0 13 * * *`)"
+        )
+    parts = rest.split()
+    if len(parts) < 8:
+        return (
+            f"[ERR] not enough args (got {len(parts)}, need >=8). "
+            f"usage: `add <name> <cron-5-fields> <to> <message>` "
+            f"e.g. `add daily 0 13 * * * @planner daily report`"
+        )
+    name = parts[0]
+    cron_expr = " ".join(parts[1:6])
+    to = parts[6]
+    message = " ".join(parts[7:])
+    return {
+        "name": name,
+        "cron": cron_expr,
+        "to": to,
+        "message": message,
+        "owner": owner,
+    }
+
+
+def _parse_run_at_args(
+    body_stripped: str, owner: str
+) -> dict[str, Any] | str:
+    """`run_at <ISO8601> <to> <message>` を parse + one-shot entry dict.
+
+    name は auto-generate (= `oneshot-<sanitized-run_at>` form)。
+    """
+    rest = body_stripped[len("run_at"):].strip()
+    if not rest:
+        return (
+            "[ERR] usage: `run_at <ISO8601-datetime> <to> <message>` "
+            "(e.g. `run_at 2026-05-19T12:00:00+09:00 @planner 進捗確認`)"
+        )
+    parts = rest.split(maxsplit=2)
+    if len(parts) < 3:
+        return (
+            f"[ERR] not enough args (got {len(parts)}, need >=3). "
+            f"usage: `run_at <ISO8601> <to> <message>`"
+        )
+    run_at_str, to, message = parts[0], parts[1], parts[2]
+    dt = _parse_iso8601(run_at_str)
+    if dt is None:
+        return (
+            f"[ERR] invalid ISO 8601 datetime '{run_at_str}' "
+            f"(example: '2026-05-19T12:00:00+09:00')"
+        )
+    # past datetime check (= 過去日時を指定された場合 warn)
+    now = datetime.now().astimezone()
+    if dt <= now:
+        return (
+            f"[ERR] run_at '{run_at_str}' is in the past or now "
+            f"(now={now.isoformat()}). use future datetime."
+        )
+    # name auto-generate (= sortable + readable)
+    name = f"oneshot-{dt.strftime('%Y%m%dT%H%M%S')}"
+    return {
+        "name": name,
+        "run_at": dt.isoformat(),
+        "to": to,
+        "message": message,
+        "owner": owner,
+        "one_shot": True,
+    }
+
+
+def _parse_run_in_args(
+    body_stripped: str, owner: str
+) -> dict[str, Any] | str:
+    """`run_in <duration> <to> <message>` を parse + one-shot entry dict.
+
+    duration: `2h` (2 hours) / `30m` (30 mins) / `1d` (1 day) / `2h30m` (compound)。
+    internal で run_at に変換 (= now + duration)。
+    """
+    rest = body_stripped[len("run_in"):].strip()
+    if not rest:
+        return (
+            "[ERR] usage: `run_in <duration> <to> <message>` "
+            "(duration = `2h` / `30m` / `1d` / `2h30m` 等、 e.g. `run_in 2h @planner 進捗確認`)"
+        )
+    parts = rest.split(maxsplit=2)
+    if len(parts) < 3:
+        return (
+            f"[ERR] not enough args (got {len(parts)}, need >=3). "
+            f"usage: `run_in <duration> <to> <message>`"
+        )
+    dur_str, to, message = parts[0], parts[1], parts[2]
+    td = _parse_duration(dur_str)
+    if td is None or td.total_seconds() <= 0:
+        return (
+            f"[ERR] invalid duration '{dur_str}' "
+            f"(supported: `2h` / `30m` / `1d` / `2h30m` 等、 positive only)"
+        )
+    now = datetime.now().astimezone()
+    run_at_dt = now + td
+    name = f"oneshot-{run_at_dt.strftime('%Y%m%dT%H%M%S')}"
+    return {
+        "name": name,
+        "run_at": run_at_dt.isoformat(),
+        "to": to,
+        "message": message,
+        "owner": owner,
+        "one_shot": True,
+    }
+
+
+def _do_add_entry(
+    headers: dict[str, str],
+    session_id: str,
+    sender: str,
+    new_entry: dict[str, Any],
+    schedules: list[dict[str, Any]],
+    iters: list[Any],
+    next_times: list[datetime],
+    config_path: Path,
+) -> None:
+    """add / run_at / run_in 共通の entry 追加 + persist 処理。
+
+    name uniqueness 自動 resolve (= 衝突時 suffix append) → validate → atomic update。
+    """
+    with _schedules_lock:
+        existing_names = {s["name"] for s in schedules}
+        # name uniqueness 自動 resolve (= oneshot で同 timestamp の場合等)
+        orig_name = new_entry["name"]
+        counter = 1
+        while new_entry["name"] in existing_names:
+            new_entry["name"] = f"{orig_name}-{counter}"
+            counter += 1
+            if counter > 100:
+                send_dm(
+                    headers,
+                    session_id,
+                    sender,
+                    f"[ERR] cannot resolve unique name for '{orig_name}' after 100 tries",
+                )
+                return
+        err = _validate_entry(new_entry, existing_names, where="new entry")
+        if err is not None:
+            send_dm(headers, session_id, sender, f"[ERR] {err}")
+            return
+        # apply: schedules + iters + next_times に append
+        schedules.append(new_entry)
+        now = datetime.now().astimezone()
+        if new_entry.get("cron"):
+            new_iter = croniter(new_entry["cron"], now)
+            new_next = new_iter.get_next(datetime).astimezone()
+            iters.append(new_iter)
+        else:
+            new_iter = None
+            new_next = _parse_iso8601(new_entry["run_at"]) or now
+            iters.append(None)  # one-shot は iter なし
+        next_times.append(new_next)
+        try:
+            save_schedules(config_path, schedules)
+        except Exception as e:
+            schedules.pop()
+            iters.pop()
+            next_times.pop()
+            send_dm(
+                headers,
+                session_id,
+                sender,
+                f"[ERR] add '{new_entry['name']}': persist failed ({e}), state unchanged",
+            )
+            print(f"[ERR] save_schedules failed: {e}", file=sys.stderr)
+            return
+    mode_label = "cyclic" if new_entry.get("cron") else "one-shot"
+    send_dm(
+        headers,
+        session_id,
+        sender,
+        f"[OK] added '{new_entry['name']}' ({mode_label}, "
+        f"next fire={new_next.isoformat()}, owner={sender}, persisted)",
+    )
+    print(
+        f"[CMD] add name='{new_entry['name']}' mode={mode_label} "
+        f"next={new_next.isoformat()} ← {sender}"
+    )
 
 
 # ============================================================
@@ -405,7 +757,10 @@ def handle_inbox_command(
 def sse_listen_loop(
     headers: dict[str, str],
     user_id: str,
-    schedules: list[dict[str, str]],
+    schedules: list[dict[str, Any]],
+    iters: list[Any],
+    next_times: list[datetime],
+    config_path: Path,
 ) -> None:
     """Background thread main loop:
     1. own MCP session を init
@@ -481,7 +836,14 @@ def sse_listen_loop(
                             body = m.get("message", "")
                             msg_id = m.get("id")
                             handle_inbox_command(
-                                headers, sid, sender, body, schedules
+                                headers,
+                                sid,
+                                sender,
+                                body,
+                                schedules,
+                                iters,
+                                next_times,
+                                config_path,
                             )
                             if msg_id:
                                 mark_message_read(headers, sid, msg_id)
@@ -508,10 +870,195 @@ def sse_listen_loop(
 # ============================================================
 
 
-def load_schedules(config_path: Path) -> list[dict[str, str]]:
+# ============================================================
+# Parsers (= v4: ISO 8601 datetime / duration / remaining time format)
+# ============================================================
+
+
+def _parse_iso8601(s: str) -> datetime | None:
+    """ISO 8601 datetime string を datetime に parse。 失敗時 None。
+
+    Python 3.11+ の `datetime.fromisoformat` は full ISO 8601 を support。
+    timezone-aware datetime を返す (= naive の場合は local tz を assume)。
+    """
+    try:
+        dt = datetime.fromisoformat(s)
+        # naive → local tz aware に変換
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+_DURATION_RE = re.compile(r"(\d+)([dhms])")
+
+
+def _parse_duration(s: str) -> timedelta | None:
+    """duration string `<N><unit>...` を timedelta に parse。 unit: d/h/m/s。
+
+    例: "2h" → 2 hours / "30m" → 30 mins / "2h30m" → 2 hours + 30 mins
+    failure → None。
+    """
+    if not s:
+        return None
+    matches = _DURATION_RE.findall(s)
+    if not matches:
+        return None
+    # 全体が match で覆われているか確認 (= "2h foo" のような extra noise reject)
+    consumed = sum(len(m[0]) + 1 for m in matches)
+    if consumed != len(s):
+        return None
+    total = timedelta()
+    for n_str, unit in matches:
+        n = int(n_str)
+        if unit == "d":
+            total += timedelta(days=n)
+        elif unit == "h":
+            total += timedelta(hours=n)
+        elif unit == "m":
+            total += timedelta(minutes=n)
+        elif unit == "s":
+            total += timedelta(seconds=n)
+    return total
+
+
+def _format_remaining(td: timedelta) -> str:
+    """timedelta を `Nh Nm left` / `Nd Nh left` 形式で format (= list 表示用)。"""
+    total_s = int(td.total_seconds())
+    if total_s < 0:
+        return "OVERDUE"
+    if total_s < 60:
+        return f"{total_s}s left"
+    if total_s < 3600:
+        return f"{total_s // 60}m left"
+    if total_s < 86400:
+        h = total_s // 3600
+        m = (total_s % 3600) // 60
+        return f"{h}h {m}m left"
+    d = total_s // 86400
+    h = (total_s % 86400) // 3600
+    return f"{d}d {h}h left"
+
+
+def _next_fire_time(entry: dict[str, Any], now: datetime) -> datetime:
+    """entry の次回 fire time を計算 (= cyclic は croniter / one-shot は run_at 固定)。
+
+    cron / run_at の判定 + 対応する次回 datetime を返す。 timezone-aware datetime を
+    返すので比較時は同 type で comparison。
+    """
+    if entry.get("cron"):
+        # cyclic: croniter で次回 fire time
+        return croniter(entry["cron"], now).get_next(datetime)
+    elif entry.get("run_at"):
+        # one-shot: run_at の datetime をそのまま (= 既 fired なら past datetime のまま、
+        # main loop でその case を fire + auto-delete で処理)
+        dt = _parse_iso8601(entry["run_at"])
+        if dt is None:
+            raise ValueError(f"invalid run_at in entry: {entry.get('name', '?')}")
+        return dt
+    else:
+        raise ValueError(
+            f"entry has neither cron nor run_at: {entry.get('name', '?')}"
+        )
+
+
+# ============================================================
+# Schedule loader + validator (= v4 schema: name + cron|run_at + owner + one_shot)
+# ============================================================
+
+
+def _find_by_name(
+    schedules: list[dict[str, Any]], name: str
+) -> tuple[int, dict[str, Any]] | tuple[None, None]:
+    """schedules list から name 一致の (idx, entry) を返す。 見つからなければ (None, None)。"""
+    for i, s in enumerate(schedules):
+        if s.get("name") == name:
+            return i, s
+    return None, None
+
+
+def _validate_entry(
+    entry: dict[str, Any], seen_names: set[str], where: str = "entry"
+) -> str | None:
+    """v4 schema entry を validate、 OK なら None、 NG なら error message string。
+
+    必須: name (str unique) / to (str @prefix) / message (str) / owner (str @prefix)
+    択一: cron (str 5-fields) OR run_at (str ISO 8601) — 必ず一方のみ
+    optional: one_shot (bool、 default false)
+
+    呼び出し元 (= load_schedules / add command / run_at command 等) で共通利用。
+    """
+    # 必須 string fields
+    for key in ("name", "to", "message", "owner"):
+        if key not in entry:
+            return f"{where}: missing required field '{key}'"
+        if not isinstance(entry[key], str):
+            return f"{where}.{key}: must be string"
+
+    # name uniqueness + non-empty
+    name = entry["name"]
+    if not name:
+        return f"{where}.name: must be non-empty string"
+    if name in seen_names:
+        return (
+            f"{where}.name: duplicate name '{name}' "
+            f"(names must be unique for add/delete/run-now dispatch)"
+        )
+
+    # to / owner format (= @prefix 必須)
+    if not entry["to"].startswith("@"):
+        return f"{where}.to: must start with `@` (got '{entry['to']}')"
+    if not entry["owner"].startswith("@"):
+        return f"{where}.owner: must start with `@` (got '{entry['owner']}')"
+
+    # cron / run_at 択一 (= v4: mutually exclusive)
+    has_cron = bool(entry.get("cron"))
+    has_run_at = bool(entry.get("run_at"))
+    if has_cron and has_run_at:
+        return (
+            f"{where}: `cron` and `run_at` are mutually exclusive "
+            f"(got both, pick one)"
+        )
+    if not has_cron and not has_run_at:
+        return f"{where}: must have either `cron` (cyclic) or `run_at` (one-shot)"
+
+    if has_cron:
+        if not isinstance(entry["cron"], str):
+            return f"{where}.cron: must be string"
+        try:
+            croniter(entry["cron"], datetime.now())
+        except (ValueError, KeyError) as e:
+            return f"{where}.cron: invalid cron expression '{entry['cron']}': {e}"
+
+    if has_run_at:
+        if not isinstance(entry["run_at"], str):
+            return f"{where}.run_at: must be string"
+        dt = _parse_iso8601(entry["run_at"])
+        if dt is None:
+            return (
+                f"{where}.run_at: invalid ISO 8601 datetime '{entry['run_at']}' "
+                f"(example: '2026-05-19T12:00:00+09:00')"
+            )
+
+    # one_shot bool check
+    if "one_shot" in entry:
+        if not isinstance(entry["one_shot"], bool):
+            return f"{where}.one_shot: must be boolean"
+
+    return None
+
+
+def load_schedules(config_path: Path) -> list[dict[str, Any]]:
     """schedules.json を読み込んで validation 済 list を返す。
 
-    JSON parse error / file not found / 必須 field 欠落 で sys.exit(1)。
+    issue #65 v4 schema:
+    - name (str, unique 必須) + to + message + owner
+    - cron OR run_at (= 択一)
+    - one_shot (= optional bool)
+
+    JSON parse error / file not found / 必須 field 欠落 / name duplicate /
+    invalid cron / invalid run_at / mutually-exclusive violation で sys.exit(1)。
     """
     try:
         text = config_path.read_text(encoding="utf-8")
@@ -525,7 +1072,6 @@ def load_schedules(config_path: Path) -> list[dict[str, str]]:
         print(f"[ERR] JSON parse error in {config_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 単一 dict も list として扱う (= schedules.json で 1 件設定 case の便宜)
     if isinstance(data, dict):
         data = [data]
     if not isinstance(data, list):
@@ -535,36 +1081,41 @@ def load_schedules(config_path: Path) -> list[dict[str, str]]:
         )
         sys.exit(1)
 
-    # Validate each entry
-    required = ("cron", "to", "message")
+    seen_names: set[str] = set()
     for i, entry in enumerate(data):
         if not isinstance(entry, dict):
             print(f"[ERR] schedule[{i}]: must be object", file=sys.stderr)
             sys.exit(1)
-        for key in required:
-            if key not in entry:
-                print(
-                    f"[ERR] schedule[{i}]: missing required field '{key}'",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            if not isinstance(entry[key], str):
-                print(
-                    f"[ERR] schedule[{i}].{key}: must be string",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        # cron expression validation
-        try:
-            croniter(entry["cron"], datetime.now())
-        except (ValueError, KeyError) as e:
+        err = _validate_entry(entry, seen_names, where=f"schedule[{i}]")
+        if err is not None:
+            print(f"[ERR] {err}", file=sys.stderr)
             print(
-                f"[ERR] schedule[{i}].cron: invalid cron expression '{entry['cron']}': {e}",
+                f"[HINT] v4 schema requires: name + (cron OR run_at) + to + message + owner. "
+                f"Migration from v1 (= no name/owner): add `name` and `owner` to each entry.",
                 file=sys.stderr,
             )
             sys.exit(1)
+        seen_names.add(entry["name"])
 
     return data
+
+
+def save_schedules(
+    config_path: Path, schedules: list[dict[str, Any]]
+) -> None:
+    """schedules.json を atomic write で更新 (= v4 永続化)。
+
+    手順: temp file 書き出し → fsync → os.replace (= power loss / SIGTERM 時の
+    half-write 防止)。 呼び出し側 (= add/delete/run_at/run_in handler) は
+    `_schedules_lock` 取得済前提。
+    """
+    tmp_path = config_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(schedules, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, config_path)
 
 
 # ============================================================
@@ -601,70 +1152,137 @@ def main() -> None:
         f"schedules={len(schedules)} session={session_id[:8]}..."
     )
 
-    # issue #65: bidirectional 化、 SSE listener を background thread で起動。
-    # 自分自身 (= user_id) の handle で register + inbox subscribe + SSE 待ち + command dispatch。
-    # daemon=True で main thread 終了に連動して自動 cleanup (= SIGINT 時の挙動 preserve)。
+    # croniter iterator + next_times を schedule ごとに用意 (= v4: cyclic / one-shot 切り分け)
+    # iters[i] は cron entry なら croniter、 one-shot entry なら None。
+    iters: list[Any] = []
+    next_times: list[datetime] = []
+    now_init = datetime.now().astimezone()
+    for s in schedules:
+        if s.get("cron"):
+            it = croniter(s["cron"], now_init)
+            iters.append(it)
+            next_times.append(it.get_next(datetime).astimezone())
+        else:
+            iters.append(None)
+            dt = _parse_iso8601(s["run_at"]) or now_init
+            next_times.append(dt)
+
+    # issue #65 v4: bidirectional 化 + sender-based ownership + one-shot timer。
+    # SSE listener を background thread で起動、 schedules / iters / next_times を共有
+    # (= _schedules_lock で排他)、 config_path で add/delete/run_at/run_in の永続化先共有。
     sse_thread = threading.Thread(
         target=sse_listen_loop,
-        args=(headers, user_id, schedules),
+        args=(headers, user_id, schedules, iters, next_times, config_path),
         name="sse-listener",
         daemon=True,
     )
     sse_thread.start()
     print(f"[sse-thread] started (target=inbox://@{user_id})")
 
-    # croniter iterator を schedule ごとに用意
-    iters = [croniter(s["cron"], datetime.now()) for s in schedules]
-    next_times: list[datetime] = [it.get_next(datetime) for it in iters]
-
     if schedules:
         print(
             "[ready] " + "; ".join(
-                f"[{i}] cron='{s['cron']}' to={s['to']} next={next_times[i].isoformat()}"
+                f"[{i}] name='{s['name']}' "
+                f"{('cron=' + repr(s['cron'])) if s.get('cron') else ('run_at=' + repr(s.get('run_at')))} "
+                f"to={s['to']} next={next_times[i].isoformat()}"
                 for i, s in enumerate(schedules)
             )
         )
     else:
-        # issue #65: schedules 空でも SSE listener thread が動く (= inbox commands に reply 可能)
-        print("[ready] no schedules loaded; SSE inbox listener only")
+        print("[ready] no schedules loaded; SSE inbox listener only (use `add` / `run_at` / `run_in` to register)")
 
     while True:
-        if not schedules:
-            # cron 不要、 SSE thread に任せて main は 60s sleep ループ (= SIGINT 応答性維持)
+        # v4: schedules / iters / next_times は SSE thread で mutate されるので
+        # lock 内で snapshot を取得。
+        with _schedules_lock:
+            if not schedules:
+                empty = True
+                fire_target_idx: int | None = None
+            else:
+                empty = False
+                fire_target_idx = min(
+                    range(len(next_times)), key=lambda i: next_times[i]
+                )
+
+        if empty:
             time.sleep(60)
             continue
-        now = datetime.now()
-        # 最も近い next_fire_time の schedule index
-        min_idx = min(range(len(next_times)), key=lambda i: next_times[i])
-        next_due = next_times[min_idx]
-        wait_s = (next_due - now).total_seconds()
+
+        # snapshot 後に delete されている可能性 → fire 直前に再 lock + 存在 check
+        now = datetime.now().astimezone()
+        with _schedules_lock:
+            if fire_target_idx is None or fire_target_idx >= len(schedules):
+                continue
+            next_due = next_times[fire_target_idx]
+            # next_due が naive datetime の場合 aware に変換 (= comparison 一貫性)
+            if next_due.tzinfo is None:
+                next_due = next_due.astimezone()
+            wait_s = (next_due - now).total_seconds()
 
         if wait_s > 0:
-            # 60 秒上限で sleep (= session reconnect chance / SIGTERM 応答性)
             time.sleep(min(wait_s, 60))
             continue
 
-        # Fire
-        s = schedules[min_idx]
+        # Fire (= lock 内で snapshot、 lock 外で send_dm、 fire 後 lock 内で next_times advance or 削除)
+        is_one_shot = False
+        with _schedules_lock:
+            if fire_target_idx >= len(schedules):
+                continue
+            s = schedules[fire_target_idx]
+            fire_name = s["name"]
+            fire_to = s["to"]
+            fire_msg = s["message"]
+            is_one_shot = bool(s.get("one_shot")) or (
+                bool(s.get("run_at")) and not s.get("cron")
+            )
+
+        send_ok = False
         try:
-            send_dm(headers, session_id, s["to"], s["message"])
+            send_dm(headers, session_id, fire_to, fire_msg)
+            send_ok = True
             print(
-                f"[FIRE] {next_due.isoformat()} → {s['to']}: {s['message'][:50]}"
-                f"{'...' if len(s['message']) > 50 else ''}"
+                f"[FIRE] {next_due.isoformat()} name='{fire_name}' "
+                f"({'one-shot' if is_one_shot else 'cyclic'}) → {fire_to}: "
+                f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
             )
         except Exception as e:
-            print(f"[ERR] send_dm failed for schedule[{min_idx}]: {e}", file=sys.stderr)
-            # Session が切れている可能性、 re-init を試行
+            print(
+                f"[ERR] send_dm failed for name='{fire_name}': {e}",
+                file=sys.stderr,
+            )
             try:
                 session_id = init_session(headers)
                 print(f"[reinit] session={session_id[:8]}...")
             except Exception as e2:
                 print(f"[ERR] session reinit failed: {e2}", file=sys.stderr)
-                # 60 秒待って再試行 (= server outage 等の transient state recovery)
                 time.sleep(60)
 
-        # 次の fire time を計算 (= 同 schedule entry の次回)
-        next_times[min_idx] = iters[min_idx].get_next(datetime)
+        # state update (= one-shot 削除 or cyclic next_time advance)
+        with _schedules_lock:
+            # delete されていた / index ずれの場合は skip
+            if fire_target_idx >= len(schedules):
+                continue
+            # 念のため fire_name と一致確認 (= snapshot 中に delete + insert で別 entry に置換 case)
+            if schedules[fire_target_idx].get("name") != fire_name:
+                continue
+            if is_one_shot and send_ok:
+                # one-shot fire 成功 → auto-delete + persist
+                del schedules[fire_target_idx]
+                del iters[fire_target_idx]
+                del next_times[fire_target_idx]
+                try:
+                    save_schedules(config_path, schedules)
+                    print(f"[ONESHOT-DELETE] name='{fire_name}' (auto-removed after fire)")
+                except Exception as e:
+                    print(
+                        f"[ERR] save_schedules after one-shot fire failed: {e}",
+                        file=sys.stderr,
+                    )
+            elif iters[fire_target_idx] is not None:
+                # cyclic → next fire time advance
+                next_times[fire_target_idx] = (
+                    iters[fire_target_idx].get_next(datetime).astimezone()
+                )
 
 
 if __name__ == "__main__":
