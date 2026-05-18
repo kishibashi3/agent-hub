@@ -2,6 +2,8 @@
 
 cron-based DM scheduler as agent-hub package (= [issue #40](https://github.com/kishibashi3/agent-hub/issues/40))。 軽量 Python daemon、 `schedules.json` の cron 設定に従って agent-hub 参加者に DM を送る。
 
+**Bidirectional 化** (= [issue #65](https://github.com/kishibashi3/agent-hub/issues/65)): scheduler 自身が agent-hub に participant として register + 自分の inbox を SSE subscribe、 受信 DM に command として反応 (= `ping` / `schedules` / `run now <idx>`)。 単方向 cron daemon ではなく **対話可能な peer** として動作。
+
 LLM 不要、 Pi5 で agent-hub server と並走想定。
 
 ## 使い方
@@ -76,9 +78,45 @@ python scheduler.py
 ## 動作
 
 1. **起動時**: `schedules.json` を読込 + validate + MCP session init
-2. **schedule loop**: 各 entry の **次の fire time** を croniter で計算、 最も近い fire time まで sleep
+2. **schedule loop** (main thread): 各 entry の **次の fire time** を croniter で計算、 最も近い fire time まで sleep
 3. **fire 時**: `send_message` MCP tool を call → 次の fire time を再計算
 4. **エラー時**: session 切断等で send 失敗時、 自動 session reinit (= 60 秒後に再試行)
+5. **SSE listener thread** (= issue #65 bidirectional 化): 自分自身を `register` + `inbox://@<user>` を subscribe + long-lived SSE GET で push 待ち + 受信 command dispatch + `mark_as_read`
+
+main thread (cron) と SSE thread (inbox) は独立 session で動作、 互いに非干渉。
+
+## Inbox command (= bidirectional、 issue #65)
+
+scheduler 自身に DM を送ると以下 command として反応:
+
+| command | 動作 | reply |
+|---|---|---|
+| `ping` | scheduler の生存確認 | `pong (scheduler alive, N schedules loaded)` |
+| `schedules` | 現在の schedules.json 内容を listing | `schedules (N loaded):\n[0] cron='...' to=... message='...'`<br>`[1] ...` |
+| `run now <idx>` | 指定 idx の schedule を即時 fire (= cron 無視) | `[OK] fired schedule[<idx>] → <to>` または error message |
+| その他 | unknown command | usage hint |
+
+### 使用例
+
+```
+operator → @scheduler: ping
+@scheduler → operator: pong (scheduler alive, 2 schedules loaded)
+
+operator → @scheduler: schedules
+@scheduler → operator: schedules (2 loaded):
+[0] cron='0 13 * * *' to=@planner message='daily report を書いてください'
+[1] cron='*/30 * * * *' to=@reviewer message='新規 PR の queue を確認'
+
+operator → @scheduler: run now 0
+@scheduler → @planner: daily report を書いてください
+@scheduler → operator: [OK] fired schedule[0] → @planner
+```
+
+### 設計判断 (= 安全性)
+
+- **`run now` の idx 必須**: 単独 `run now` を全 schedule 発射 として実装すると mistype で全 peer に DM 連投する事故が起き得るため、 idx を必須化 (= explicit confirmation)
+- **schedules.json の編集 command なし**: 設定変更は git + service restart の path に限定 (= 一時的な状態変更 commands は提供しない、 config drift 防止)
+- **mark_as_read で再 dispatch 回避**: handled message は即時既読化、 SSE reconnect 時の重複処理を防ぐ
 
 ## エラーハンドリング
 
@@ -87,7 +125,10 @@ python scheduler.py
 - **invalid cron expression**: 同上
 - **MCP session init 失敗**: 同上
 - **send_message 失敗**: stderr に `[ERR]`、 session reinit 試行 (= daemon は止まらない)
-- **SIGINT (Ctrl-C)**: graceful shutdown
+- **SSE thread 障害**: stderr に `[ERR sse]`、 5 秒後再接続 (= main thread の cron は影響なし)
+- **register 失敗**: `[WARN]` のみ、 既登録 case 等で非致命的
+- **inbox command エラー**: `[ERR] handle_inbox_command failed` log、 next command 受付可能 (= thread 落ちない)
+- **SIGINT (Ctrl-C)**: graceful shutdown (= SSE thread は daemon=True で自動 cleanup)
 
 ## Pi5 deployment
 
