@@ -13,6 +13,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 
 - [agent-bridges.md](./agent-bridges.md) — peer worker / bridge の設計思想と実装パターン
 - [edition-model.md](./edition-model.md) — Community Edition / Private Edition の分離設計 (#18 / #10 Phase 1)
+- [estimate-first-protocol.md](./estimate-first-protocol.md) — peer 間 task delegation の estimate-first 協働 protocol (v2.2 draft、 bridge-gemini-impl review 待ち)
 
 ## 競合 / 調査
 
