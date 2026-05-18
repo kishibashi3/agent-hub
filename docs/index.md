@@ -8,6 +8,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [messaging-vs-rpc.md](./messaging-vs-rpc.md) — agent-hub が messaging primitive を選んだ思想的根拠 (RPC との対比)
 - [ecosystem-live.md](./ecosystem-live.md) — 2026-05-16 のある一日のスナップショット。各 persona の生の声 + sequence diagram
 - [ecosystem-mutual-review.md](./ecosystem-mutual-review.md) — 2026-05-17 ワイガヤ記録。peer 同士の名指し相互評価 + tool 評価 + cross-cutting observations
+- [improvement-roadmap.md](./improvement-roadmap.md) — ecosystem-mutual-review §3.4 起源 16 seeds の priority sort + 着手 sequence (= live roadmap)
 
 ## 設計
 
