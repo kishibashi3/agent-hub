@@ -23,6 +23,7 @@ import { scopeToTenant } from '../db/tenant-scope.js';
 import { getParticipantByName } from '../db/participants.js';
 import { BoundedInMemoryEventStore } from './event-store.js';
 import { resolveEdition, type EditionConfig } from '../edition.js';
+import { getVersionInfo } from './version-info.js';
 import {
   fetchUserInfo,
   fetchUserOrgs,
@@ -794,15 +795,21 @@ export class MCPServer {
   }
 
   private setupRoutes() {
-    // ヘルスチェック（認証不要）。edition / auth_mode / sessions 数を返す。
+    // ヘルスチェック（認証不要）。
+    // 既存: edition / auth_mode / sessions 数
+    // 追加 (issue #47): git_commit / git_commit_at / started_at で running build を外から識別可能にする
     this.app.get('/health', (_req: Request, res: Response) => {
       const editionConfig = activeEditionConfig;
+      const version = getVersionInfo();
       res.json({
         status: 'ok',
         service: 'agent-hub',
         edition: editionConfig?.edition ?? 'unknown',
         auth_mode: editionConfig?.authMode ?? 'unknown',
         sessions: sessions.size,
+        git_commit: version.git_commit,
+        git_commit_at: version.git_commit_at,
+        started_at: version.started_at,
       });
     });
 

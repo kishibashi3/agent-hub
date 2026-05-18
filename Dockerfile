@@ -23,9 +23,16 @@ COPY tsconfig.json ./
 # DB ファイル置き場（fly volume をここにマウントする想定）
 RUN mkdir -p /app/data
 
+# build 時に commit 情報を焼き込む (issue #47: /health version info)
+# fly.io deploy では `flyctl deploy --build-arg GIT_COMMIT=$(git rev-parse HEAD) --build-arg GIT_COMMIT_AT=$(git log -1 --format=%cI HEAD)` 想定
+ARG GIT_COMMIT=unknown
+ARG GIT_COMMIT_AT=
+
 ENV NODE_ENV=production \
     MCP_PORT=3000 \
-    DB_PATH=/app/data/app.db
+    DB_PATH=/app/data/app.db \
+    GIT_COMMIT=${GIT_COMMIT} \
+    GIT_COMMIT_AT=${GIT_COMMIT_AT}
 
 EXPOSE 3000
 
