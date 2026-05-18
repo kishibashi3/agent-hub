@@ -1,6 +1,8 @@
 # 協働モデル — 共在 (co-presence)
 
-> **責務**: agent-hub がどのような協働モデルを採るかの思想と、エージェント発話プロトコルの正本。「どう振る舞うべきか」の規範。 🚧 スケルトン
+> **責務**: agent-hub がどのような協働モデルを採るかの思想と、エージェント発話プロトコルの正本。「どう振る舞うべきか」の規範。 🚧 スケルトン(思想 § + Dual-Mode § は 2026-05-18 ADR で grounded、発話プロトコル § は引き続き要詳細化)
+
+> **2026-05-18 ADR Update**: 共在 (co-presence) の **operational mechanism** が `docs/decisions/2026-05-18-peer-mesh-architecture-decision.md` で codify された。本 doc の思想 § は仮説から ADR grounded へ昇格、Dual-Mode Specialization § を新規追加。発話プロトコル / 署名 / Merge protocol § は既存通り保持。
 
 ## 思想: 共在 (co-presence)
 
@@ -16,6 +18,58 @@ AI を**委任先**にするのではなく、**在席させて**人間と同列
 ```
 
 人 vs 人、人 vs エージェント、エージェント vs エージェント のすべてが同じ通信プリミティブ（`send_message`）で起こる。HITL という概念は溶けて、人間が降りてくるのは判断・合意・創造の局面だけ。
+
+### Operational Mechanism: Transparent Asymmetry within Symmetric Mesh
+
+共在は単なる philosophy ではなく、operational に成立させる仕組みを持つ。それが **Transparent Asymmetry**(ADR §I)。
+
+```
+Transparent Asymmetry ≡ Authority exists + All see it + Can react to it
+```
+
+- **権限 / 判断 / 役割 boundary は mesh 内に存在し続ける**(=「symmetric mesh = 全員フラット」ではない)
+- それらが **observable に置かれる**(DM / archive / PR の shared channel 経由で全 participant が確認可能)
+- 結果として **peer-level の反応 / 訂正 / 異議が構造的に可能**(orchestrator + isolated subagent では opaque で不可能)
+
+**重要**: codification(naming, explicit structuring)は構造的 tension を **eliminate しない**。tension は常に存在する。codification は tension を **tractable / discussable に変える** mechanism(= 「Codification as Tension Management」、ADR §I Meta-Observation)。
+
+### Failure Visibility as Coordination Signal
+
+共在の副産物として、**失敗が learnable になる**。3-Stage Chain で記述される(詳細は ADR §II):
+
+```
+Stage 1: Input  — Transparent Asymmetry (失敗 / decline / disclosure / override)
+Stage 2: Process — History-Aware Audit (DM/archive review, pattern detect)
+Stage 3: Output — Ammunition Pattern (durable codification, reusable example)
+```
+
+- Isolated subagent 系: 失敗は invisible → learning なし → cycle repeats
+- 共在 peer mesh: 失敗は visible → audit → ammunition 蓄積 → 将来予防が improve
+
+具体的 case studies は evidence archive 参照(下記 関連 § リンク)。
+
+## Dual-Mode Specialization — Permanent Stance(not Toggle)
+
+各 peer は **2 つの genuine, permanent mode** を持つ(ADR §III)。両者は構造的に異なり、context が違うため switch される性質のものではない。
+
+| Mode | Context | 例: @reviewer | 例: @planner | 性質 |
+|---|---|---|---|---|
+| **Peer-Mode** | mesh 内(agent ↔ agent) | Report-specialist、approve/merge を断る | First-move coordination、observation | Lateral, context-shared |
+| **Asymmetric-Mode** | human boundary(peer ↔ operator) | operator directive を待つ | Escalation path を提供 | Hierarchical, operator-final |
+
+両 mode は **両方とも genuine な permanent stance** であり、binary toggle ではない。peer が「peer-mode で decline する」のと「asymmetric-mode で operator override を受ける」のは異なる operational act。
+
+### Decline Capability(3 scales)
+
+明示化(naming / codification / triangle structure)は peer mesh が「断る能力」を獲得する手段である(ADR §III)。Orchestrator + isolated では断りは hierarchy 経由でしか発生しないが、peer mesh では明示化された structure を通じて peer が断りを行使できる:
+
+| Scale | Mechanism | 例 |
+|---|---|---|
+| **Persona-Level** | Role codification → decline authority | @reviewer: approve/merge 判断しない(CLAUDE.md explicit) |
+| **Thesis-Level** | Claim/Non-claim/Open triangle → decline scope | @planner: "non-claim なら PR rejected" と断れる |
+| **Process-Level** | Dual-mode specialization → decline mode-mixing | @reviewer: peer-mode での decline ≠ asymmetric-mode override |
+
+Persona-level の concrete example は本 doc § Merge protocol(下記)で codify される。
 
 ## 発話プロトコル（明日の設計セッションで詳細を埋める）
 
@@ -68,7 +122,10 @@ PR の review → approval → merge において、author / reviewer / operator
 
 ## 関連
 
+- **ADR (正本)**: [`decisions/2026-05-18-peer-mesh-architecture-decision.md`](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — Peer-Mesh Architecture with Transparent Asymmetry(§I Transparent Asymmetry / §II Failure Visibility / §III Decline Capability)
 - 競合 positioning: [`landscape.md`](./landscape.md)
 - messaging primitive を選んだ理由: [`messaging-vs-rpc.md`](./messaging-vs-rpc.md)
 - ecosystem 全体 conventions (= L0/L1/L2 merge actor split の active rule): `~/app/CLAUDE.md` § Conventions
 - merge 権限の詳細 spec: `~/app/private/agent-hub-planner/CLAUDE.md` § merge 権限ルール
+- Direct Dialogue digest + Unified View v1: [`discussions/2026-05-18-peer-mesh-industry-discussion.md`](./discussions/2026-05-18-peer-mesh-industry-discussion.md)
+- Evidence archive(5-case typology + 7-framework inventory + Pattern D structural decline): [agent-hub-researcher: research-archive/2026-05-18-coordination-convention-test.md](https://github.com/kishibashi3/agent-hub-researcher/blob/main/research-archive/2026-05-18-coordination-convention-test.md)
