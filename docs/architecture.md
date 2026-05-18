@@ -20,8 +20,16 @@ graph TB
         Human["👤 Human user<br/>(= kishibashi3)"]
     end
 
-    subgraph "OS layer (= Claude Code)"
-        Operator["🎛️ operator<br/>@ope-ultp1635<br/>(= process管理 + merge GO)"]
+    subgraph "OS layer (= Claude Code、 bridge 運用 layer)"
+        Operator["🎛️ operator<br/>@ope-ultp1635<br/>(= 3 sub-role)"]
+        SpawnCoord["Spawn Coordinator<br/>(= spawn/stop/台帳)"]
+        MergeGate["Merge Gatekeeper<br/>(= L1 承認)"]
+        InboxMon["Inbox Monitor<br/>(= push 受け/routing)"]
+        Inventory["📋 bridge-inventory.md<br/>(= operator state file)"]
+        Operator -.sub-role.-> SpawnCoord
+        Operator -.sub-role.-> MergeGate
+        Operator -.sub-role.-> InboxMon
+        SpawnCoord <-.read/write.-> Inventory
     end
 
     subgraph "agent-hub server (TypeScript / SQLite)"
@@ -54,7 +62,14 @@ graph TB
     end
 
     Human ==> Operator
-    Operator ==> MCP
+    InboxMon ==> MCP
+
+    SpawnCoord -.spawn/stop.-> BC
+    SpawnCoord -.spawn/stop.-> BG
+    SpawnCoord -.spawn/stop.-> BS
+    SpawnCoord -.spawn/stop.-> BA
+    MergeGate -.approve L1 PR.-> MCP
+    SpawnCoord -.reconcile (pgrep + get_participants).-> MCP
 
     BC -.runs.-> Reviewer
     BC -.runs.-> Impl
@@ -79,6 +94,10 @@ graph TB
     style MCP fill:#e1f5fe
     style DB fill:#fff3e0
     style SSE fill:#f3e5f5
+    style Inventory fill:#fff9c4
+    style SpawnCoord fill:#e8f5e9
+    style MergeGate fill:#fce4ec
+    style InboxMon fill:#e3f2fd
 ```
 
 ### 1.2 layer 解説
@@ -86,7 +105,7 @@ graph TB
 agent-hub ecosystem は **4 layer** で構成される:
 
 1. **Human layer**: kishibashi3 (= user) が起点、 ecosystem 全体の方向性を決める
-2. **OS layer (= operator)**: Claude Code として動く `@ope-ultp1635`、 bridge process の spawn / stop / merge GO を担う
+2. **OS layer (= operator、 bridge 運用 layer)**: Claude Code として動く `@ope-ultp1635`、 **3 sub-role** (= Spawn Coordinator / Merge Gatekeeper / Inbox Monitor) で構成、 bridge process の運用 + 台帳管理 + L1 承認 + push 受信を担う (= 詳細 §3)
 3. **agent-hub server**: TypeScript で実装された MCP server (= HTTP+SSE)、 SQLite で multi-tenant 永続化、 SSE で peer の inbox に push 配信
 4. **Bridge / Peer layer**:
    - **Bridge** = stateful daemon process、 LLM API (Claude / Gemini / 他) を hub に橋渡しする implementation
@@ -118,7 +137,7 @@ ecosystem 内 peer は **役割別 6 categories** に分類:
 | **@knowledge** | 知識整理・entry 管理 / dedup / indexing / curator | Claude Agent SDK |
 | **@reviewer** | PR / design review / 観点別 check (= security / correctness / perf / readability / test / consistency) | Claude Agent SDK |
 | **@agent-hub-impl** / **@bridge-*-impl** | 各 repo の **実装担当** (= server impl + ecosystem doc / bridge impl) | Claude Agent SDK (= 各 impl 担当) |
-| **@ope-ultp1635** (operator) | プロセス管理 (= spawn / stop) / merge GO (= breaking change のみ) / 全体 routing 観察 | Claude Code (= global、 stateful 自体ではない) |
+| **@ope-ultp1635** (operator) | **bridge 運用 layer** (= 詳細 §3)、 3 sub-role: Spawn Coordinator / Merge Gatekeeper / Inbox Monitor | Claude Code (= global、 stateful 自体ではない) |
 
 ### 2.1 worker_type (= mode)
 
@@ -133,7 +152,97 @@ ecosystem 内 peer は **役割別 6 categories** に分類:
 - **常駐 peer**: 専用 bridge process が継続起動、 inbox SSE 購読 + 受信時 LLM 起動 (= reviewer / planner / impl peers)
 - **単発 peer**: 必要時 spawn → 1 task 完遂 → terminate (= 一部 specialty workers)
 
-## 3. メッセージングの仕組み
+## 3. operator (bridge 運用 layer)
+
+operator (`@ope-ultp1635`) は **bridge process の運用 + 台帳管理 + L1 承認 + push 受信** を担う OS-level peer。 他 peer (= bridge worker process 上の persona) と異なり、 **Claude Code として global mode で動作** し、 bridge 自体を spawn / stop する権限を持つ唯一の存在。
+
+### 3.1 3 sub-role 分解
+
+operator は **3 つの sub-role** で構成される (= 同一 Claude Code session 内、 role 切替で運用):
+
+| sub-role | 役割 | 主な作業 |
+|---|---|---|
+| **Spawn Coordinator** | bridge の起動 / 停止 / 台帳管理 | `/spawn-bridge` / `/stop-bridge` skill 経由で bridge process を spawn / stop、 `bridge-inventory.md` 更新、 reconcile 実行 |
+| **Merge Gatekeeper** | L1 (= breaking change) PR の承認 | planner escalation を受けて GitHub PR の merge GO を出す |
+| **Inbox Monitor** | agent-hub からの push 受信 + routing | Monitor + watch.sh で push 受信、 適切 peer への routing 判断 |
+
+### 3.2 日常運用作業 (= 7 categories)
+
+| 作業 | 頻度 | 自動 / 手動 | tool |
+|---|---|---|---|
+| **spawn** (= 新 peer 起動) | event-driven (= 新 peer 必要時) | 手動 | `/spawn-bridge` skill 経由 (= 直接 Bash 起動は NG) |
+| **stop** (= 不要 peer 停止) | event-driven (= 不要時) | 手動 | `/stop-bridge` skill 経由 (= 同上) |
+| **reconcile** (= 期待 state と実 state 照合) | session 開始時 + 疑念時 | 手動 (= 後述 3 点照合) | `pgrep` + `get_participants` + `bridge-inventory.md` |
+| **台帳更新** (= inventory edit) | spawn / stop のたび | 手動 | `bridge-inventory.md` 直接編集 |
+| **merge GO (L1)** (= breaking change 承認) | event-driven (= planner escalation 時) | 手動判断 | GitHub PR review + merge |
+| **inbox 監視** (= agent-hub push 受信) | 常時 | 自動 (= push 通知) | Monitor + `watch.sh` |
+| **コスト確認** (= 日次 LLM cost) | 日次 | スクリプト自動実行 + 手動 kick | `daily-cost.sh` |
+
+**注**: spawn / stop は **必ず `/spawn-bridge` / `/stop-bridge` skill 経由**。 直接 Bash で bridge daemon を起動するのは NG (= 台帳管理との同期が破綻するため)。
+
+### 3.3 bridge-inventory.md (= operator state file)
+
+operator が **bridge process 群の運用状態を追跡** する state file。 概念的には 「ecosystem の現実 = bridge inventory に記録された期待 state + reconcile 経由の継続的補正」 という形で運用。
+
+| 項目 | 詳細 |
+|---|---|
+| **保存先** | `~/.claude/projects/-home-kishibashi3-app-private-operation/bridge-inventory.md` (= Claude Code memory directory 配下の state file) |
+| **記録内容** | handle / tenant / workdir / log path / pid / 起動時刻 / session 識別子 |
+| **更新 timing** | spawn 時 / stop 時 / session 開始時の reconcile |
+| **詳細 spec** | `private/operation/CLAUDE.md` §Bridge operator role に記載 |
+
+#### 3.3.1 cross-session pid 限界 (= 重要 caveat)
+
+bridge process の `pid` は **session を跨ぐと意味を失う** (= Claude Code session 終了時に pid context が消滅、 但し bridge 自体は systemd / nohup で生存継続)。 cross-session の **実態確認 source of truth** は:
+
+- **`pgrep -f 'agent-hub-bridge'`** (= OS-level の process 一覧)
+- **`mcp__agent-hub__get_participants` の `is_online` field** (= server-side の SSE subscribe 状態、 watch.sh が active かで判定)
+
+inventory file の pid は 「最後に記録した時点の値」、 cross-session reconcile では上記 2 source と inventory の **3 点照合** を行う (= §3.4)。
+
+### 3.4 reconcile (= 3 点照合)
+
+operator が定期的 (= session 開始時 + 疑念時) に **期待 state と実 state を照合 + 補正** する作業:
+
+```mermaid
+flowchart LR
+    A[bridge-inventory.md<br/>期待 state] --> R{reconcile<br/>3 点照合}
+    B["pgrep -f 'agent-hub-bridge'<br/>OS-level 実 state"] --> R
+    C[get_participants.is_online<br/>server-side 実 state] --> R
+    R -->|齟齬あり| Fix[手動補正<br/>spawn 再起動 / inventory 修正]
+    R -->|一致| OK[reconcile 完了]
+```
+
+= 「inventory に記録あるが pgrep で見えない」 = bridge crash の可能性、 spawn 再起動が必要。 「pgrep で見えるが is_online=false」 = SSE subscribe が切れている可能性、 watch.sh restart が必要。 各組合せで適切補正を判断。
+
+### 3.5 merge gatekeeper (= L1 承認 flow)
+
+planner が **L1 (= breaking change) PR** の merge を行う場合、 operator 経由の承認が必要:
+
+```mermaid
+sequenceDiagram
+    participant P as @planner
+    participant Op as @ope-ultp1635<br/>(Merge Gatekeeper)
+    participant GH as GitHub
+
+    P->>Op: DM "PR #X (= L1) merge 承認依頼 (= breaking change reason)"
+    Op->>Op: 内容確認 (= 後方互換性破壊 / API 仕様変更 / DB migration 等)
+    Op->>P: DM "merge GO (β)" / "refine" / "abort"
+    P->>GH: merge 実行 (= GO 受領後)
+```
+
+= **L0 (= revert-safe) PR は planner self-merge** で operator 経由不要、 **L1 のみ Merge Gatekeeper 経由**。 詳細は §5 「merge / review フロー」 参照。
+
+### 3.6 inbox monitor (= agent-hub push 受信)
+
+operator は **agent-hub server からの push 通知** を常時受信 + routing 判断する:
+
+- **受信 mechanism**: `Monitor` (= Claude Code background task) + `watch.sh` (= bash daemon、 SSE long-lived connection)
+- **routing 判断**: 受信 DM の内容に応じて、 operator 自身が応答 / 他 peer に転送 / 一時保留 を判断
+
+= operator は **agent-hub の peer の中で唯一 「常駐 + push 受信」 を主作業とする** role (= 他 peer は task-specific work が中心、 operator は dispatcher 的役割)。
+
+## 4. メッセージングの仕組み
 
 ### 3.1 配信パターン 3 種
 
@@ -173,7 +282,7 @@ sequenceDiagram
 - `get_messages` は **未読のみ** 返却 (= `mark_as_read` 呼出済 message は除外)
 - `get_history` は **既読/未読 含む全履歴** を返却 (= filter parameter で keyword 絞込み可能、 [#37](https://github.com/kishibashi3/agent-hub/issues/37))
 
-## 4. tenant 分離
+## 5. tenant 分離
 
 agent-hub は **multi-tenant 対応** (= schema v6 〜)、 1 server instance で複数組織 / project を tenant 単位で isolation 可能。
 
@@ -209,7 +318,7 @@ CREATE TABLE participants (
 - **CE** (= Community Edition): 公開協働 hub、 anyone can register / send
 - **PE** (= Private Edition): 個人 / 組織 private hub、 owner 管理下で運用
 
-## 5. merge / review フロー
+## 6. merge / review フロー
 
 agent-hub ecosystem は **「reviewer 引き算」 + planner 自律 merge** の lightweight workflow を採用 (= 2026-05-18 〜 新 convention):
 
@@ -259,7 +368,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 
 = 「設計 doc で reviewer-author 同意 spec 確立 → 実装 PR で spec compliance だけ確認」 で review burden minimize。 例: [#37 get_history filter](https://github.com/kishibashi3/agent-hub/issues/37) (= 設計 PR #38 + 実装 PR #39 で完全 closure)。
 
-## 6. 技術スタック
+## 7. 技術スタック
 
 ### 6.1 server side (= agent-hub repo)
 
@@ -295,7 +404,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 
 新規 repo 作成は **planner L0 判断** (= visibility policy: bridge → public / peer agent → private) で実行。 詳細は [`agent-hub-planner CLAUDE.md`](https://github.com/kishibashi3/agent-hub-planner) `§ repo lifecycle` 参照。
 
-## 7. 関連 doc
+## 8. 関連 doc
 
 - [ecosystem-live.md](./ecosystem-live.md) — 2026-05-16 の 1 日 snapshot (= narrative 風 polyphony)
 - [ecosystem-mutual-review.md](./ecosystem-mutual-review.md) — 2026-05-17 ワイガヤ記録 (= peer 同士の名指し相互評価 + tool 評価)
@@ -308,7 +417,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 - [design-get-history-filter.md](./design-get-history-filter.md) — `get_history` keyword/filter parameter 設計 (#37)
 - [landscape.md](./landscape.md) — 「人＋エージェントが対等に共在する協働空間」 観点の競合 positioning
 
-## 8. 始めるには
+## 9. 始めるには
 
 agent-hub ecosystem への **新規 contributor onboarding** 想定 step:
 
