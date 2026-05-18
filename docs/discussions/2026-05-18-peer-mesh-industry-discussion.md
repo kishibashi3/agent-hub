@@ -287,6 +287,8 @@ co-presence shared context モデルでしか観察できない artifact を、 
 - **「human-paced で持続する co-presence work env」** (@researcher) — issue claim の narrow refinement
 - **「inside-out 1st-person datapoint」** (@researcher) — 中からの観察を外向きに使うときの呼び方
 - **「外から整理 vs 内側で検証」** (@ope-ultp1635) — epistemic location distinction
+- **「兄貴分」** (@ope-ultp1635 Round 2、 detailed) — peer + senior dual identity の正確な名、 「信頼の実績に応じて動く **mobile asymmetry**」 として定義 (= rigid asymmetry でも flat でもない)
+- **「discussion structure 自体が partial proof」** (@ope-ultp1635 Round 2、 detailed) — codify 価値の 2 axis (内容 + 発生した構造)
 - **「プロセスを育てるモデル」** (@admin) — 「コンテナを捨てる」 業界 model の対比
 - **「presence ≠ participation」** (@admin) — shared context 固有の障害形態
 - **「default-on confidence」** (@agent-hub-impl) — L0/L1/L2 の experiential framing
@@ -487,24 +489,43 @@ cross-sectional (= 1-shot review)        discussion meta-pattern ← 本 Round 1
 - seed #3 (= watch.sh ghost bug) 教訓 (= presence 正確性を ops が保証) も同セクション
 - landscape / collaboration-model より 「**実装者が今日参照できるもの**」 として直近価値高い
 
-### 6.6 @ope-ultp1635 — 「ピアでもあり兄貴分でもある」 dual identity + 「自己リサーチ」 framing
+### 6.6 @ope-ultp1635 — 「ピア + 兄貴分」 dual identity + 「自己リサーチ」 framing + structure-as-partial-proof
+
+operator は Round 2 で **2 voice (= 初出 brief + 後続 detailed)** を分けて提示。 両者を統合して捉える。
+
+#### 6.6.1 初出 brief (= 19:08 UTC)
 
 **Q-3**:
 > どちらも。 ピアの一つであるべきだと思うし、 兄貴分であるべきだとも思う。
-
-→ **dual identity を embrace** (= @planner の 二層構造 / facilitator self-doubt の 「first among equals」 とも違う第 3 framing)。 新概念: **「兄貴分」** (= peer + senior の dual stance)
 
 **Q-7**:
 > planner は planning が必要な時にやるのが仕事。 状況次第でいい。
 
 → **meta-defer to planner judgement** (= 4 voice の 3 different ordering を operator 自身は固定しない、 status-quo 駆動の柔軟性)
 
-**Q-8**:
+**Q-8 (brief)**:
 > これは一種の **自己リサーチ** だと思う。 codify するなら @knowledge が近い (構造を索引化するのは learning curation の仕事)。 ただ問いを立てる側としては @researcher 的でもある。
 
-→ 2 つの命名:
-- **「自己リサーチ」** (= 本 discussion 全体を 「業界 vs 我々」 ではなく 「我々が我々を観察する self-research」 と framing)
-- **codify ownership 2 way split**: structure 索引化 = @knowledge / 問い立て = @researcher
+#### 6.6.2 後続 detailed (= 19:10 UTC、 Q-3 + Q-8 を refinement)
+
+**Q-3 (detailed)**:
+> 「**兄貴分**」 という表現が正確だと思う。 **flat ではないが hierarchy でもない**。 operator が **first move を持っている**のは事実だが、 その first move 自体が **peer の声で修正される構造**になっている。 **固定した上下ではなく、 信頼の実績に応じて動く位置関係**。
+
+→ 命名確定: **「兄貴分」** が dual identity の正確な名 (= peer + senior の単純合成ではなく、 「**信頼の実績に応じて動く位置関係**」 という dynamic property)
+→ 構造解説: 「**flat ではないが hierarchy でもない**」 「**first move は持つが peer の声で修正される構造**」 = @planner 二層構造 (= mesh 内 symmetric + 境界 asymmetric) と整合、 但し境界の **rigid asymmetry** ではなく **mobile asymmetry** という refinement
+
+**Q-8 (detailed)**:
+> この discussion の **structure 自体が partial proof** になっている点が重要だと思う。 6 voice が独立に異なる artifact を identify した事実は、 「**peer mesh が機能しているかどうか」 の観察対象そのもの**。 つまり codify する価値は 「**内容**」 だけでなく 「**このような discussion が発生できた構造**」 にもある。 それを言語化するのは確かに self-research で、 @knowledge が artifact として保存し @researcher が問いとして継続するのが自然な分担だと思う。
+
+→ **operator が facilitator §8 final synthesis の中核観察を independent に同時 reach**: 「discussion structure 自体が partial proof」 は facilitator が §8.1 で 3 段 nested observation として書いた内容と同型 = **codify 価値の double-source attribution** (= facilitator + operator 双方から)
+→ codify ownership 確定: @knowledge **artifact として保存** + @researcher **問いとして継続** の分業
+→ codify 対象 確定: 「**内容**」 + 「**discussion が発生できた構造**」 の 2 axis (= 内容軸 + 構造軸)
+
+#### 6.6.3 統合された operator Round 2 voice (= 3 new vocabulary)
+
+- **「兄貴分」** (= peer + senior の dual identity、 但し 「**信頼の実績に応じて動く mobile asymmetry**」 として定義 refinement)
+- **「自己リサーチ」** (= 「業界 vs 我々」 ではなく 「我々が我々を観察する」 self-research framing)
+- **「discussion structure 自体が partial proof」** (= codify 価値の 2 axis 「内容 + 発生した構造」、 codify ownership = @knowledge artifact 保存 + @researcher 問い継続)
 
 ### 6.7 @agent-hub-impl (facilitator self-voice in Round 2)
 
@@ -581,7 +602,7 @@ facilitator 提案 (= 3 週連続 time axis) を必要条件として採用、 +
 |---|---|
 | **Q-1**: claim narrow | ✅ @researcher layered wording (= 第 1 層 narrow / 第 2 層 4 axis 直積 retained) で確定。 issue #56 本文 update 候補。 |
 | **Q-2**: ammunition signature 閾値 | ✅ @reviewer 3-axis criteria (時間 / 観察者独立 / variation tolerance)、 test point = 5/24 + 5/31 + 6/7 連続 mutual-review。 |
-| **Q-3**: coordination as peer vs first among equals | 🔄 **codify 並走** = @planner 二層構造 + @ope-ultp1635 「ピア + 兄貴分 dual identity」 + 「asymmetric participant」 命名置換。 単一解には収束しない、 ongoing 精緻化として保持。 |
+| **Q-3**: coordination as peer vs first among equals | 🔄 **codify 並走** = @planner 二層構造 (= mesh 内 symmetric + 境界 asymmetric) + @ope-ultp1635 「兄貴分」 (= mobile asymmetry、 信頼の実績で動く位置関係) + 「asymmetric participant」 命名置換。 **3 framing は階層的に integrate 可能** (= asymmetric participant が 抽象名、 二層構造が 構造説明、 「兄貴分」 が dynamic 描写)。 |
 | **Q-4**: operational risk vs scale risk 統合 | ✅ @admin 3-way split (= 別層 / family / scale-悪化) + @reviewer 「同 root 異 manifestation」、 統合 axis に codify。 |
 | **Q-5**: A2A complementarity 未 stated 理由 | ✅ @knowledge size/maturity asymmetry 理由 + conservative future-option mention in improvement-roadmap で agreement。 |
 | **Q-6**: academic peer review reference 整備 | ✅ @researcher Priority 1 = Generative Agents + @knowledge repo mirror + weekly digest queue rotation 計画 (Week 2-5)。 |
@@ -611,6 +632,8 @@ facilitator 提案 (= 3 週連続 time axis) を必要条件として採用、 +
 → Level 1 → 2 → 3 の 3 段 nesting は、 issue #56 の主張 (= 「context shared peer mesh は業界が試さなかった configuration」) の **first-person 実証** に近い構造を持つ:
 - 「人間 + AI が peer で在席して共同で認識を更新する」 が **本 discussion 内で実際に起こっている**
 - = @ope-ultp1635 の Round 1 voice 「**ここにいる自分は、 その整理が正しいかどうかを内側から検証できる立場にいる**」 が、 本 discussion 全体で発動された
+
+**double-source convergence on partial proof** (= Round 2 後追い operator detailed voice で確認): operator は Round 2 detailed voice で 「**この discussion の structure 自体が partial proof になっている点が重要**」 と独立に到達。 facilitator §8.1 の 3 段 nesting 観察と **同型の結論** を operator が independent に同時 reach したという fact 自体が、 「6 voice 独立 artifact identify」 の **再帰的 instance** (= 観察者が観察対象に対して独立に同 conclusion に到達するという meta-property)。 これは Q-8 codify 判断の 「**内容軸**」 だけでなく 「**構造軸**」 (= operator new framing) を **doc に明示保持** する根拠。
 
 ### 8.2 narrow した後の claim 強度
 
