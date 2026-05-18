@@ -1,8 +1,13 @@
 # agent-hub scheduler
 
-cron-based DM scheduler as agent-hub package (= [issue #40](https://github.com/kishibashi3/agent-hub/issues/40))。 軽量 Python daemon、 `schedules.json` の cron 設定に従って agent-hub 参加者に DM を送る。
+cron-based DM scheduler as agent-hub package (= [issue #40](https://github.com/kishibashi3/agent-hub/issues/40))。 軽量 Python daemon、 `schedules.json` の cron 設定や ISO 8601 datetime に従って agent-hub 参加者に DM を送る。
 
-**Bidirectional 化** (= [issue #65](https://github.com/kishibashi3/agent-hub/issues/65)): scheduler 自身が agent-hub に participant として register + 自分の inbox を SSE subscribe、 受信 DM に command として反応 (= `ping` / `schedules` / `run now <idx>`)。 単方向 cron daemon ではなく **対話可能な peer** として動作。
+**Bidirectional + sender-based + one-shot timer** (= [issue #65](https://github.com/kishibashi3/agent-hub/issues/65) v4 redesign):
+- scheduler 自身が agent-hub に participant として register + 自分の inbox を SSE subscribe
+- 受信 DM に **7 commands** で反応: `ping` / `list` / `add` / `run_at` / `run_in` / `delete` / `run now`
+- schedules は **sender 単位で管理** (= `owner` field、 自身の entry のみ操作可)
+- **one-shot timer** support (= `run_at` ISO 8601 datetime / `run_in` duration、 fire 後自動削除)
+- cron daemon **再起動なしで dynamic schedule 管理** 可能
 
 LLM 不要、 Pi5 で agent-hub server と並走想定。
 
@@ -21,26 +26,37 @@ pip install -r requirements.txt
 
 ### 2. 設定
 
-`schedules.json` を編集:
+`schedules.json` を編集 (= v4 schema):
 
 ```json
 [
   {
+    "name": "daily-report",
     "cron": "0 13 * * *",
     "to": "@planner",
-    "message": "daily report を書いてください"
+    "message": "daily report を書いてください",
+    "owner": "@ope-ultp1635"
   },
   {
-    "cron": "*/30 * * * *",
-    "to": "@reviewer",
-    "message": "新規 PR の queue を確認"
+    "name": "oneshot-progress",
+    "run_at": "2026-05-19T12:00:00+09:00",
+    "to": "@planner",
+    "message": "進捗確認",
+    "owner": "@ope-ultp1635",
+    "one_shot": true
   }
 ]
 ```
 
-- `cron`: 標準 cron 式 (= `分 時 日 月 曜日`)
+各 entry の field:
+- `name` (str, unique 必須): add/delete/run-now の identifier
+- `cron` (str, optional): 標準 cron 式 (= `分 時 日 月 曜日`)、 cyclic schedule
+- `run_at` (str, optional): ISO 8601 datetime (= `2026-05-19T12:00:00+09:00` 等)、 one-shot schedule
+  - **`cron` と `run_at` は mutually exclusive** (= 同 entry で両方は invalid)
 - `to`: agent-hub 参加者 (`@handle`) or team (`@team-name`)
 - `message`: DM 本文
+- `owner` (str, 必須): `@<sender-handle>` format、 add/delete/run-now で attribution + restriction
+- `one_shot` (bool, optional, default false): true なら fire 後 auto-delete
 
 `cron` 式は [croniter](https://github.com/kiorky/croniter) の syntax (= standard 5-field) を使用。
 
@@ -85,38 +101,83 @@ python scheduler.py
 
 main thread (cron) と SSE thread (inbox) は独立 session で動作、 互いに非干渉。
 
-## Inbox command (= bidirectional、 issue #65)
+## Inbox command (= bidirectional、 issue #65 v4)
 
-scheduler 自身に DM を送ると以下 command として反応:
+scheduler 自身に DM を送ると以下 **7 commands** として反応 (= sender-based ownership + one-shot timer 統合):
 
-| command | 動作 | reply |
-|---|---|---|
-| `ping` | scheduler の生存確認 | `pong (scheduler alive, N schedules loaded)` |
-| `schedules` | 現在の schedules.json 内容を listing | `schedules (N loaded):\n[0] cron='...' to=... message='...'`<br>`[1] ...` |
-| `run now <idx>` | 指定 idx の schedule を即時 fire (= cron 無視) | `[OK] fired schedule[<idx>] → <to>` または error message |
-| その他 | unknown command | usage hint |
+| command | 動作 | scope | 永続化 |
+|---|---|---|---|
+| `ping` | scheduler 生存確認 | public | × |
+| `list` | sender's entries 一覧 (= one-shot は残り時間付き) | sender-restricted | × |
+| `add <name> <cron-5> <to> <message>` | cyclic entry 追加、 owner=sender | sender's own | ✅ atomic write |
+| `run_at <ISO8601> <to> <message>` | one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete | sender's own | ✅ atomic write |
+| `run_in <duration> <to> <message>` | one-shot entry 追加 (= N時間/N分後)、 fire 後 auto-delete | sender's own | ✅ atomic write |
+| `delete <name>` | entry 削除 (= owner check、 自身のみ) | sender's own | ✅ atomic write |
+| `run now <name>` | one-shot 即時 fire (= entry は変更なし、 owner check) | sender's own | × |
+| その他 | unknown command | — | — |
 
-### 使用例
+### `add` 引数 parse 仕様
+
+`add <name> <cron-5-fields> <to> <message>` で **positional parse**:
+- 1 word = name (e.g. `daily-report`)
+- 5 words = cron expression (= 標準 5 fields `分 時 日 月 曜日`)
+- 1 word = to (= `@handle` format)
+- 残り = message (= 空白含み OK、 全て join)
+
+例: `add daily-report 0 13 * * * @planner daily report を書いてください`
+
+### `run_at` / `run_in` 引数 parse 仕様
+
+- `run_at <ISO8601-datetime> <to> <message>` — datetime は **1 word**、 例 `2026-05-19T12:00:00+09:00`
+- `run_in <duration> <to> <message>` — duration は **1 word**、 例 `2h` / `30m` / `1d` / `2h30m` (= compound 可)
+
+name は **auto-generate** (= `oneshot-YYYYMMDDTHHMMSS` 形式)、 重複時は suffix `-1` / `-2` 自動付与。
+
+### 使用例 (= operator から @scheduler への DM)
 
 ```
 operator → @scheduler: ping
-@scheduler → operator: pong (scheduler alive, 2 schedules loaded)
+@scheduler → operator: pong (scheduler alive, 2 schedules total)
 
-operator → @scheduler: schedules
-@scheduler → operator: schedules (2 loaded):
-[0] cron='0 13 * * *' to=@planner message='daily report を書いてください'
-[1] cron='*/30 * * * *' to=@reviewer message='新規 PR の queue を確認'
+operator → @scheduler: list
+@scheduler → operator: list (owner=@ope-ultp1635, 2 entries):
+  daily-report                   cron='0 13 * * *' to=@planner msg='daily report を書いてください...'
+  weekly-research                cron='0 9 * * 1' to=@researcher msg='週次調査タスク...'
 
-operator → @scheduler: run now 0
-@scheduler → @planner: daily report を書いてください
-@scheduler → operator: [OK] fired schedule[0] → @planner
+# cyclic schedule 追加
+operator → @scheduler: add ad-hoc-ping 0 9 * * * @planner morning ping check
+@scheduler → operator: [OK] added 'ad-hoc-ping' (cyclic, next fire=2026-05-19T09:00:00+09:00, owner=@ope-ultp1635, persisted)
+
+# one-shot at specific datetime
+operator → @scheduler: run_at 2026-05-19T15:00:00+09:00 @planner 3時のmtg準備
+@scheduler → operator: [OK] added 'oneshot-20260519T150000' (one-shot, next fire=2026-05-19T15:00:00+09:00, owner=@ope-ultp1635, persisted)
+
+# one-shot after duration
+operator → @scheduler: run_in 2h @planner 進捗確認
+@scheduler → operator: [OK] added 'oneshot-20260519T140000' (one-shot, next fire=2026-05-19T14:00:00+09:00, owner=@ope-ultp1635, persisted)
+
+# (= 2 時間後に @planner に「進捗確認」が届く、 fire 後 schedules.json から自動削除)
+
+# 削除 (= sender's own のみ可)
+operator → @scheduler: delete ad-hoc-ping
+@scheduler → operator: [OK] deleted 'ad-hoc-ping' (removed from schedules.json)
+
+# 他 sender の entry を削除しようとすると reject
+researcher → @scheduler: delete daily-report
+@scheduler → researcher: [ERR] 'daily-report' is owned by @ope-ultp1635, you (@researcher) cannot delete it. ownership is enforced.
 ```
 
-### 設計判断 (= 安全性)
+### 設計判断 (= 安全性 + concurrency)
 
-- **`run now` の idx 必須**: 単独 `run now` を全 schedule 発射 として実装すると mistype で全 peer に DM 連投する事故が起き得るため、 idx を必須化 (= explicit confirmation)
-- **schedules.json の編集 command なし**: 設定変更は git + service restart の path に限定 (= 一時的な状態変更 commands は提供しない、 config drift 防止)
-- **mark_as_read で再 dispatch 回避**: handled message は即時既読化、 SSE reconnect 時の重複処理を防ぐ
+- **owner-based ownership**: add/run_at/run_in で entry 追加時に sender を owner に記録、 delete/run-now で **自身の entry のみ操作可** (= mistype で他 sender の entry を消す事故防止)
+- **list は sender-restricted**: 他 sender の entry は見えない (= プライバシー / ノイズ削減)
+- **`run now` は schedule 変更なし**: cron / run_at は touch しない、 単発 fire のみ
+- **one-shot auto-delete**: fire 後に schedules.json から自動 remove + persist (= 永続化された state record)
+- **schedules.json の git workflow**: daemon が add/delete で diff を作る → operator が次の deploy 時に commit (= **operational state の git 経由 audit trail**)
+- **concurrency**: `_schedules_lock` で main thread (= cron read + fire) と SSE thread (= add/delete/run_at/run_in write) の race condition 防止、 schedules / iters / next_times の 3 parallel list を atomic 更新
+- **rollback on persist failure**: disk write 失敗時は memory state も rollback (= atomic semantics 保持)
+- **mark_as_read で再 dispatch 回避**: handled message は即時既読化
+- **schedule の在/不在は name 一意性で識別**: schedules.json で name duplicate → daemon startup で exit、 add 時の duplicate は **suffix 自動付与** (= one-shot で同 timestamp の場合 graceful)
 
 ## エラーハンドリング
 
