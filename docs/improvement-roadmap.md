@@ -168,7 +168,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 | **2. Observer-Independent** | Measurement independent of any single observer / perspective | Archive reconstruction (DM replay → agent recon), empirical audit trail, binary checks |
 | **3. Variation Tolerance** | Acceptable variance / degradation bounds | Quantified thresholds (latency, pattern divergence, explanation success rate) |
 
-### 7.1 Doubt × Axis Matrix (18 Cells)
+### 7.1 Doubt × Axis Matrix (21 Cells)
 
 #### Doubt 1a: Information Sync Breakdown (Scale Ceiling: DM Queue Latency)
 
@@ -201,6 +201,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 **Measurement Owner**: @researcher (archive completeness + pattern identification); @reviewer (structural integrity audit)
 
 #### Doubt 3: Context Fidelity — Semantic Loss in Archive Reconstruction
+(= PR #58 Doubt 3「2D framework 右上」の testing context 向け operationalization)
 
 | Axis | Measurement | Go/No-Go Criteria (2026-06-07) |
 |---|---|---|
@@ -211,6 +212,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 **Measurement Owner**: @researcher (archive reconstruction + fidelity audit)
 
 #### Doubt 4: Operator Co-Presence Model — Policy Conflicts at Human-Mesh Boundary
+(= PR #58 Doubt 4「Labs collapse 理由 verify 不能」の testing context 向け operationalization)
 
 | Axis | Measurement | Go/No-Go Criteria (2026-06-07) |
 |---|---|---|
@@ -221,6 +223,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 **Measurement Owner**: @planner (escalation frequency + pattern tracking); @ope-ultp1635 (human context + policy judgment)
 
 #### Doubt 5: Symmetric / Asymmetric Mode Toggle Sustainability
+(= PR #58 Doubt 5「A2A actual interop 未試験」の testing context 向け operationalization)
 
 | Axis | Measurement | Go/No-Go Criteria (2026-06-07) |
 |---|---|---|
