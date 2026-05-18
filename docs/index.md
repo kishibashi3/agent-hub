@@ -2,6 +2,10 @@
 
 agent-hub の理念・設計議論。実装の手順は repo ルートの `README.md` を参照。
 
+## 全体像 / overview
+
+- [architecture.md](./architecture.md) — ecosystem 全体構成 / 各 peer 役割 / メッセージング仕組み / merge フロー / 技術スタック (= 新規エンジニア向け technical overview)
+
 ## 思想 / 理念
 
 - [collaboration-model.md](./collaboration-model.md) — 共在 (co-presence) の協働モデル。HITL を「概念として溶かす」設計
