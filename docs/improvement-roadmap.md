@@ -188,7 +188,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 | **2. Observer-Independent** | Bypass reason explainability audit (post-hoc justification in DM / PR / decisions) | Target 90%+ of bypasses have explicit context reason documented; < 70% = no-go |
 | **3. Variation Tolerance** | Bypass pattern distribution (context-specific vs inadvertent vs conscious override) | All 3 pattern types present is OK; if only 1 pattern dominates = structural imbalance signal |
 
-**Measurement Owner**: @planner (bypass observation + coordination layer effectiveness); @ope-ultp1435 (human context for override classification)
+**Measurement Owner**: @planner (bypass observation + coordination layer effectiveness); @ope-ultp1635 (human context for override classification)
 
 #### Doubt 2: Identity Coupling — Role Ambiguity under High Coordination Load
 
@@ -218,7 +218,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 | **2. Observer-Independent** | Explicit policy docs + override rationale capture (DM + PR comments + decisions) | All overrides have documented policy basis; no ad-hoc decisions |
 | **3. Variation Tolerance** | Niche edge cases (uncommon scenarios where policy unclear) | Niche cases identified + precedent set; threshold 3-case rule (3 similar cases = pattern codification trigger) |
 
-**Measurement Owner**: @planner (escalation frequency + pattern tracking); @ope-ultp1435 (human context + policy judgment)
+**Measurement Owner**: @planner (escalation frequency + pattern tracking); @ope-ultp1635 (human context + policy judgment)
 
 #### Doubt 5: Symmetric / Asymmetric Mode Toggle Sustainability
 
@@ -235,10 +235,10 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 | Axis | Measurement | Go/No-Go Criteria (2026-06-07) |
 |---|---|---|
 | **1. Temporal** | Context-mismatched bypass frequency ratio (weekly trend) | Bypass reason explainability = primary metric (see Doubt 1b Observer-Independent); target 90%+ |
-| **2. Observer-Independent** | Binary explainability check (post-hoc reason document exists = yes/no) | Simple yes/no per bypass; @planner self-observation may introduce bias → cross-check with @ope-ultp1435 human observation |
+| **2. Observer-Independent** | Binary explainability check (post-hoc reason document exists = yes/no) | Simple yes/no per bypass; @planner self-observation may introduce bias → cross-check with @ope-ultp1635 human observation |
 | **3. Variation Tolerance** | Bypass classification distribution (conscious/inadvertent/context-specific pattern counts) | All patterns present = structural health; pattern C (context-specific) dominant = expected (empirical data from Direct Dialogue) |
 
-**Measurement Owner**: @planner (primary observation + pattern tracking); @ope-ultp1435 (independent human observer + context classification)
+**Measurement Owner**: @planner (primary observation + pattern tracking); @ope-ultp1635 (independent human observer + context classification)
 
 ### 7.2 Phase 1 Artifacts (Codification Layer)
 
@@ -265,7 +265,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 **Go/No-Go Decision Gate** (2026-06-07):
 - If all 18 cells within stated tolerance → **Go**: Thesis validated, advance to Phase 3 (production deployment + scaling)
-- If > 3 cells exceed tolerance → **No-Go**: Thesis requires structural revision; escalate to @ope-ultp1435 for remediation design
+- If > 3 cells exceed tolerance → **No-Go**: Thesis requires structural revision; escalate to @ope-ultp1635 for remediation design
 - If 1-3 cells borderline → **Conditional**: Identify specific cell mitigation + restart Phase 2 for affected cell(s) only
 
 ### 7.4 Related Documents
