@@ -24,8 +24,14 @@ COPY tsconfig.json ./
 RUN mkdir -p /app/data
 
 # build 時に commit 情報を焼き込む (issue #47: /health version info)
-# fly.io deploy では `flyctl deploy --build-arg GIT_COMMIT=$(git rev-parse HEAD) --build-arg GIT_COMMIT_AT=$(git log -1 --format=%cI HEAD)` 想定
-ARG GIT_COMMIT=unknown
+# fly.io deploy では `flyctl deploy --build-arg GIT_COMMIT=$(git rev-parse HEAD) --build-arg GIT_COMMIT_AT=$(git log -1 --format=%cI HEAD)` 想定。
+#
+# default は **空文字** (= build-arg 未指定でも image build 成功、 ENV は空 → server 側
+# readEnvString で `null` に倒れる)。 `'unknown'` 等の文字列 default を入れない理由:
+# server 側 fallback chain は env-only + null fallback で設計されており、 build 側で
+# 意味のある文字列を流すと silent fallback (= 「対応サーバーだが env 未設定」 と区別
+# できない) になるため (= reviewer Minor #1 / PR #48 follow-up)。
+ARG GIT_COMMIT=
 ARG GIT_COMMIT_AT=
 
 ENV NODE_ENV=production \
