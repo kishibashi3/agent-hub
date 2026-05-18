@@ -76,6 +76,7 @@ export type SendMessageInput = z.infer<typeof sendMessageInputSchema>;
 
 export const getHistoryInputSchema = z.object({
   to: z.string().min(1),
+  filter: z.string().optional(),
   limit: z.number().int().positive().optional().default(50),
 });
 

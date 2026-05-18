@@ -11,13 +11,21 @@ import { getHistoryInputSchema } from '../../types/schema.js';
  */
 export const getHistoryTool = {
   name: 'get_history',
-  description: '特定の相手またはチームとの会話履歴を取得します。送受信両方を含めた時系列のスレッドを返します。',
+  description:
+    '特定の相手またはチームとの会話履歴を取得します。送受信両方を含めた時系列のスレッドを返します。' +
+    ' filter parameter で keyword 検索可能 (= 部分一致、 case-insensitive ASCII)。',
   inputSchema: {
     type: 'object',
     properties: {
       to: {
         type: 'string',
         description: '会話履歴を取得したい相手の名前（@付きまたは無し）。個人名またはチーム名',
+      },
+      filter: {
+        type: 'string',
+        description:
+          'keyword フィルタ (optional)。 message body の部分一致 (= LIKE %X% 相当、' +
+          ' case-insensitive ASCII)。 issue 番号 (`#27`) / peer 名 (`@reviewer`) / 任意 keyword (`estimate-first`) を受け入れる。',
       },
       limit: {
         type: 'number',

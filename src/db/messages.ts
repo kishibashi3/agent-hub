@@ -194,26 +194,37 @@ export function getHistory(
     }
   }
 
+  // Build base WHERE clause + params (= team / DM 分岐)
   let query: string;
   let params: unknown[];
 
   if (targetIsTeam) {
     query = `
       SELECT * FROM messages
-      WHERE tenant_id = ? AND recipient = ?
-      ORDER BY created_at DESC, rowid DESC
-      LIMIT ?`;
-    params = [tenantId, targetName, input.limit];
+      WHERE tenant_id = ? AND recipient = ?`;
+    params = [tenantId, targetName];
   } else {
     query = `
       SELECT * FROM messages
       WHERE tenant_id = ?
         AND ((sender = ? AND recipient = ?)
-          OR (sender = ? AND recipient = ?))
-      ORDER BY created_at DESC, rowid DESC
-      LIMIT ?`;
-    params = [tenantId, requesterName, targetName, targetName, requesterName, input.limit];
+          OR (sender = ? AND recipient = ?))`;
+    params = [tenantId, requesterName, targetName, targetName, requesterName];
   }
+
+  // Filter parameter inject (issue #37、 設計 doc: docs/design-get-history-filter.md)
+  // body の部分一致検索 (= LIKE %X%、 parameterized で SQL injection 防止)
+  // case sensitivity: SQLite default = ASCII case-insensitive、 非 ASCII (= Japanese 等) は case-sensitive
+  // 全角/半角 normalize / unicode case folding は別 issue scope 外、
+  // future Japanese 検索 needs 顕在化時の expansion path = ICU collation / FTS5 unicode61 candidate (= 設計 doc §5.2 + §9)
+  // 空文字列 = filter なしと同等扱い (= 設計 doc §3.2)
+  if (input.filter && input.filter.length > 0) {
+    query += `\n        AND body LIKE '%' || ? || '%'`;
+    params.push(input.filter);
+  }
+
+  query += `\n      ORDER BY created_at DESC, rowid DESC\n      LIMIT ?`;
+  params.push(input.limit);
 
   const messages = db.prepare(query).all(...params) as Message[];
 
