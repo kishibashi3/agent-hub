@@ -136,6 +136,41 @@ def resolve_user_id(headers: dict[str, str]) -> str:
 # ============================================================
 
 
+def _parse_response_body(resp: requests.Response) -> dict[str, Any]:
+    """MCP server response を parse (= application/json と text/event-stream 両対応)。
+
+    agent-hub server (= StreamableHTTP transport) は client の Accept ヘッダーに
+    `text/event-stream` を含む場合 **SSE 形式 (`data: <json>\\n\\n`)** で
+    response を返す。 plain `resp.json()` を SSE response に対して呼ぶと、
+    response body が `data: ...` で始まるため空 JSON parse として
+    `JSONDecodeError: Expecting value: line 1 column 1 (char 0)` で fail する。
+
+    @admin Pi5 bug report (= 2026-05-18 23:00 UTC): `notifications/resources/updated`
+    push 後の `get_messages` tool call で fetch_inbox が SSE format response を受け、
+    `resp.json()` で crash していた件の root cause。
+
+    本 helper は Content-Type で判別:
+    - `text/event-stream`: SSE lines を parse、 最初の `data: <json>` 行を JSON decode
+    - 他 (= `application/json` 等): plain `resp.json()`
+
+    SSE response のうち、 単一 jsonrpc response (= tools/call の reply) は
+    1 つの `data:` line に full JSON が入る前提 (= MCP StreamableHTTP の慣例)。
+    """
+    content_type = resp.headers.get("Content-Type", "")
+    if "text/event-stream" in content_type:
+        # SSE format: 'data: <json>' lines を find
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                payload = line[6:].strip()
+                if payload:
+                    return json.loads(payload)
+        raise ValueError(
+            f"no `data:` line in SSE response (Content-Type={content_type}): "
+            f"{resp.text[:200]}"
+        )
+    return resp.json()
+
+
 def init_session(headers: dict[str, str]) -> str:
     """MCP session を initialize し、 session_id を返す。"""
     resp = requests.post(
@@ -193,7 +228,7 @@ def send_dm(
     )
     if resp.status_code != 200:
         raise RuntimeError(f"send_message failed: HTTP {resp.status_code}: {resp.text[:200]}")
-    return resp.json()
+    return _parse_response_body(resp)
 
 
 def register_self(
@@ -266,7 +301,7 @@ def fetch_inbox(
         raise RuntimeError(
             f"get_messages failed: HTTP {resp.status_code}: {resp.text[:200]}"
         )
-    body = resp.json()
+    body = _parse_response_body(resp)
     # MCP tools/call result は content array の text field に JSON 文字列が入る
     result = body.get("result", {})
     content = result.get("content", [])
