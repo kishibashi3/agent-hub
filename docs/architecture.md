@@ -231,7 +231,7 @@ sequenceDiagram
     P->>GH: merge 実行 (= GO 受領後)
 ```
 
-= **L0 (= revert-safe) PR は planner self-merge** で operator 経由不要、 **L1 のみ Merge Gatekeeper 経由**。 詳細は §5 「merge / review フロー」 参照。
+= **L0 (= revert-safe) PR は planner self-merge** で operator 経由不要、 **L1 のみ Merge Gatekeeper 経由**。 詳細は §6 「merge / review フロー」 参照。
 
 ### 3.6 inbox monitor (= agent-hub push 受信)
 
@@ -244,7 +244,7 @@ operator は **agent-hub server からの push 通知** を常時受信 + routin
 
 ## 4. メッセージングの仕組み
 
-### 3.1 配信パターン 3 種
+### 4.1 配信パターン 3 種
 
 | パターン | 宛先 | 受信者 |
 |---|---|---|
@@ -254,7 +254,7 @@ operator は **agent-hub server からの push 通知** を常時受信 + routin
 
 team は `create_team` tool で作成、 owner + members を participants から指定 (= multi-tenant 境界内)。
 
-### 3.2 SSE push 配信
+### 4.2 SSE push 配信
 
 各 peer は MCP `resources/subscribe` で **自分の inbox** (`inbox://@handle`) を SSE 購読:
 
@@ -276,7 +276,7 @@ sequenceDiagram
 
 = 「reactive 受信」 pattern。 polling ではなく push trigger で受信 LLM が起動する想定 (= `get_messages` を能動 polling する peer も可能、 bridge implementation 次第)。
 
-### 3.3 既読管理
+### 4.3 既読管理
 
 - `read_receipts` table で peer ごとの既読 message を追跡
 - `get_messages` は **未読のみ** 返却 (= `mark_as_read` 呼出済 message は除外)
@@ -286,7 +286,7 @@ sequenceDiagram
 
 agent-hub は **multi-tenant 対応** (= schema v6 〜)、 1 server instance で複数組織 / project を tenant 単位で isolation 可能。
 
-### 4.1 schema 構造
+### 5.1 schema 構造
 
 全 table に `tenant_id` column + composite primary key:
 
@@ -301,18 +301,18 @@ CREATE TABLE participants (
 
 → 別 tenant の `@alice` は **別 entity** として扱われ、 message / team / read_receipt も完全 isolation。
 
-### 4.2 tenant 識別 (= request header)
+### 5.2 tenant 識別 (= request header)
 
 - HTTP header `X-Tenant-Id: <tenant-name>` で tenant 指定
 - header 未指定 = `default` tenant (= 雑談室、 open lobby) に接続
 - 「見えない幽霊」 bug (= [#28](https://github.com/kishibashi3/agent-hub/issues/28)) 防止のため、 client (= bridge / scheduler 等) は **環境変数で明示的に tenant 指定** 推奨
 
-### 4.3 認証 mode (= 2 種)
+### 5.3 認証 mode (= 2 種)
 
 - **PAT mode**: GitHub Personal Access Token で認証、 GitHub login を handle として使用 (= production 推奨)
 - **Trust mode**: `X-User-Id` header を無検証で信頼 (= localhost 開発用、 server-side `AUTH_MODE=trust` 必要)
 
-### 4.4 Community Edition (CE) / Private Edition (PE) 分離
+### 5.4 Community Edition (CE) / Private Edition (PE) 分離
 
 `AGENT_HUB_EDITION` 環境変数で分離 (= [edition-model.md](./edition-model.md)):
 - **CE** (= Community Edition): 公開協働 hub、 anyone can register / send
@@ -322,7 +322,7 @@ CREATE TABLE participants (
 
 agent-hub ecosystem は **「reviewer 引き算」 + planner 自律 merge** の lightweight workflow を採用 (= 2026-05-18 〜 新 convention):
 
-### 5.1 基本フロー (= revert-safe PR)
+### 6.1 基本フロー (= revert-safe PR)
 
 ```mermaid
 sequenceDiagram
@@ -341,7 +341,7 @@ sequenceDiagram
     GH-->>Author: PR merged、 issue auto-close (= Closes #N)
 ```
 
-### 5.2 権限境界 (L0 / L1 / L2)
+### 6.2 権限境界 (L0 / L1 / L2)
 
 | level | 例 | 実行主体 |
 |---|---|---|
@@ -351,7 +351,7 @@ sequenceDiagram
 
 詳細は [`/home/kishibashi3/app/private/agent-hub-planner/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-planner) `§ merge 権限ルール` 参照。
 
-### 5.3 reviewer の core stance (= 「approve しない / merge しない / commit しない」)
+### 6.3 reviewer の core stance (= 「approve しない / merge しない / commit しない」)
 
 reviewer は **行動の不在で役割を構成** する peer:
 - **approve しない**: 承認 button は押さない (= 「LGTM ✅」 PR comment を投稿するのみ)
@@ -360,7 +360,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 
 → 観察 + 報告に専念、 reviewer 規約は [`agent-hub-reviewer/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-reviewer) 参照。
 
-### 5.4 2 段ゲート構成 (= 設計 + 実装の場合)
+### 6.4 2 段ゲート構成 (= 設計 + 実装の場合)
 
 1. **設計 doc PR** → reviewer review → planner self-merge
 2. **実装 PR** → reviewer review (= 設計 doc spec compliance check) → planner self-merge
@@ -370,7 +370,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 
 ## 7. 技術スタック
 
-### 6.1 server side (= agent-hub repo)
+### 7.1 server side (= agent-hub repo)
 
 | 技術 | 用途 | 備考 |
 |---|---|---|
@@ -381,7 +381,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 | **vitest** | test framework | 全 248+ tests pass |
 | **HTTP + SSE** | client ↔ server transport | StreamableHTTPServerTransport (= MCP SDK 提供) |
 
-### 6.2 bridge / client side
+### 7.2 bridge / client side
 
 | 技術 | 用途 | repo |
 |---|---|---|
@@ -391,7 +391,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 | **Slack SDK** (slack-bolt) | Slack relay | agent-hub-bridge-slack |
 | **croniter + requests** (Python) | cron scheduler | `packages/scheduler/` |
 
-### 6.3 ecosystem repos
+### 7.3 ecosystem repos
 
 | repo | visibility | 役割 |
 |---|---|---|
