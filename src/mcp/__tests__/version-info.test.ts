@@ -5,39 +5,24 @@ import {
   resolveGitCommitAt,
   getVersionInfo,
   resetVersionInfoForTesting,
-  type ExecSyncLike,
 } from '../version-info.js';
 
 /**
  * issue #47: /health version info の解決ロジック単体テスト。
  *
- * 解決優先度 (env → git exec → fallback) を、 `exec` の DI 注入で deterministic
- * に検証する。 production の `process.env` と git CLI 実環境には依存しない。
+ * 解決戦略は env-only (= operator follow-up DM `b5fdfe78` 反映、 runtime exec fallback なし):
+ * - env 設定あり → trim してそのまま採用
+ * - env 未設定 / 空白 → `null` (= `'unknown'` ではなく、 field 自体は present)
  */
 describe('version-info (issue #47)', () => {
   const origEnv = { ...process.env };
-
-  // 「git CLI が存在しない / .git が無い」 を再現する fake
-  const failingExec: ExecSyncLike = () => {
-    throw new Error('git not available (test fixture)');
-  };
-
-  // 固定値を返す fake (gitArgs に応じて返し分け)
-  function stubbedExec(map: Record<string, string>): ExecSyncLike {
-    return (cmd: string) => {
-      for (const [key, value] of Object.entries(map)) {
-        if (cmd.includes(key)) return value;
-      }
-      throw new Error(`unexpected exec: ${cmd}`);
-    };
-  }
 
   beforeEach(() => {
     resetVersionInfoForTesting();
   });
 
   afterEach(() => {
-    // env を完全復元
+    // env を完全復元 (= 他 test の汚染を防ぐ)
     for (const key of Object.keys(process.env)) {
       if (!(key in origEnv)) {
         delete process.env[key];
@@ -52,7 +37,6 @@ describe('version-info (issue #47)', () => {
       expect(STARTED_AT).toMatch(
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
       );
-      // 再参照しても同じ値 (= module-level const)
       const before = STARTED_AT;
       const after = STARTED_AT;
       expect(after).toBe(before);
@@ -60,68 +44,61 @@ describe('version-info (issue #47)', () => {
   });
 
   describe('resolveGitCommit', () => {
-    it('env GIT_COMMIT があれば優先採用 (short SHA に揃える)', () => {
+    it('env GIT_COMMIT が設定されていれば trim してそのまま採用', () => {
+      const env = { GIT_COMMIT: '091ba92' } as NodeJS.ProcessEnv;
+      expect(resolveGitCommit(env)).toBe('091ba92');
+    });
+
+    it('full SHA も透過する (= operator が CI で $GITHUB_SHA を流す想定でも壊さない)', () => {
       const env = {
         GIT_COMMIT: 'a1b2c3d4e5f6789012345678901234567890abcd',
       } as NodeJS.ProcessEnv;
-      expect(resolveGitCommit({ env, exec: failingExec })).toBe('a1b2c3d');
+      expect(resolveGitCommit(env)).toBe(
+        'a1b2c3d4e5f6789012345678901234567890abcd'
+      );
     });
 
-    it('env GIT_COMMIT が既に 7 文字以下ならそのまま', () => {
-      const env = { GIT_COMMIT: 'abc123' } as NodeJS.ProcessEnv;
-      expect(resolveGitCommit({ env, exec: failingExec })).toBe('abc123');
+    it('前後 whitespace は trim される', () => {
+      const env = { GIT_COMMIT: '  091ba92  \n' } as NodeJS.ProcessEnv;
+      expect(resolveGitCommit(env)).toBe('091ba92');
     });
 
-    it('env GIT_COMMIT が空文字 / 空白なら git exec fallback を呼ぶ', () => {
-      const env = { GIT_COMMIT: '   ' } as NodeJS.ProcessEnv;
-      const exec = stubbedExec({ 'rev-parse': 'deadbeefcafe1234\n' });
-      expect(resolveGitCommit({ env, exec })).toBe('deadbee');
+    it('env 未設定なら null (= "unknown" ではなく)', () => {
+      expect(resolveGitCommit({} as NodeJS.ProcessEnv)).toBeNull();
     });
 
-    it('env も git もない場合は "unknown" を返す (graceful degrade)', () => {
+    it('env が空文字 / 空白のみなら null', () => {
       expect(
-        resolveGitCommit({ env: {} as NodeJS.ProcessEnv, exec: failingExec })
-      ).toBe('unknown');
-    });
-
-    it('git exec が空文字を返した場合も "unknown" にフォールバック', () => {
-      const exec = stubbedExec({ 'rev-parse': '   \n' });
+        resolveGitCommit({ GIT_COMMIT: '' } as NodeJS.ProcessEnv)
+      ).toBeNull();
       expect(
-        resolveGitCommit({ env: {} as NodeJS.ProcessEnv, exec })
-      ).toBe('unknown');
+        resolveGitCommit({ GIT_COMMIT: '   \n' } as NodeJS.ProcessEnv)
+      ).toBeNull();
     });
   });
 
   describe('resolveGitCommitAt', () => {
-    it('env GIT_COMMIT_AT があればそのまま採用', () => {
+    it('env GIT_COMMIT_AT が設定されていれば trim してそのまま採用', () => {
       const env = {
-        GIT_COMMIT_AT: '2026-05-19T00:32:11+00:00',
+        GIT_COMMIT_AT: '2026-05-18T12:34:00Z',
       } as NodeJS.ProcessEnv;
-      expect(resolveGitCommitAt({ env, exec: failingExec })).toBe(
-        '2026-05-19T00:32:11+00:00'
-      );
+      expect(resolveGitCommitAt(env)).toBe('2026-05-18T12:34:00Z');
     });
 
-    it('env が無ければ git log fallback を呼ぶ', () => {
-      const env = {} as NodeJS.ProcessEnv;
-      const exec = stubbedExec({
-        'log -1 --format=%cI HEAD': '2026-05-18T12:00:00+00:00\n',
-      });
-      expect(resolveGitCommitAt({ env, exec })).toBe(
-        '2026-05-18T12:00:00+00:00'
-      );
+    it('env 未設定なら null', () => {
+      expect(resolveGitCommitAt({} as NodeJS.ProcessEnv)).toBeNull();
     });
 
-    it('env も git もない場合は null を返す (graceful degrade)', () => {
+    it('env が空白のみなら null', () => {
       expect(
-        resolveGitCommitAt({ env: {} as NodeJS.ProcessEnv, exec: failingExec })
+        resolveGitCommitAt({ GIT_COMMIT_AT: '   ' } as NodeJS.ProcessEnv)
       ).toBeNull();
     });
   });
 
   describe('getVersionInfo (cache 挙動)', () => {
     it('2 回呼んでも同じ instance を返す (cache hit)', () => {
-      process.env.GIT_COMMIT = 'cache01';
+      process.env.GIT_COMMIT = '091ba92';
       const first = getVersionInfo();
       const second = getVersionInfo();
       expect(second).toBe(first);
@@ -139,13 +116,28 @@ describe('version-info (issue #47)', () => {
       expect(second).not.toBe(first);
     });
 
-    it('shape: 3 fields (git_commit / git_commit_at / started_at)', () => {
-      process.env.GIT_COMMIT = 'abc1234';
-      process.env.GIT_COMMIT_AT = '2026-05-19T00:00:00Z';
+    it('shape: 3 fields all present (= field 未対応サーバーと区別可能にする)', () => {
+      delete process.env.GIT_COMMIT;
+      delete process.env.GIT_COMMIT_AT;
       const info = getVersionInfo();
       expect(info).toMatchObject({
-        git_commit: 'abc1234',
-        git_commit_at: '2026-05-19T00:00:00Z',
+        git_commit: null,
+        git_commit_at: null,
+        started_at: STARTED_AT,
+      });
+      // field 自体は常に present (= key として存在する)
+      expect('git_commit' in info).toBe(true);
+      expect('git_commit_at' in info).toBe(true);
+      expect('started_at' in info).toBe(true);
+    });
+
+    it('env 設定時: env 値が反映される', () => {
+      process.env.GIT_COMMIT = '091ba92';
+      process.env.GIT_COMMIT_AT = '2026-05-18T12:34:00Z';
+      const info = getVersionInfo();
+      expect(info).toMatchObject({
+        git_commit: '091ba92',
+        git_commit_at: '2026-05-18T12:34:00Z',
         started_at: STARTED_AT,
       });
     });

@@ -1,23 +1,21 @@
 /**
- * /health endpoint version info (= issue #47 / operator delegation).
+ * /health endpoint version info (= issue #47 / operator @ope-ultp1635 delegation).
  *
  * 「running process がどの commit を抱えているか」「いつから起動中か」を `/health`
  * から外から判別可能にするための utility。 古い build が動き続けて新規 fix が
  * 反映されていない silent staleness 状態を operator が検知できることが狙い。
  *
- * ## 解決戦略 (= hybrid)
+ * ## 解決戦略 (= env-only、 operator follow-up DM `b5fdfe78` 反映)
  *
  * - **production (Docker / fly.io)**: build 時に `ARG GIT_COMMIT` / `ARG GIT_COMMIT_AT`
  *   で env var に焼き込む。`.git` を image に含めない slim image でも commit が判明する。
- * - **dev (`tsx watch`)**: env var が無ければ runtime に `git rev-parse HEAD` で fallback。
- *   `.git` が存在する dev 環境では追加設定不要で動く。
- * - **git unavailable 時** (git CLI が無い / `.git` が無い等): `git_commit: 'unknown'` /
- *   `git_commit_at: null` で graceful degrade。 throw しない (= /health は常に 200 を返す契約)。
+ * - **env が無い場合 (dev `tsx watch` 等)**: `null` を返す。 runtime `git rev-parse` は
+ *   **行わない** (= operator が明示的に却下、 開発時 git 実行コストと予測不能性を回避)。
+ * - **field は常に present** (= 値が `null` でも key 自体は残す)。 これにより client は
+ *   「未対応サーバー (= key 自体なし)」 と 「対応サーバーだが env 未設定 (= null)」 を区別できる。
  *
  * `started_at` は module load の瞬間に固定する constant (= 例外なし、 process 寿命 = 値固定)。
  */
-
-import { execSync as nodeExecSync } from 'node:child_process';
 
 /**
  * server process が起動した時刻 (ISO 8601)。
@@ -31,111 +29,55 @@ export const STARTED_AT: string = new Date().toISOString();
  * version info をまとめた immutable な型。
  *
  * `/health` レスポンスにそのまま spread される想定。 field 追加は backward-compat。
+ * `git_commit` / `git_commit_at` は env 未設定時は `null` (= field 自体は present)。
  */
 export interface VersionInfo {
-  /** short SHA (7 chars)、 解決失敗時は `'unknown'`。 */
-  git_commit: string;
-  /** commit date (ISO 8601)、 解決失敗時は `null`。 */
+  /** env `GIT_COMMIT` をそのまま採用、 未設定なら `null`。 */
+  git_commit: string | null;
+  /** env `GIT_COMMIT_AT` をそのまま採用、 未設定なら `null` (ISO 8601 想定)。 */
   git_commit_at: string | null;
-  /** server process が起動した時刻 (ISO 8601)。 */
+  /** server process が起動した時刻 (ISO 8601)。 module load 時刻で固定。 */
   started_at: string;
 }
 
 /**
- * `execSync` の inject 可能 alias。
- *
- * test では「git が無い環境」を再現するために throw する fake を渡せる。
- * production 用 default は node:child_process の `execSync`。
+ * env から非空文字列を取り出す内部 helper。 空白のみ / 未設定はすべて `null` に揃える。
  */
-export type ExecSyncLike = (cmd: string, options?: unknown) => string | Buffer;
-
-/**
- * env var を読みつつ runtime fallback で解決する内部 helper。
- *
- * - env がある → trim して採用
- * - env が無い → `git` を exec で実行
- * - exec 失敗 → fallback 値
- */
-function resolveFromEnvOrGit(opts: {
-  envVar: string;
-  gitArgs: string[];
-  fallback: string | null;
-  env: NodeJS.ProcessEnv;
-  exec: ExecSyncLike;
-  /** exec 出力を後処理する (例: short SHA 化)。 default は trim のみ。 */
-  postprocess?: (raw: string) => string;
-}): string | null {
-  const fromEnv = opts.env[opts.envVar];
-  if (fromEnv && fromEnv.trim()) {
-    const value = fromEnv.trim();
-    return opts.postprocess ? opts.postprocess(value) : value;
-  }
-  try {
-    const out = opts.exec(`git ${opts.gitArgs.join(' ')}`, {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      encoding: 'utf8',
-      timeout: 2000,
-    });
-    const raw = typeof out === 'string' ? out.trim() : out.toString('utf8').trim();
-    if (!raw) return opts.fallback;
-    return opts.postprocess ? opts.postprocess(raw) : raw;
-  } catch {
-    return opts.fallback;
-  }
+function readEnvString(env: NodeJS.ProcessEnv, key: string): string | null {
+  const raw = env[key];
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /**
- * git commit (short SHA、 7 chars) を解決する。
+ * `GIT_COMMIT` env を解決する。
  *
- * 解決優先度:
- * 1. env `GIT_COMMIT` (= production build で焼き込む想定)
- * 2. runtime `git rev-parse --short=7 HEAD` (= dev 環境向け fallback)
- * 3. fallback `'unknown'`
+ * - 未設定 / 空白 → `null`
+ * - 設定あり → trim してそのまま採用 (= operator が短 SHA を流すか長 SHA を流すかは操作側の選択)
+ *
+ * operator @ope-ultp1635 follow-up DM `b5fdfe78` 反映: runtime exec fallback なし、
+ * env 未設定時は `null` (= 「未対応サーバー」 と 「env 未設定の対応サーバー」 を client が区別できる)。
  */
-export function resolveGitCommit(opts?: {
-  env?: NodeJS.ProcessEnv;
-  exec?: ExecSyncLike;
-}): string {
-  return (
-    resolveFromEnvOrGit({
-      envVar: 'GIT_COMMIT',
-      gitArgs: ['rev-parse', '--short=7', 'HEAD'],
-      fallback: 'unknown',
-      env: opts?.env ?? process.env,
-      exec: opts?.exec ?? nodeExecSync,
-      // env で full SHA が渡された場合 (= CI で `$GITHUB_SHA` をそのまま渡す等) も
-      // short SHA に揃える。 既に 7 文字以下ならそのまま。
-      postprocess: (raw) => (raw.length > 7 ? raw.slice(0, 7) : raw),
-    }) ?? 'unknown'
-  );
+export function resolveGitCommit(env: NodeJS.ProcessEnv = process.env): string | null {
+  return readEnvString(env, 'GIT_COMMIT');
 }
 
 /**
- * git commit date (ISO 8601 / commit date) を解決する。
+ * `GIT_COMMIT_AT` env を解決する。
  *
- * 解決優先度:
- * 1. env `GIT_COMMIT_AT` (= production build で焼き込む想定、 ISO 8601 文字列)
- * 2. runtime `git log -1 --format=%cI HEAD` (= commit date in strict ISO 8601)
- * 3. fallback `null`
+ * - 未設定 / 空白 → `null`
+ * - 設定あり → trim してそのまま採用 (= ISO 8601 想定だが parse は行わず透過)
  */
-export function resolveGitCommitAt(opts?: {
-  env?: NodeJS.ProcessEnv;
-  exec?: ExecSyncLike;
-}): string | null {
-  return resolveFromEnvOrGit({
-    envVar: 'GIT_COMMIT_AT',
-    gitArgs: ['log', '-1', '--format=%cI', 'HEAD'],
-    fallback: null,
-    env: opts?.env ?? process.env,
-    exec: opts?.exec ?? nodeExecSync,
-  });
+export function resolveGitCommitAt(env: NodeJS.ProcessEnv = process.env): string | null {
+  return readEnvString(env, 'GIT_COMMIT_AT');
 }
 
 /**
  * version info を 1 回だけ評価して module-level に cache する。
  *
- * `/health` は health check で頻繁に呼ばれるため、 git exec を毎回走らせない。
- * 値は server process 寿命中は不変なので OK。
+ * `/health` は health check で頻繁に呼ばれるため、 env 参照を毎回走らせない。
+ * 値は server process 寿命中は不変なので OK (env を runtime に書き換えても反映しないのが意図)。
  *
  * test 用に `resetVersionInfoForTesting()` で cache を捨てられる。
  */
