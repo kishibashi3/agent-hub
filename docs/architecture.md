@@ -40,21 +40,27 @@ graph TB
         MCP -.delivers via.-> SSE
     end
 
-    subgraph "Bridge worker layer (stateful daemon)"
-        BC["@bridge-claude-impl<br/>(Claude Agent SDK)"]
-        BG["@bridge-gemini-impl<br/>(Gemini CLI)"]
+    subgraph "(a) Bridge worker layer (= 実装 = 実 runtime daemon process)"
+        BC["@bridge-claude<br/>(Claude Agent SDK)"]
+        BG["@bridge-gemini<br/>(Gemini CLI)"]
         BS["@bridge-slack<br/>(Slack relay)"]
         BA["@bridge-adk<br/>(Google ADK + LiteLLM)"]
         OtherBridge["...他 bridge"]
     end
 
-    subgraph "Peer agent layer (= persona doc + LLM via bridge)"
-        Planner["@planner<br/>(task assignment)"]
-        Reviewer["@reviewer<br/>(PR review)"]
-        Researcher["@researcher<br/>(調査)"]
-        Knowledge["@knowledge<br/>(知識管理)"]
-        Impl["@agent-hub-impl<br/>(server 実装)"]
-        OtherPeers["...他 peer"]
+    subgraph "(b) Persona / role peer layer (= 役割 = bridge 上に乗る agent)"
+        Planner(["@planner<br/>(task assignment)"])
+        Reviewer(["@reviewer<br/>(PR review)"])
+        Researcher(["@researcher<br/>(調査)"])
+        Knowledge(["@knowledge<br/>(知識管理)"])
+        OtherPeers(["...他 persona peer"])
+    end
+
+    subgraph "(c) Implementation role peer layer (= 実装を作る agent)"
+        BCImpl(["@bridge-claude-impl<br/>(bridge-claude 実装担当)"])
+        BGImpl(["@bridge-gemini-impl<br/>(bridge-gemini 実装担当)"])
+        AHImpl(["@agent-hub-impl<br/>(agent-hub server 実装 + ecosystem docs)"])
+        OtherImpl(["...他 impl peer"])
     end
 
     subgraph "Packages (= optional companion)"
@@ -72,11 +78,16 @@ graph TB
     SpawnCoord -.reconcile (pgrep + get_participants).-> MCP
 
     BC -.runs.-> Reviewer
-    BC -.runs.-> Impl
     BC -.runs.-> Planner
-    BG -.runs.-> OtherPeers
+    BC -.runs.-> AHImpl
+    BG -.runs.-> Researcher
+    BG -.runs.-> BGImpl
     BS -.relays.-> MCP
-    BA -.runs.-> OtherPeers
+    BA -.runs.-> Knowledge
+
+    BCImpl -.develop / maintain.-> BC
+    BGImpl -.develop / maintain.-> BG
+    AHImpl -.develop / maintain.-> MCP
 
     BC --> MCP
     BG --> MCP
@@ -98,46 +109,106 @@ graph TB
     style SpawnCoord fill:#e8f5e9
     style MergeGate fill:#fce4ec
     style InboxMon fill:#e3f2fd
+    style BC fill:#bbdefb
+    style BG fill:#bbdefb
+    style BS fill:#bbdefb
+    style BA fill:#bbdefb
+    style OtherBridge fill:#bbdefb
+    style Planner fill:#c8e6c9
+    style Reviewer fill:#c8e6c9
+    style Researcher fill:#c8e6c9
+    style Knowledge fill:#c8e6c9
+    style OtherPeers fill:#c8e6c9
+    style BCImpl fill:#fff59d
+    style BGImpl fill:#fff59d
+    style AHImpl fill:#fff59d
+    style OtherImpl fill:#fff59d
 ```
 
 ### 1.2 layer 解説
 
-agent-hub ecosystem は **4 layer** で構成される:
+agent-hub ecosystem は **6 layer** で構成される:
 
 1. **Human layer**: kishibashi3 (= user) が起点、 ecosystem 全体の方向性を決める
 2. **OS layer (= operator、 bridge 運用 layer)**: Claude Code として動く `@ope-ultp1635`、 **3 sub-role** (= Spawn Coordinator / Merge Gatekeeper / Inbox Monitor) で構成、 bridge process の運用 + 台帳管理 + L1 承認 + push 受信を担う (= 詳細 §3)
 3. **agent-hub server**: TypeScript で実装された MCP server (= HTTP+SSE)、 SQLite で multi-tenant 永続化、 SSE で peer の inbox に push 配信
-4. **Bridge / Peer layer**:
-   - **Bridge** = stateful daemon process、 LLM API (Claude / Gemini / 他) を hub に橋渡しする implementation
-   - **Peer** = `@handle` で識別される ecosystem 参加者、 bridge worker process の上で persona doc + LLM で動作
+4. **(a) Bridge worker layer (= 実装、 青)**: stateful daemon process として動く **実 runtime worker** (= `@bridge-claude` / `@bridge-gemini` / `@bridge-slack` / `@bridge-adk` 等)。 LLM API (Claude / Gemini / 他) を hub に橋渡し
+5. **(b) Persona / role peer layer (= 役割、 緑)**: bridge worker process の **上に乗って動く agent** (= `@reviewer` / `@planner` / `@researcher` / `@knowledge` 等)。 persona doc (= CLAUDE.md) に従って特定役割を担う
+6. **(c) Implementation role peer layer (= 実装を作るロール、 黄)**: bridge worker code や agent-hub server code を **開発・保守する agent** (= `@bridge-claude-impl` / `@bridge-gemini-impl` / `@agent-hub-impl` 等)。 自身も persona role peer (b) の特殊形だが、 「実装物を作る対象」 と sibling の bridge worker (a) を持つ点で **(b) と異なる role 性質**
 
 加えて **Packages layer** に `packages/scheduler` 等の optional companion (= cron-based DM scheduler) が並列で動作可能。
 
-### 1.3 「bridge」 と 「peer」 の関係 (= 重要)
+#### 1.2.1 3 concept (a) / (b) / (c) の視覚区別 (= 重要)
+
+| layer | category | 視覚 (Mermaid 内) | 例 |
+|---|---|---|---|
+| **(a)** | **実装 = worker process** | 矩形 box + **青系 fill** | `@bridge-claude`、 `@bridge-gemini`、 `@bridge-slack`、 `@bridge-adk` |
+| **(b)** | **役割 = bridge の上に乗る agent** | 角丸 box + **緑系 fill** | `@reviewer`、 `@planner`、 `@researcher`、 `@knowledge` |
+| **(c)** | **実装を作る agent** | 角丸 box + **黄系 fill** | `@bridge-claude-impl`、 `@bridge-gemini-impl`、 `@agent-hub-impl` |
+
+= **同じ ecosystem peer でも 3 異なる concept** を視覚的に区別、 新規 engineer が 「`@bridge-claude` (= daemon process) と `@bridge-claude-impl` (= 実装ロール) は別物」 を即把握できる構造。
+
+### 1.3 「bridge worker」 / 「persona role」 / 「implementation role」 の関係 (= 重要)
+
+3 concept の関係を概念図で:
 
 ```
-@reviewer (= peer、 handle)
-   ↑ persona doc (= CLAUDE.md、 振る舞い + 観点 + format)
-   ↑ runs on
-@bridge-claude (= bridge process、 stateful daemon)
-   ↑ uses
-Claude Agent SDK (= Anthropic Claude API client library)
+[(c) Implementation role peer]   = 実装を作る agent
+       @bridge-claude-impl
+       @agent-hub-impl
+       (= 黄)
+            ↓ develop / maintain (= code 編集 / PR 起票)
+
+[(a) Bridge worker process]      = 実 runtime daemon
+       @bridge-claude (process)
+       @bridge-gemini (process)
+       (= 青)
+            ↑ runs on (= bridge process が peer を host)
+
+[(b) Persona / role peer]        = bridge 上の役割
+       @reviewer / @planner / @researcher / @knowledge
+       (= 緑)
+            ↑ uses persona doc
+       CLAUDE.md (= 振る舞い + 観点 + format)
 ```
 
-= **bridge は LLM engine 提供層**、 **peer は handle + persona doc + workdir** の 「論理的な役割」。 同 bridge process で複数 peer を運用可能 (= `--user reviewer` / `--user planner` 等で peer switch)。
+#### 1.3.1 具体例で understand
+
+- **@bridge-claude** (= layer (a)、 青、 process): Claude Agent SDK を使う stateful daemon。 1 つの process。 `--user reviewer` / `--user planner` 等で起動時に peer switch 可能
+- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --user reviewer --workdir agent-hub-reviewer` で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
+- **@bridge-claude-impl** (= layer (c)、 黄、 impl role): `@bridge-claude` の **実装 code を書く** agent。 自身も bridge worker process 上で動くが、 役割は 「`agent-hub-bridge-claude` repo の code 編集 + PR 起票 + reviewer review 経由 merge」
+- **@agent-hub-impl** (= layer (c)、 黄、 impl role): `agent-hub` server (= TypeScript MCP server) の **実装 code + ecosystem doc を書く** agent。 sibling として `agent-hub` server + `docs/*` を保守
+
+= **「`@bridge-claude` を作る (c) と `@bridge-claude` 自身 (a) は別 peer」** が core insight、 新規 engineer の 「bridge と bridge-impl の区別」 confusion 解消。
+
+#### 1.3.2 develop / maintain 関係 (= layer (c) → (a))
+
+implementation role peer (= layer (c)) は対応する bridge worker (= layer (a)) を **develop / maintain** する関係:
+
+| impl role (c) | maintains | bridge worker (a) / server |
+|---|---|---|
+| `@bridge-claude-impl` | → | `@bridge-claude` (= agent-hub-bridge-claude repo) |
+| `@bridge-gemini-impl` | → | `@bridge-gemini` (= agent-hub-bridge-gemini repo) |
+| `@agent-hub-impl` | → | `agent-hub` server (= MCP layer + docs) |
+
+= 「impl role peer が bridge worker の code を書く」 1-to-1 mapping、 ecosystem で実装担当が明示化されている構造。
 
 ## 2. 各 peer の役割
 
-ecosystem 内 peer は **役割別 6 categories** に分類:
+ecosystem 内 peer は §1.2.1 で示した **3 concept (a) / (b) / (c)** + OS layer に分類:
 
-| peer | 役割 | bridge engine |
-|---|---|---|
-| **@planner** | スケジューラ / task 割り振り / 進捗 follow-up / coordinator / **revert-safe PR の self-merge** | Claude Agent SDK |
-| **@researcher** | 調査・情報整理 / 既存 issue / PR / doc の状況確認 | Claude Agent SDK |
-| **@knowledge** | 知識整理・entry 管理 / dedup / indexing / curator | Claude Agent SDK |
-| **@reviewer** | PR / design review / 観点別 check (= security / correctness / perf / readability / test / consistency) | Claude Agent SDK |
-| **@agent-hub-impl** / **@bridge-*-impl** | 各 repo の **実装担当** (= server impl + ecosystem doc / bridge impl) | Claude Agent SDK (= 各 impl 担当) |
-| **@ope-ultp1635** (operator) | **bridge 運用 layer** (= 詳細 §3)、 3 sub-role: Spawn Coordinator / Merge Gatekeeper / Inbox Monitor | Claude Code (= global、 stateful 自体ではない) |
+| peer | layer (= 視覚) | 役割 | bridge engine |
+|---|---|---|---|
+| **@planner** | **(b) 緑、 persona role** | スケジューラ / task 割り振り / 進捗 follow-up / coordinator / **revert-safe PR の self-merge** | Claude Agent SDK |
+| **@researcher** | **(b) 緑、 persona role** | 調査・情報整理 / 既存 issue / PR / doc の状況確認 | Claude Agent SDK |
+| **@knowledge** | **(b) 緑、 persona role** | 知識整理・entry 管理 / dedup / indexing / curator | Claude Agent SDK |
+| **@reviewer** | **(b) 緑、 persona role** | PR / design review / 観点別 check (= security / correctness / perf / readability / test / consistency) | Claude Agent SDK |
+| **@agent-hub-impl** | **(c) 黄、 implementation role** | `agent-hub` server (= TypeScript MCP server) + ecosystem docs の実装担当 | Claude Agent SDK |
+| **@bridge-claude-impl** | **(c) 黄、 implementation role** | `agent-hub-bridge-claude` repo (= bridge-claude worker code) の実装担当 | Claude Agent SDK |
+| **@bridge-gemini-impl** | **(c) 黄、 implementation role** | `agent-hub-bridge-gemini` repo (= bridge-gemini worker code) の実装担当 | Claude Agent SDK |
+| **@bridge-claude** (= worker process) | **(a) 青、 bridge worker** | Claude Agent SDK ベース daemon process (= persona role を上に乗せて runtime 提供) | Claude Agent SDK 自体 |
+| **@bridge-gemini** / **@bridge-slack** / **@bridge-adk** | **(a) 青、 bridge worker** | 各 LLM / 外部 service との bridge daemon process | Gemini CLI / Slack SDK / Google ADK + LiteLLM |
+| **@ope-ultp1635** (operator) | **OS layer (= 別 visual category)** | **bridge 運用 layer** (= 詳細 §3)、 3 sub-role: Spawn Coordinator / Merge Gatekeeper / Inbox Monitor | Claude Code (= global、 stateful 自体ではない) |
 
 ### 2.1 worker_type (= mode)
 
