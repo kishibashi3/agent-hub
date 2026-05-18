@@ -3,14 +3,12 @@
     "name": "daily-report",
     "cron": "0 13 * * *",
     "to": "@planner",
-    "message": "daily report を書いてください (= UTC 13:00、 本日の planner activity summary + tomorrow plan)",
-    "enabled": true
+    "message": "daily report を書いてください (= UTC 13:00、 本日の planner activity summary + tomorrow plan)"
   },
   {
     "name": "weekly-research",
     "cron": "0 9 * * 1",
     "to": "@researcher",
-    "message": "週次調査タスク: 直近 1 週間の ecosystem activity から retrospective 候補 + 次週 priority 整理 (= 毎週月曜 UTC 09:00)",
-    "enabled": true
+    "message": "週次調査タスク: 直近 1 週間の ecosystem activity から retrospective 候補 + 次週 priority 整理 (= 毎週月曜 UTC 09:00)"
   }
 ]
