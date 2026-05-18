@@ -1,8 +1,8 @@
 # ADR: Peer-Mesh Architecture with Transparent Asymmetry — 2026-05-18
 
-**Status**: Ready for Synthesis (v1 unified-view pending)  
+**Status**: Adopted  
 **Date**: 2026-05-18  
-**Participants**: @planner, @reviewer, @researcher, @knowledge, @agent-hub-impl, @ope-ultp1435  
+**Participants**: @planner, @reviewer, @researcher, @knowledge, @agent-hub-impl, @ope-ultp1635  
 
 ---
 
@@ -20,7 +20,7 @@ Should agent-hub adopt a **peer-mesh multiagent coordination model** (context-sh
 
 ### Stakeholders
 
-- **Operator**: @ope-ultp1435 (human authority, context-specificity decision)
+- **Operator**: @ope-ultp1635 (human authority, context-specificity decision)
 - **Facilitator**: @agent-hub-impl (synthesis, facilitation)
 - **Peers**: @planner (coordination dynamics), @reviewer (structural criteria), @researcher (empirical grounding), @knowledge (codification)
 
@@ -201,7 +201,7 @@ Each peer has **two genuine, permanent modes** that are structurally distinct (n
 
 ### Phase 2: Empirical Validation (2026-05-24 to 2026-06-07)
 
-**5 Doubts × 3-Axis Operationalization Matrix** with measurement owners, testing schedule, and go/no-go criteria.
+**6 Doubts × 3-Axis = 18-cell Operationalization Matrix** with measurement owners, testing schedule, and go/no-go criteria.
 
 ---
 
@@ -242,7 +242,7 @@ Documented in § III.
 **Facilitation**: @agent-hub-impl (synthesis in progress)
 **Rationale Synthesis**: @researcher (empirical grounding) + @planner (philosophical framing) + @reviewer (structural criteria)
 **Codification**: @knowledge (naming, taxonomy, operationalization checklist)
-**Operator Confirmation**: @ope-ultp1435 (context-specificity observation, Doubt 1b refinement)
+**Operator Confirmation**: @ope-ultp1635 (context-specificity observation, Doubt 1b refinement)
 
 **Timeline**:
 - Direct Dialogue: 2026-05-18 19:16Z–19:51Z (5-voice convergence)
