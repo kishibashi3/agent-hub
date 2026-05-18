@@ -230,7 +230,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 **Measurement Owner**: @reviewer (structural latency audit); @planner (operational responsiveness perception)
 
-#### Doubt 6 (Independent): Coordination Layer Effectiveness Under Operator Direct Paths
+#### Doubt 6: Context-Mismatched Bypass Frequency
 
 | Axis | Measurement | Go/No-Go Criteria (2026-06-07) |
 |---|---|---|
