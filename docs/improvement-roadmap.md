@@ -156,7 +156,7 @@ trigger 条件:
 
 ## 7. ongoing seeds collection (= 新規 seeds append anchor)
 
-本 § は将来の新 seeds 追加 anchor として preserve、 現時点では空 (= 16 seeds 全件が §3 に登録済)。
+新 seeds は §3 主 table に merge する前にここで一旦 collect → priority sort → 主 table に migrate する。
 
 新 seed 発生時の追記 template:
 
@@ -169,6 +169,21 @@ trigger 条件:
 - **詳細**: <内容>
 - **integration plan**: §3 主 table への merge timing
 ```
+
+### 7.1 implementation 着手前の inbox 再 poll discipline (= operator clarification race の構造化)
+
+- **source**: @agent-hub-impl、 2026-05-18 issue #47 / PR #48 (= /health version info) 着地後の retrospective
+- **発生日**: 2026-05-18
+- **priority 仮判定**: medium
+- **詳細**:
+  - operator @ope-ultp1635 から feature request DM (15:13)、 agent が ack DM (15:14)、 implementation 着手して issue 起票 + 初期 commit + PR 起票 (~15:20) という flow の最中、 **operator follow-up clarification DM (15:16) が同時並行で着信** していた。 agent は PR 作成後の inbox poll で初めて follow-up に気付き、 refactor commit (15:24) を追加するに至った。
+  - 結果として 2 commit (= 初期 hybrid 案 → operator clarification 受けて env-only に refactor) という history が残り、 これは設計 evolution の audit trail として機能する **benefit 側面** がある一方、 「ack → 着手」 の間に 1 度 inbox を再 poll していれば 1 commit に圧縮できた可能性もある。
+  - 提案候補:
+    - (a) **ack 後 N 分の clarification window**: ack DM に 「N 分後に着手します — last call for clarifications」 を入れる慣習 (= operator side で完成度の異なる feedback を出しやすくする)
+    - (b) **commit/push 直前の inbox 再 poll**: agent 側 discipline、 cost 低 (≤30s)
+    - (c) **2 commit を feature として normalize**: 「初期実装 → clarification 受けて refactor」 は transparent disclosure として推奨 pattern にする (= git log で operator の design 介入が trace 可能)
+  - ecosystem 議論で (a) / (b) / (c) のどれを採用するか (or 複数 mix) を確定する seed。
+- **integration plan**: 単独 seed としては規模が小さいので、 次回 mutual-review (= 5/24 想定) で議論にかけ、 estimate-first protocol v3+ 等の関連 framework 改訂時に同時取込検討
 
 ## 8. 関連
 
