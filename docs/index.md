@@ -13,6 +13,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 
 - [agent-bridges.md](./agent-bridges.md) — peer worker / bridge の設計思想と実装パターン
 - [edition-model.md](./edition-model.md) — Community Edition / Private Edition の分離設計 (#18 / #10 Phase 1)
+- [design-thread-tagging.md](./design-thread-tagging.md) — thread-tagging で crossover disambiguation (#27、 (α/β/γ) 比較 draft、 operator GO 取得待ち)
 
 ## 競合 / 調査
 
