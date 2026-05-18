@@ -221,6 +221,105 @@ describe('get_history ツール', () => {
     });
   });
 
+  // issue #37 filter parameter integration tests (= 設計 doc §7.2 準拠 3 件)
+  describe('filter parameter (#37)', () => {
+    it('MCP tool filter 経由で正しく filtered messages を返却', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      // 多様な body
+      sendMessage(db, 'default', { to: 'bob', message: 'PR #34 estimate-first review' }, 'alice');
+      sendMessage(db, 'default', { to: 'alice', message: '@reviewer に依頼済み' }, 'bob');
+      sendMessage(db, 'default', { to: 'bob', message: 'PR #38 design doc landing' }, 'alice');
+
+      const result = await handleGetHistory(
+        scopeToTenant(db, 'default'),
+        { to: 'bob', filter: '#34', limit: 10 },
+        'alice'
+      );
+
+      const response = JSON.parse(result.content[0].text);
+
+      expect(response.count).toBe(1);
+      expect(response.messages).toHaveLength(1);
+      expect(response.messages[0].message).toBe('PR #34 estimate-first review');
+    });
+
+    it('不正 input (filter 非 string) → input schema validation error', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      sendMessage(db, 'default', { to: 'bob', message: 'test' }, 'alice');
+
+      // filter に number を渡す (= z.string().optional() で validation error)
+      const result = await handleGetHistory(
+        scopeToTenant(db, 'default'),
+        { to: 'bob', filter: 123 as unknown as string, limit: 10 },
+        'alice'
+      );
+
+      const response = JSON.parse(result.content[0].text);
+      expect(response.error).toBeDefined();
+    });
+
+    it('filter applied 後 limit が正しく適用 (= filter で件数 > limit な場合)', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      // 5 件 estimate-first 関連 + 2 件 unrelated
+      for (let i = 1; i <= 5; i++) {
+        sendMessage(db, 'default', { to: 'bob', message: `estimate-first message ${i}` }, 'alice');
+      }
+      sendMessage(db, 'default', { to: 'bob', message: 'unrelated 1' }, 'alice');
+      sendMessage(db, 'default', { to: 'bob', message: 'unrelated 2' }, 'alice');
+
+      // filter で 5 件 candidate、 limit=2 で 2 件のみ返却
+      const result = await handleGetHistory(
+        scopeToTenant(db, 'default'),
+        { to: 'bob', filter: 'estimate-first', limit: 2 },
+        'alice'
+      );
+
+      const response = JSON.parse(result.content[0].text);
+      expect(response.count).toBe(2);
+      expect(response.messages).toHaveLength(2);
+      // 降順 (最新 estimate-first 2 件) - 5 件中の最新 2 件 = message 5 / 4
+      expect(response.messages[0].message).toBe('estimate-first message 5');
+      expect(response.messages[1].message).toBe('estimate-first message 4');
+    });
+
+    // 設計 doc §7.3 tenant isolation verify
+    it('tenant isolation: tenant A の filter query が tenant B の messages を漏らさない', async () => {
+      // tenant A セットアップ
+      // (注: initDatabase は default tenant のみ自動 pre-create、 別 tenant は manual create が必要)
+      db.prepare('INSERT INTO tenants (domain, owner) VALUES (?, ?)').run('tenant-a', null);
+      db.prepare('INSERT INTO tenants (domain, owner) VALUES (?, ?)').run('tenant-b', null);
+
+      // tenant A: alice / bob、 message body に "PR #34" 含む
+      registerParticipant(db, 'tenant-a', { name: 'alice' });
+      registerParticipant(db, 'tenant-a', { name: 'bob' });
+      sendMessage(db, 'tenant-a', { to: 'bob', message: 'tenant A: PR #34 secret data' }, 'alice');
+
+      // tenant B: alice (= 同名だが別 tenant) / charlie、 message body に同じ "PR #34" 含む
+      registerParticipant(db, 'tenant-b', { name: 'alice' });
+      registerParticipant(db, 'tenant-b', { name: 'charlie' });
+      sendMessage(db, 'tenant-b', { to: 'charlie', message: 'tenant B: PR #34 separate data' }, 'alice');
+
+      // tenant A の alice が filter で "PR #34" 検索
+      const resultA = await handleGetHistory(
+        scopeToTenant(db, 'tenant-a'),
+        { to: 'bob', filter: 'PR #34', limit: 10 },
+        'alice'
+      );
+
+      const responseA = JSON.parse(resultA.content[0].text);
+      // tenant A の message のみ取得、 tenant B の同 keyword 含む message は漏れない
+      expect(responseA.count).toBe(1);
+      expect(responseA.messages[0].message).toBe('tenant A: PR #34 secret data');
+      expect(responseA.messages[0].message).not.toContain('tenant B');
+    });
+  });
+
   describe('レスポンス形式の一貫性', () => {
     it('メッセージフィールドは get_messages と同じ構造を返す', async () => {
       registerParticipant(db, 'default', { name: 'alice' });

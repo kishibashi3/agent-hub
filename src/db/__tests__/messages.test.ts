@@ -331,6 +331,97 @@ describe('messages.ts', () => {
     });
   });
 
+  // issue #37 filter parameter tests (= 設計 doc docs/design-get-history-filter.md §7.1 準拠)
+  describe('getHistory filter parameter (#37)', () => {
+    beforeEach(() => {
+      // 共通 fixture: alice <-> bob で 多様な body の messages
+      sendMessage(db, 'default', { to: 'bob', message: 'PR #27 の review 進捗どうですか' }, 'alice');
+      sendMessage(db, 'default', { to: 'alice', message: '@reviewer に確認したら明日には終わるそうです' }, 'bob');
+      sendMessage(db, 'default', { to: 'bob', message: 'estimate-first protocol v2.4 が merged されました' }, 'alice');
+      sendMessage(db, 'default', { to: 'alice', message: 'PR #34 estimate-first の話ですか？' }, 'bob');
+      sendMessage(db, 'default', { to: 'bob', message: 'はい、 #34 です' }, 'alice');
+    });
+
+    it('filter 指定なし → 既存 behavior と同等 (backward compat)', () => {
+      const history = getHistory(db, 'default', { to: 'bob', limit: 50 }, 'alice');
+
+      expect(history).toHaveLength(5);
+    });
+
+    it('filter で issue 番号 (#27) を含む message のみ取得', () => {
+      const history = getHistory(db, 'default', { to: 'bob', filter: '#27', limit: 50 }, 'alice');
+
+      expect(history).toHaveLength(1);
+      expect(history[0].body).toBe('PR #27 の review 進捗どうですか');
+    });
+
+    it('filter で peer 名 (@reviewer) を含む message のみ取得', () => {
+      const history = getHistory(db, 'default', { to: 'bob', filter: '@reviewer', limit: 50 }, 'alice');
+
+      expect(history).toHaveLength(1);
+      expect(history[0].body).toBe('@reviewer に確認したら明日には終わるそうです');
+    });
+
+    it('filter で keyword (estimate-first) を含む message のみ取得', () => {
+      const history = getHistory(db, 'default', { to: 'bob', filter: 'estimate-first', limit: 50 }, 'alice');
+
+      expect(history).toHaveLength(2);
+      // 降順 (新しい順)
+      expect(history[0].body).toBe('PR #34 estimate-first の話ですか？');
+      expect(history[1].body).toBe('estimate-first protocol v2.4 が merged されました');
+    });
+
+    it('filter 空文字列 → filter なしと同等扱い (ignore)', () => {
+      const history = getHistory(db, 'default', { to: 'bob', filter: '', limit: 50 }, 'alice');
+
+      expect(history).toHaveLength(5);
+    });
+
+    it('filter で ASCII case-insensitive match (REVIEWER ↔ reviewer)', () => {
+      const history = getHistory(db, 'default', { to: 'bob', filter: 'REVIEWER', limit: 50 }, 'alice');
+
+      // SQLite default LIKE は ASCII case-insensitive
+      expect(history).toHaveLength(1);
+      expect(history[0].body).toBe('@reviewer に確認したら明日には終わるそうです');
+    });
+
+    it('filter 内 SQL meta char (%) は literal match (SQL injection 防止 / wildcard 化しない)', () => {
+      // SQL meta char `%` を含む body を 1 件追加
+      sendMessage(db, 'default', { to: 'bob', message: '進捗 50% completed' }, 'alice');
+
+      // filter として `%` 単体を渡す
+      // 注: SQLite LIKE では `%` は wildcard だが、 parameterized query (= '%' || ? || '%') では
+      // ? に渡された値は wildcard として展開されず substring としてのみ match。
+      // (本 design は SQL injection 防止 + 期待動作 = literal `%` match)
+      const history = getHistory(db, 'default', { to: 'bob', filter: '50%', limit: 50 }, 'alice');
+
+      // `50%` を含む 1 件のみ match (= 他 message に `50%` substring なし)
+      expect(history).toHaveLength(1);
+      expect(history[0].body).toBe('進捗 50% completed');
+    });
+
+    it('filter 内 Japanese (ヒアリング) は case-sensitive match (default 動作確認)', () => {
+      // 日本語 body を追加
+      sendMessage(db, 'default', { to: 'bob', message: 'ヒアリング ありがとうございました' }, 'alice');
+
+      const history = getHistory(db, 'default', { to: 'bob', filter: 'ヒアリング', limit: 50 }, 'alice');
+
+      // SQLite default で non-ASCII は case-sensitive、 完全一致するので match
+      expect(history).toHaveLength(1);
+      expect(history[0].body).toBe('ヒアリング ありがとうございました');
+    });
+
+    it('team channel filter (= member only access + filter 動作)', () => {
+      sendMessage(db, 'default', { to: 'team-alpha', message: 'team msg about PR #34' }, 'alice');
+      sendMessage(db, 'default', { to: 'team-alpha', message: 'unrelated team chat' }, 'bob');
+
+      const history = getHistory(db, 'default', { to: 'team-alpha', filter: '#34', limit: 50 }, 'charlie');
+
+      expect(history).toHaveLength(1);
+      expect(history[0].body).toBe('team msg about PR #34');
+    });
+  });
+
   describe('markAsRead', () => {
     it('DM を既読にできる', () => {
       const msg = sendMessage(db, 'default', { to: 'bob', message: 'test' }, 'alice');
