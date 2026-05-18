@@ -2,7 +2,9 @@
 
 cron-based DM scheduler as agent-hub package (= [issue #40](https://github.com/kishibashi3/agent-hub/issues/40))。 軽量 Python daemon、 `schedules.json` の cron 設定に従って agent-hub 参加者に DM を送る。
 
-**Bidirectional 化** (= [issue #65](https://github.com/kishibashi3/agent-hub/issues/65)): scheduler 自身が agent-hub に participant として register + 自分の inbox を SSE subscribe、 受信 DM に command として反応 (= `ping` / `schedules` / `run now <idx>`)。 単方向 cron daemon ではなく **対話可能な peer** として動作。
+**Bidirectional 化** (= [issue #65](https://github.com/kishibashi3/agent-hub/issues/65)): scheduler 自身が agent-hub に participant として register + 自分の inbox を SSE subscribe、 受信 DM に command として反応。 単方向 cron daemon ではなく **対話可能な peer** として動作。
+
+**主 use case**: operator が `send_message` だけで long-term cron の `start` / `stop` (= 永続的 enable/disable) を行えること。 `stop daily-report` で次回以降の自動 fire を抑止、 `start daily-report` で再有効化、 状態は `schedules.json` に永続化される。
 
 LLM 不要、 Pi5 で agent-hub server と並走想定。
 
@@ -21,28 +23,36 @@ pip install -r requirements.txt
 
 ### 2. 設定
 
-`schedules.json` を編集:
+`schedules.json` を編集 (= issue #65 v2 schema、 `name` + `enabled` 必須):
 
 ```json
 [
   {
+    "name": "daily-report",
     "cron": "0 13 * * *",
     "to": "@planner",
-    "message": "daily report を書いてください"
+    "message": "daily report を書いてください",
+    "enabled": true
   },
   {
+    "name": "review-queue",
     "cron": "*/30 * * * *",
     "to": "@reviewer",
-    "message": "新規 PR の queue を確認"
+    "message": "新規 PR の queue を確認",
+    "enabled": true
   }
 ]
 ```
 
+- `name`: 一意な識別子 (= `start <name>` / `stop <name>` / `run now <name>` で参照)、 **unique 必須**、 string
 - `cron`: 標準 cron 式 (= `分 時 日 月 曜日`)
 - `to`: agent-hub 参加者 (`@handle`) or team (`@team-name`)
 - `message`: DM 本文
+- `enabled`: cron fire の有効/無効、 bool、 **省略時 default `true`** (= 既存挙動互換)、 inbox command `start`/`stop` で永続的に変更される
 
 `cron` 式は [croniter](https://github.com/kiorky/croniter) の syntax (= standard 5-field) を使用。
+
+**migration note** (= 既存 schedules.json from issue #65 v1): `name` 欠落で `[ERR]` exit、 各 entry に `"name": "<unique-id>"` 追加が必要。 daemon は **silent default を許さず明示的 migration を要求** (= `name` が `start/stop` の identifier として critical のため)。
 
 設定 file path は `$SCHEDULER_CONFIG` で override 可能 (= default `packages/scheduler/schedules.json`)。
 
@@ -85,38 +95,57 @@ python scheduler.py
 
 main thread (cron) と SSE thread (inbox) は独立 session で動作、 互いに非干渉。
 
-## Inbox command (= bidirectional、 issue #65)
+## Inbox command (= bidirectional、 issue #65 v2)
 
 scheduler 自身に DM を送ると以下 command として反応:
 
-| command | 動作 | reply |
+| command | 動作 | 永続化 |
 |---|---|---|
-| `ping` | scheduler の生存確認 | `pong (scheduler alive, N schedules loaded)` |
-| `schedules` | 現在の schedules.json 内容を listing | `schedules (N loaded):\n[0] cron='...' to=... message='...'`<br>`[1] ...` |
-| `run now <idx>` | 指定 idx の schedule を即時 fire (= cron 無視) | `[OK] fired schedule[<idx>] → <to>` または error message |
-| その他 | unknown command | usage hint |
+| `ping` | scheduler の生存確認 | なし |
+| `schedules` | 全 schedule listing (= name + cron + to + message + enabled state) | なし |
+| `start <name>` | 指定 schedule の `enabled=true` (= cron 有効化) | ✅ schedules.json に atomic write |
+| `stop <name>` | 指定 schedule の `enabled=false` (= cron 無効化) | ✅ schedules.json に atomic write |
+| `run now <name>` | 指定 schedule を **one-shot** 即時 fire (= cron 設定 unchanged) | なし (= enabled state も unchanged) |
+| その他 | unknown command | — |
 
-### 使用例
+### 使用例 (= operator から @scheduler への DM)
 
 ```
 operator → @scheduler: ping
-@scheduler → operator: pong (scheduler alive, 2 schedules loaded)
+@scheduler → operator: pong (scheduler alive, 2 schedules loaded, 2 enabled)
 
 operator → @scheduler: schedules
 @scheduler → operator: schedules (2 loaded):
-[0] cron='0 13 * * *' to=@planner message='daily report を書いてください'
-[1] cron='*/30 * * * *' to=@reviewer message='新規 PR の queue を確認'
+  [ON ] daily-report         cron='0 13 * * *' to=@planner message='daily report を書いてください...'
+  [ON ] review-queue         cron='*/30 * * * *' to=@reviewer message='新規 PR の queue を確認...'
 
-operator → @scheduler: run now 0
+# 一時的に停止
+operator → @scheduler: stop daily-report
+@scheduler → operator: [OK] stopped 'daily-report' (enabled=false, persisted to schedules.json)
+
+operator → @scheduler: schedules
+@scheduler → operator: schedules (2 loaded):
+  [OFF] daily-report         cron='0 13 * * *' to=@planner message='daily report を書いてください...'
+  [ON ] review-queue         cron='*/30 * * * *' to=@reviewer message='新規 PR の queue を確認...'
+
+# 再有効化
+operator → @scheduler: start daily-report
+@scheduler → operator: [OK] started 'daily-report' (enabled=true, persisted to schedules.json)
+
+# one-shot fire (= 通常 schedule に影響しない)
+operator → @scheduler: run now daily-report
 @scheduler → @planner: daily report を書いてください
-@scheduler → operator: [OK] fired schedule[0] → @planner
+@scheduler → operator: [OK] one-shot fired 'daily-report' → @planner (enabled state unchanged)
 ```
 
 ### 設計判断 (= 安全性)
 
-- **`run now` の idx 必須**: 単独 `run now` を全 schedule 発射 として実装すると mistype で全 peer に DM 連投する事故が起き得るため、 idx を必須化 (= explicit confirmation)
-- **schedules.json の編集 command なし**: 設定変更は git + service restart の path に限定 (= 一時的な状態変更 commands は提供しない、 config drift 防止)
+- **start/stop は永続化必須**: operator の primary use case が 「long-term cron の start/stop」 なので、 daemon restart 後も state が persist する必要あり。 schedules.json を atomic write (= temp file → fsync → rename) で更新
+- **`run now <name>` は one-shot のみ**: cron 設定や enabled state には触れない、 単発 fire 用途。 `name` 必須で typo 事故防止
+- **schedules.json の git workflow**: daemon が start/stop で diff を作る → operator が次の deploy 時に commit (= state は config drift ではなく **operational state の git 経由 audit trail**)
+- **concurrency**: `threading.Lock` で main thread (= cron read) と SSE thread (= start/stop write) の race condition を防ぐ
 - **mark_as_read で再 dispatch 回避**: handled message は即時既読化、 SSE reconnect 時の重複処理を防ぐ
+- **schedule の在/不在は name 一意性で識別**: schedules.json で name duplicate → daemon startup で exit、 同一 name の 2 件は不正
 
 ## エラーハンドリング
 

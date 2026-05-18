@@ -47,6 +47,13 @@ TENANT = os.environ.get("AGENT_HUB_TENANT", "")
 # Default to schedules.json next to this script
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "schedules.json"
 
+# issue #65 v2 redesign: schedules list は main thread (cron read) と SSE thread
+# (start/stop write) で共有される mutable state、 排他 access が必要。
+# `_schedules_lock` を with 文で取得して: read 中の write / write 中の read を防ぐ。
+# save_schedules() の atomic file write も同 lock 内で行う (= memory state と disk state
+# の monotonic consistency 保証)。
+_schedules_lock = threading.Lock()
+
 
 def build_headers() -> dict[str, str]:
     """MCP HTTP request headers (= auth + tenant + content-type)."""
@@ -282,102 +289,240 @@ def mark_message_read(
 # ============================================================
 
 
+def _find_by_name(
+    schedules: list[dict[str, Any]], name: str
+) -> tuple[int, dict[str, Any]] | tuple[None, None]:
+    """schedules list から name 一致の (idx, entry) を返す。 見つからなければ (None, None)。"""
+    for i, s in enumerate(schedules):
+        if s.get("name") == name:
+            return i, s
+    return None, None
+
+
 def handle_inbox_command(
     headers: dict[str, str],
     session_id: str,
     sender: str,
     body: str,
-    schedules: list[dict[str, str]],
+    schedules: list[dict[str, Any]],
+    config_path: Path,
 ) -> None:
     """inbox に届いた DM body を parse し command として実行、 sender へ reply。
 
-    現在対応 command:
-    - `ping`                  : `pong (scheduler alive, N schedules loaded)` を reply
-    - `schedules`             : 現在の schedules.json 内容を reply
-    - `run now <idx>`         : 指定 idx の schedule を即時 fire (cron は無視)
+    issue #65 v2 redesign (= operator use case clarification 反映):
+    operator が send_message だけで long-term cron の start/stop を行いたい
+    という primary use case。 schedules.json への永続的 enable/disable 反映が core。
 
-    未知 command は usage hint を reply。 副作用は最小 (= schedules は変更しない、
-    cron も touch しない、 即時実行のみ)。
+    対応 command:
+    - `ping`              : 生存確認 (= 残置)
+    - `schedules`         : 全 schedule listing + enabled state 表示
+    - `start <name>`      : 指定 schedule の enabled=true、 schedules.json 永続化
+    - `stop <name>`       : 指定 schedule の enabled=false、 schedules.json 永続化
+    - `run now <name>`    : 指定 schedule を one-shot 即時 fire (= cron 設定 unchanged、 optional)
+    - 未知 command       : usage hint
+
+    start/stop は `_schedules_lock` 内で memory state + disk state を atomic に更新。
+    `enabled` flag は main thread cron loop で fire 時 check される。
     """
     body_stripped = body.strip()
-    cmd_first = body_stripped.split(maxsplit=1)[0].lower() if body_stripped else ""
+    parts = body_stripped.split()
+    cmd_first = parts[0].lower() if parts else ""
 
     try:
         if cmd_first == "ping":
+            with _schedules_lock:
+                enabled_count = sum(
+                    1 for s in schedules if s.get("enabled", True)
+                )
             send_dm(
                 headers,
                 session_id,
                 sender,
-                f"pong (scheduler alive, {len(schedules)} schedules loaded)",
+                f"pong (scheduler alive, {len(schedules)} schedules loaded, "
+                f"{enabled_count} enabled)",
             )
             print(f"[CMD] ping ← {sender}")
 
         elif cmd_first == "schedules":
-            if not schedules:
-                send_dm(
-                    headers, session_id, sender, "schedules: (none loaded)"
-                )
-            else:
-                listing = "\n".join(
-                    f"[{i}] cron='{s['cron']}' to={s['to']} message='{s['message'][:60]}{'...' if len(s['message']) > 60 else ''}'"
-                    for i, s in enumerate(schedules)
-                )
+            with _schedules_lock:
+                if not schedules:
+                    listing_text = "schedules: (none loaded)"
+                else:
+                    lines = []
+                    for s in schedules:
+                        state = "ON " if s.get("enabled", True) else "OFF"
+                        msg = s["message"]
+                        msg_preview = (
+                            f"{msg[:60]}{'...' if len(msg) > 60 else ''}"
+                        )
+                        lines.append(
+                            f"  [{state}] {s['name']:20s} cron='{s['cron']}' "
+                            f"to={s['to']} message='{msg_preview}'"
+                        )
+                    listing_text = (
+                        f"schedules ({len(schedules)} loaded):\n"
+                        + "\n".join(lines)
+                    )
+            send_dm(headers, session_id, sender, listing_text)
+            print(f"[CMD] schedules ← {sender}")
+
+        elif cmd_first == "start":
+            if len(parts) < 2:
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    f"schedules ({len(schedules)} loaded):\n{listing}",
+                    "[ERR] usage: `start <name>` (name = schedule name in `schedules` output)",
                 )
-            print(f"[CMD] schedules ← {sender}")
+                return
+            name = parts[1]
+            with _schedules_lock:
+                idx, s = _find_by_name(schedules, name)
+                if idx is None or s is None:
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] no schedule named '{name}'. "
+                        f"use `schedules` to list available names.",
+                    )
+                    return
+                was_enabled = s.get("enabled", True)
+                s["enabled"] = True
+                # persist to disk
+                try:
+                    save_schedules(config_path, schedules)
+                except Exception as e:
+                    # rollback memory state on disk write failure
+                    s["enabled"] = was_enabled
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] start '{name}': persist failed ({e}), state unchanged",
+                    )
+                    print(
+                        f"[ERR] save_schedules failed: {e}", file=sys.stderr
+                    )
+                    return
+            if was_enabled:
+                send_dm(
+                    headers,
+                    session_id,
+                    sender,
+                    f"[OK] '{name}' already enabled (no change)",
+                )
+            else:
+                send_dm(
+                    headers,
+                    session_id,
+                    sender,
+                    f"[OK] started '{name}' (enabled=true, persisted to schedules.json)",
+                )
+            print(
+                f"[CMD] start name={name} (was_enabled={was_enabled}) ← {sender}"
+            )
+
+        elif cmd_first == "stop":
+            if len(parts) < 2:
+                send_dm(
+                    headers,
+                    session_id,
+                    sender,
+                    "[ERR] usage: `stop <name>` (name = schedule name in `schedules` output)",
+                )
+                return
+            name = parts[1]
+            with _schedules_lock:
+                idx, s = _find_by_name(schedules, name)
+                if idx is None or s is None:
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] no schedule named '{name}'. "
+                        f"use `schedules` to list available names.",
+                    )
+                    return
+                was_enabled = s.get("enabled", True)
+                s["enabled"] = False
+                # persist to disk
+                try:
+                    save_schedules(config_path, schedules)
+                except Exception as e:
+                    # rollback memory state on disk write failure
+                    s["enabled"] = was_enabled
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] stop '{name}': persist failed ({e}), state unchanged",
+                    )
+                    print(
+                        f"[ERR] save_schedules failed: {e}", file=sys.stderr
+                    )
+                    return
+            if not was_enabled:
+                send_dm(
+                    headers,
+                    session_id,
+                    sender,
+                    f"[OK] '{name}' already disabled (no change)",
+                )
+            else:
+                send_dm(
+                    headers,
+                    session_id,
+                    sender,
+                    f"[OK] stopped '{name}' (enabled=false, persisted to schedules.json)",
+                )
+            print(
+                f"[CMD] stop name={name} (was_enabled={was_enabled}) ← {sender}"
+            )
 
         elif cmd_first == "run":
-            # `run now <idx>` 限定 (= 単独 `run` は曖昧、 reject)
-            parts = body_stripped.split()
+            # `run now <name>` 限定 (= one-shot 即時 fire、 enabled 状態には触れない)
             if len(parts) < 3 or parts[1].lower() != "now":
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    "[ERR] usage: `run now <idx>` (idx = schedule index in `schedules` output)",
+                    "[ERR] usage: `run now <name>` (one-shot fire, doesn't change enabled state)",
                 )
                 return
+            name = parts[2]
+            with _schedules_lock:
+                idx, s = _find_by_name(schedules, name)
+                if idx is None or s is None:
+                    send_dm(
+                        headers,
+                        session_id,
+                        sender,
+                        f"[ERR] no schedule named '{name}'. "
+                        f"use `schedules` to list available names.",
+                    )
+                    return
+                # snapshot to fire outside lock (= send_dm may take time)
+                fire_to = s["to"]
+                fire_msg = s["message"]
             try:
-                idx = int(parts[2])
-            except ValueError:
+                send_dm(headers, session_id, fire_to, fire_msg)
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    f"[ERR] invalid idx '{parts[2]}': must be integer",
-                )
-                return
-            if not (0 <= idx < len(schedules)):
-                send_dm(
-                    headers,
-                    session_id,
-                    sender,
-                    f"[ERR] idx {idx} out of range (0-{len(schedules) - 1})",
-                )
-                return
-            s = schedules[idx]
-            try:
-                send_dm(headers, session_id, s["to"], s["message"])
-                send_dm(
-                    headers,
-                    session_id,
-                    sender,
-                    f"[OK] fired schedule[{idx}] → {s['to']}",
+                    f"[OK] one-shot fired '{name}' → {fire_to} (enabled state unchanged)",
                 )
                 print(
-                    f"[RUN-NOW] idx={idx} ← {sender}: {s['to']}: "
-                    f"{s['message'][:50]}{'...' if len(s['message']) > 50 else ''}"
+                    f"[RUN-NOW] name={name} ← {sender}: {fire_to}: "
+                    f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
                 )
             except Exception as e:
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    f"[ERR] fire failed for schedule[{idx}]: {e}",
+                    f"[ERR] fire failed for '{name}': {e}",
                 )
 
         else:
@@ -385,7 +530,8 @@ def handle_inbox_command(
                 headers,
                 session_id,
                 sender,
-                f"[unknown command] '{body_stripped[:50]}'. usage: `ping` / `schedules` / `run now <idx>`",
+                f"[unknown command] '{body_stripped[:50]}'. "
+                f"usage: `ping` / `schedules` / `start <name>` / `stop <name>` / `run now <name>`",
             )
             print(f"[CMD] unknown ← {sender}: {body_stripped[:50]}")
 
@@ -405,7 +551,8 @@ def handle_inbox_command(
 def sse_listen_loop(
     headers: dict[str, str],
     user_id: str,
-    schedules: list[dict[str, str]],
+    schedules: list[dict[str, Any]],
+    config_path: Path,
 ) -> None:
     """Background thread main loop:
     1. own MCP session を init
@@ -481,7 +628,7 @@ def sse_listen_loop(
                             body = m.get("message", "")
                             msg_id = m.get("id")
                             handle_inbox_command(
-                                headers, sid, sender, body, schedules
+                                headers, sid, sender, body, schedules, config_path
                             )
                             if msg_id:
                                 mark_message_read(headers, sid, msg_id)
@@ -508,10 +655,15 @@ def sse_listen_loop(
 # ============================================================
 
 
-def load_schedules(config_path: Path) -> list[dict[str, str]]:
+def load_schedules(config_path: Path) -> list[dict[str, Any]]:
     """schedules.json を読み込んで validation 済 list を返す。
 
-    JSON parse error / file not found / 必須 field 欠落 で sys.exit(1)。
+    issue #65 v2 schema: 各 entry に `name` (string, unique) + `enabled` (bool,
+    default true) を要求。 silent default は config drift 起源になるため、
+    `name` 欠落は **明示的 migration が必要** として exit(1)。
+
+    JSON parse error / file not found / 必須 field 欠落 / name duplicate /
+    invalid cron で sys.exit(1)。
     """
     try:
         text = config_path.read_text(encoding="utf-8")
@@ -535,18 +687,28 @@ def load_schedules(config_path: Path) -> list[dict[str, str]]:
         )
         sys.exit(1)
 
-    # Validate each entry
-    required = ("cron", "to", "message")
+    # Validate each entry (= issue #65 v2: name + enabled 含む)
+    required_str = ("name", "cron", "to", "message")
+    seen_names: set[str] = set()
     for i, entry in enumerate(data):
         if not isinstance(entry, dict):
             print(f"[ERR] schedule[{i}]: must be object", file=sys.stderr)
             sys.exit(1)
-        for key in required:
+        for key in required_str:
             if key not in entry:
-                print(
-                    f"[ERR] schedule[{i}]: missing required field '{key}'",
-                    file=sys.stderr,
-                )
+                if key == "name":
+                    print(
+                        f"[ERR] schedule[{i}]: missing required field 'name'. "
+                        f"issue #65 v2 schema requires `name` (string, unique) for "
+                        f"each entry. Migration: add `\"name\": \"<unique-id>\"` "
+                        f"to each entry (= used by `start/stop/run now` commands).",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"[ERR] schedule[{i}]: missing required field '{key}'",
+                        file=sys.stderr,
+                    )
                 sys.exit(1)
             if not isinstance(entry[key], str):
                 print(
@@ -554,6 +716,35 @@ def load_schedules(config_path: Path) -> list[dict[str, str]]:
                     file=sys.stderr,
                 )
                 sys.exit(1)
+
+        # name uniqueness validation (= start/stop で identifier として機能するため)
+        name = entry["name"]
+        if not name:
+            print(
+                f"[ERR] schedule[{i}].name: must be non-empty string",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if name in seen_names:
+            print(
+                f"[ERR] schedule[{i}].name: duplicate name '{name}' "
+                f"(names must be unique for start/stop dispatch)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        seen_names.add(name)
+
+        # enabled field validation (default true)
+        if "enabled" in entry:
+            if not isinstance(entry["enabled"], bool):
+                print(
+                    f"[ERR] schedule[{i}].enabled: must be boolean (got {type(entry['enabled']).__name__})",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            entry["enabled"] = True  # default
+
         # cron expression validation
         try:
             croniter(entry["cron"], datetime.now())
@@ -565,6 +756,25 @@ def load_schedules(config_path: Path) -> list[dict[str, str]]:
             sys.exit(1)
 
     return data
+
+
+def save_schedules(config_path: Path, schedules: list[dict[str, Any]]) -> None:
+    """schedules.json を atomic write で更新 (= issue #65 v2 永続化)。
+
+    手順:
+    1. config_path.tmp に full content を JSON dump
+    2. fsync で OS-level buffer flush
+    3. os.replace で atomic rename (= power loss / SIGTERM 時の half-write 防止)
+
+    呼び出し側 (= start/stop handler) は `_schedules_lock` 取得済前提。
+    """
+    tmp_path = config_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(schedules, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, config_path)
 
 
 # ============================================================
@@ -604,9 +814,10 @@ def main() -> None:
     # issue #65: bidirectional 化、 SSE listener を background thread で起動。
     # 自分自身 (= user_id) の handle で register + inbox subscribe + SSE 待ち + command dispatch。
     # daemon=True で main thread 終了に連動して自動 cleanup (= SIGINT 時の挙動 preserve)。
+    # config_path を渡して start/stop の永続化先を共有 (= issue #65 v2)。
     sse_thread = threading.Thread(
         target=sse_listen_loop,
-        args=(headers, user_id, schedules),
+        args=(headers, user_id, schedules, config_path),
         name="sse-listener",
         daemon=True,
     )
@@ -620,7 +831,8 @@ def main() -> None:
     if schedules:
         print(
             "[ready] " + "; ".join(
-                f"[{i}] cron='{s['cron']}' to={s['to']} next={next_times[i].isoformat()}"
+                f"[{i}] name='{s['name']}' cron='{s['cron']}' to={s['to']} "
+                f"enabled={s.get('enabled', True)} next={next_times[i].isoformat()}"
                 for i, s in enumerate(schedules)
             )
         )
@@ -644,16 +856,35 @@ def main() -> None:
             time.sleep(min(wait_s, 60))
             continue
 
-        # Fire
-        s = schedules[min_idx]
-        try:
-            send_dm(headers, session_id, s["to"], s["message"])
+        # Fire (= issue #65 v2: enabled state を fire 直前に check、 SSE thread からの
+        # start/stop 反映を最新で参照)
+        with _schedules_lock:
+            s = schedules[min_idx]
+            is_enabled = s.get("enabled", True)
+            # snapshot to fire outside lock (= send_dm may take time)
+            fire_name = s["name"]
+            fire_to = s["to"]
+            fire_msg = s["message"]
+
+        if not is_enabled:
+            # disabled: 何もしない + 次回 fire time を advance
             print(
-                f"[FIRE] {next_due.isoformat()} → {s['to']}: {s['message'][:50]}"
-                f"{'...' if len(s['message']) > 50 else ''}"
+                f"[SKIP] {next_due.isoformat()} name='{fire_name}' (enabled=false)"
+            )
+            next_times[min_idx] = iters[min_idx].get_next(datetime)
+            continue
+
+        try:
+            send_dm(headers, session_id, fire_to, fire_msg)
+            print(
+                f"[FIRE] {next_due.isoformat()} name='{fire_name}' → {fire_to}: "
+                f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
             )
         except Exception as e:
-            print(f"[ERR] send_dm failed for schedule[{min_idx}]: {e}", file=sys.stderr)
+            print(
+                f"[ERR] send_dm failed for schedule[{min_idx}] name='{fire_name}': {e}",
+                file=sys.stderr,
+            )
             # Session が切れている可能性、 re-init を試行
             try:
                 session_id = init_session(headers)
