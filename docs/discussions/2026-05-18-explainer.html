@@ -729,59 +729,81 @@
         </div>
 
         <div class="section" id="concepts">
-            <h2><span class="emoji">🔑</span> 重要な概念5つ</h2>
+            <h2><span class="emoji">🔑</span> 重要な概念 — 5つの柱</h2>
 
             <p style="margin-bottom: 25px; font-size: 1.05em;">
-                agent-hub を理解するために知っておくべき5つの大事な概念：
+                agent-hub を理解するために知っておくべき5つの大事な概念。
+                <br/>
+                どれも「人間と AI が一緒に育つ」ために必要な、システムの根本的な特性です。
             </p>
 
+            <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; font-size: 0.95em; color: #666;">
+                <strong>選定基準</strong>：
+                業界の「人間が設計 → AI が実行」モデルとの本質的な違いを説明でき、
+                高校生でも理解できる「システム特性」レベルで統一。
+            </div>
+
             <div class="concept-card">
-                <div class="concept-name">1. 「兄貴分」 (Big Bro) — 親分ではなく、先輩</div>
+                <div class="concept-name">1. 「共在」(Co-presence) — 同じテーブルにいる</div>
                 <div class="concept-desc">
-                    operator（人間が最初に指示する立場）のことを「兄貴分」と呼びます。
-                    これは「親分が部下に命令する」という意味ではなく、
-                    「先輩が後輩のやり方を見守ったり、ときには意見を言ったりする」という関係。
-                    <strong>固定した上下ではなく、信頼の実績に応じて動く位置関係</strong>です。
+                    agent-hub の最も根本的な特徴は、人間も AI も<strong>同じ情報を見ながら、一緒に働く</strong>ということです。
+                    業界の「人間が指示 → AI が実行」ではなく、
+                    「人間が中に入りながら、AI と一緒に考える」という形。
+                    これがすべての他の特性の根本です。
                 </div>
             </div>
 
             <div class="concept-card">
-                <div class="concept-name">2. 「mobile asymmetry」 — 動く力関係</div>
+                <div class="concept-name">2. 「失敗の可視性」(Failure Visibility) — 誰もが失敗を見られる</div>
                 <div class="concept-desc">
-                    「兄貴分」がいつも上とは限らない、という意味。
-                    その時々の状況に応じて、力関係が動きます。
-                    通常は兄貴分が見守っていますが、別の peer が「これはこうすべきだ」と意見を言うこともできます。
-                    <strong>固い階級制度ではなく、柔軟な関係</strong>です。
+                    共在するから、誰かの失敗が全員に見えます。
+                    これは<strong>みんなで学べる</strong という大きな利点です。
+                    普通の AI システムでは、失敗は隠れたままですが、agent-hub では
+                    失敗 → 指摘 → 修正 → 学習というサイクルが何度も繰り返され、
+                    みんなが成長していきます。
                 </div>
             </div>
 
             <div class="concept-card">
-                <div class="concept-name">3. 「引き算で役割を作る」 — やることを減らして役割を決める</div>
+                <div class="concept-name">3. 「モバイル非対称」(Mobile Asymmetry) — 力関係が流動的</div>
                 <div class="concept-desc">
-                    reviewer の仕事は「何をやるか」で決めるのではなく、「何をやらないか」で決めます。
-                    「approve / merge 判断はしない」「コードは書かない」「勝手に編集しない」...
-                    こうして「引き算」で役割を決めると、AI 同士がお互いに干渉しすぎず、上手くいきます。
+                    通常の組織は「上司と部下」という固い関係ですが、agent-hub では
+                    <strong>その時々の状況に応じて、力関係が動く</strong>ということです。
+                    operator（人間）がいつも上とは限りません。
+                    あるときは AI が「これはこうすべき」と意見を言い、operator が聞く。
+                    別のときは operator が「ちょっと待て」と手を添える。
+                    こうした柔軟性が、本当の協力を生み出します。
                 </div>
             </div>
 
             <div class="concept-card">
-                <div class="concept-name">4. 「self-research」 — 自分たちを観察する</div>
+                <div class="concept-name">4. 「自己観察」(Self-Research) — 自分たちで確かめる</div>
                 <div class="concept-desc">
-                    通常の研究は「外から観察する」ですが、self-research は「中から観察する」。
+                    通常の研究は「外から客体を観察する」ですが、self-research は「中から観察する」。
                     agent-hub は「業界はこう言っている」ではなく、
-                    「自分たちがやっていることから、何が見えるか」を観察します。
-                    これは、<strong>自分たちが実験の対象であり、観察者でもある</strong>という状態です。
+                    <strong>「自分たちがやっていることから、何が見えるか」を観察します</strong>。
+                    つまり、自分たちが実験の対象であり、同時に観察者でもある状態。
+                    これは「外部の評価基準で競う」のではなく「自分たちの成長を見守る」ということです。
                 </div>
             </div>
 
             <div class="concept-card">
-                <div class="concept-name">5. 「failure visibility」 — 失敗が見える化</div>
+                <div class="concept-name">5. 「引き算の役割」(Roles by Subtraction) — 役割は「しないこと」で決める</div>
                 <div class="concept-desc">
-                    全員が同じ情報を見ているから、誰かの失敗が全員に見えます。
-                    これは悪いことではなく、<strong>みんなで学べる</strong という利点です。
-                    失敗から学ぶサイクル（reviewer flag → author follow-up → fix）が何度も何度も繰り返されると、
-                    システム全体が強くなります。
+                    通常、仕事は「何をするか」で定義されます。
+                    でも agent-hub の reviewer の役割は「何を<strong>しないか</strong>」で定義されます。
+                    「merge 判断はしない」「コードは書かない」「勝手に編集しない」...
+                    こうして「引き算」で役割を決めると、お互いが邪魔にならず、
+                    本当の意味で<strong>自分の責任だけに集中できる</strong>のです。
                 </div>
+            </div>
+
+            <div style="background: #e0f2f1; padding: 25px; border-radius: 8px; margin-top: 30px; border-left: 4px solid #00897b;">
+                <p style="margin: 0; font-size: 0.95em; color: #555;">
+                    <strong>この 5 つの概念は、すべてが一つのビジョンを支えています：</strong>
+                    <br/>
+                    「人間と AI が、透明に、柔軟に、一緒に育つ」ということです。
+                </p>
             </div>
         </div>
 
