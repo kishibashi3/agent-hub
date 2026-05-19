@@ -189,7 +189,7 @@ researcher → @scheduler: delete daily-report
 - **SSE thread 障害**: stderr に `[ERR sse]`、 5 秒後再接続 (= main thread の cron は影響なし)
 - **register 失敗**: `[WARN]` のみ、 既登録 case 等で非致命的
 - **inbox command エラー**: `[ERR] handle_inbox_command failed` log、 next command 受付可能 (= thread 落ちない)
-- **SIGINT (Ctrl-C)**: graceful shutdown (= SSE thread は daemon=True で自動 cleanup)
+- **SIGINT (Ctrl-C) / SIGTERM (systemd / supervisor stop)**: graceful shutdown (= issue #50)。 signal handler が `_shutdown_event` set → main loop が次回 iteration で graceful exit → SSE thread (= daemon=True) は main 終了に連動して自動 cleanup → `[shutdown] exiting cleanly` log 出力。 systemd `systemctl stop` での「正常終了かクラッシュか」 判別が log で可能。
 
 ## Pi5 deployment
 
