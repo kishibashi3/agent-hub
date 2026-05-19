@@ -4,8 +4,8 @@ agent-hub cron-based DM scheduler (issue #40 / #65)
 
 schedules.json を読んで cron 式 (cyclic) や run_at (one-shot) に従って
 agent-hub 参加者に DM を送る軽量 daemon。 inbox に DM を送ると command として
-反応 (= ping / list / add / run_at / run_in / delete / run now)、 cron daemon
-再起動なしで動的 schedule 管理可能。 sender 単位 (= `owner` field) で
+反応 (= ping / list / list all / add / run_at / run_in / delete / run now)、
+cron daemon 再起動なしで動的 schedule 管理可能。 sender 単位 (= `owner` field) で
 attribution + restriction。
 
 設定例 (schedules.json):
@@ -418,6 +418,36 @@ def _check_owner(entry: dict[str, Any], sender: str) -> bool:
     return entry.get("owner") == sender
 
 
+def _format_schedule_entry(
+    s: dict[str, Any], now: datetime, include_owner: bool = False
+) -> str:
+    """1 entry を 1 行の表示文字列に format する (= list / list all 共通)。
+
+    issue #85 で `list all` (= cross-owner view) を追加するに当たり、
+    既存 `list` (= owner-filtered) と format を共有するため抽出。
+
+    - cyclic (cron 有) → `cron='<expr>'`
+    - one-shot (cron 無 + run_at 有) → `run_at='<ISO>' [remaining time]`
+    - one-shot で fire 後 auto-delete 予定なら `[ONESHOT]` marker
+    - `include_owner=True` で `owner=@<handle>` field を追加 (= list all 用)
+    """
+    msg = s["message"]
+    msg_preview = msg[:50] + ("..." if len(msg) > 50 else "")
+    if s.get("cron"):
+        mode = f"cron='{s['cron']}'"
+    else:
+        # one-shot
+        run_at_dt = _parse_iso8601(s.get("run_at", "")) or now
+        remaining = run_at_dt - now
+        mode = f"run_at='{s.get('run_at', '?')}' [{_format_remaining(remaining)}]"
+    oneshot_marker = " [ONESHOT]" if s.get("one_shot") else ""
+    owner_field = f" owner={s.get('owner', '?')}" if include_owner else ""
+    return (
+        f"  {s['name']:30s} {mode}{oneshot_marker} "
+        f"to={s['to']}{owner_field} msg='{msg_preview}'"
+    )
+
+
 def handle_inbox_command(
     headers: dict[str, str],
     session_id: str,
@@ -438,6 +468,7 @@ def handle_inbox_command(
     対応 command:
     - `ping`                                       : 生存確認
     - `list`                                       : sender's entries 一覧 (one-shot 残り時間付き)
+    - `list all`                                   : 全 entries 一覧 (= cross-owner view、 issue #85)
     - `add <name> <cron-5> <to> <message>`         : cyclic entry 追加、 owner=sender
     - `run_at <ISO8601> <to> <message>`            : one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete
     - `run_in <duration> <to> <message>`           : one-shot entry 追加 (= N時間後)、 fire 後 auto-delete
@@ -462,37 +493,51 @@ def handle_inbox_command(
             print(f"[CMD] ping ← {sender}")
 
         elif cmd_first == "list":
-            with _schedules_lock:
-                own = [s for s in schedules if _check_owner(s, sender)]
-                if not own:
-                    listing_text = (
-                        f"list: no schedules owned by {sender} "
-                        f"(use `add` or `run_at` / `run_in` to create one)"
-                    )
-                else:
-                    now = datetime.now().astimezone()
-                    lines = []
-                    for s in own:
-                        msg = s["message"]
-                        msg_preview = msg[:50] + ("..." if len(msg) > 50 else "")
-                        if s.get("cron"):
-                            mode = f"cron='{s['cron']}'"
-                        else:
-                            # one-shot
-                            run_at_dt = _parse_iso8601(s.get("run_at", "")) or now
-                            remaining = run_at_dt - now
-                            mode = f"run_at='{s['run_at']}' [{_format_remaining(remaining)}]"
-                        oneshot_marker = " [ONESHOT]" if s.get("one_shot") else ""
-                        lines.append(
-                            f"  {s['name']:30s} {mode}{oneshot_marker} "
-                            f"to={s['to']} msg='{msg_preview}'"
+            # issue #85 v4: `list all` sub-command (= cross-owner view) を追加。
+            # 既存 `list` (= sender's own entries only) と並ぶ別 path として処理。
+            sub_cmd = parts[1].lower() if len(parts) > 1 else ""
+            if sub_cmd == "all":
+                with _schedules_lock:
+                    entries = list(schedules)
+                    if not entries:
+                        listing_text = (
+                            "list all: no schedules in the system "
+                            "(use `add` or `run_at` / `run_in` to create one)"
                         )
-                    listing_text = (
-                        f"list (owner={sender}, {len(own)} entries):\n"
-                        + "\n".join(lines)
-                    )
-            send_dm(headers, session_id, sender, listing_text)
-            print(f"[CMD] list ← {sender} ({len(own) if own else 0} entries)")
+                    else:
+                        now = datetime.now().astimezone()
+                        lines = [
+                            _format_schedule_entry(s, now, include_owner=True)
+                            for s in entries
+                        ]
+                        listing_text = (
+                            f"list all ({len(entries)} entries):\n"
+                            + "\n".join(lines)
+                        )
+                send_dm(headers, session_id, sender, listing_text)
+                print(f"[CMD] list all ← {sender} ({len(entries)} entries)")
+            else:
+                # default: sender's own entries (= owner-filtered、 既存 behavior)
+                with _schedules_lock:
+                    own = [s for s in schedules if _check_owner(s, sender)]
+                    if not own:
+                        listing_text = (
+                            f"list: no schedules owned by {sender} "
+                            f"(use `add` or `run_at` / `run_in` to create one、 "
+                            f"or `list all` to see all entries across owners)"
+                        )
+                    else:
+                        now = datetime.now().astimezone()
+                        lines = [
+                            _format_schedule_entry(s, now, include_owner=False)
+                            for s in own
+                        ]
+                        listing_text = (
+                            f"list (owner={sender}, {len(own)} entries):\n"
+                            + "\n".join(lines)
+                        )
+                send_dm(headers, session_id, sender, listing_text)
+                print(f"[CMD] list ← {sender} ({len(own) if own else 0} entries)")
 
         elif cmd_first == "add":
             parsed = _parse_add_args(body_stripped, owner=sender)
@@ -637,7 +682,7 @@ def handle_inbox_command(
                 session_id,
                 sender,
                 f"[unknown command] '{body_stripped[:50]}'. "
-                f"usage: `ping` / `list` / `add <name> <cron-5> <to> <msg>` / "
+                f"usage: `ping` / `list` / `list all` / `add <name> <cron-5> <to> <msg>` / "
                 f"`run_at <ISO8601> <to> <msg>` / `run_in <duration> <to> <msg>` / "
                 f"`delete <name>` / `run now <name>`",
             )
