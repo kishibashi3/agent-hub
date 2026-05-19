@@ -175,3 +175,65 @@ export function reviveParticipant(
   const info = stmt.run(tenantId, name, owner);
   return info.changes > 0;
 }
+
+/**
+ * 同じ handle name + owner で **excludeTenantId 以外** に存在する tenant の domain 一覧を返す
+ * (= issue #28 ghost session detection の cross-tenant lookup)。
+ *
+ * 用途: session が default tenant に着地した時、 同じ owner が同じ handle 名で
+ * named tenant に registered なら 「AGENT_HUB_TENANT 環境変数の伝播失敗かも?」
+ * と server log で WARN するための signal source。
+ *
+ * - **owner 完全一致 required**: name のみ一致 (= 別 owner の同名 handle、 multi-tenant
+ *   設計上は別 entity) は match させない (= false positive 防止)
+ * - soft-deleted (= deleted_at NOT NULL) は除外
+ * - return は tenant_id 昇順、 空配列の場合は他に見つからない (= warn 対象外)
+ *
+ * 例: owner=alice が default + tenant-a 両方に @bridge-claude 登録 → default 接続時
+ *      `findOtherTenantsForHandleAndOwner(db, '@bridge-claude', 'alice', 'default')` → `['tenant-a']`
+ */
+export function findOtherTenantsForHandleAndOwner(
+  db: Database.Database,
+  handleName: string,
+  owner: string,
+  excludeTenantId: string
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT tenant_id FROM participants
+       WHERE name = ?
+         AND owner = ?
+         AND tenant_id != ?
+         AND deleted_at IS NULL
+       ORDER BY tenant_id`
+    )
+    .all(handleName, owner, excludeTenantId) as { tenant_id: string }[];
+  return rows.map((r) => r.tenant_id);
+}
+
+/**
+ * 参加者の last_active_at を `now()` で update する (= issue #26)。
+ *
+ * **productive activity** (= 能動的な hub 利用) が観察された時点で呼び出す。
+ * 対象 tool: `send_message` / `get_messages` / `mark_as_read` / `register` / `get_history`。
+ *
+ * **非対象 (= 呼ばない側)**: `get_participants` (= 観察行為) / SSE keepalive (= `is_online`
+ * で表現済) / `initialize` (= プロトコル handshake) / admin tool (= management 行為)。
+ *
+ * 設計判断の根拠は `docs/design-last-active-at.md` §3 参照。
+ *
+ * - soft-deleted (= deleted_at NOT NULL) でも update する (= revive 直前の最後の
+ *   activity も観察したいため、 design doc §5.3 edge case)。
+ * - 該当 row が存在しなければ NO-OP (= changes 0)、 silent return。
+ */
+export function updateLastActiveAt(
+  db: Database.Database,
+  tenantId: string,
+  name: string
+): void {
+  db.prepare(
+    `UPDATE participants
+       SET last_active_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+       WHERE tenant_id = ? AND name = ?`
+  ).run(tenantId, name);
+}

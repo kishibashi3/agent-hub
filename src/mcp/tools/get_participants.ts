@@ -20,9 +20,9 @@ export const getParticipantsTool = {
   name: 'get_participants',
   description:
     '登録済みの全参加者 (person) とチーム (team) を返す。' +
-    'person は name, type, display_name, mode (peer の worker type), is_online (= 自分の inbox を SSE subscribe 中) を持ち、' +
+    'person は name, type, display_name, mode (peer の worker type), is_online (= 自分の inbox を SSE subscribe 中), last_active_at (= productive activity の最終 timestamp、 ISO 8601 / NULL) を持ち、' +
     'team は name, type, owner, members (= @handle 配列), created_at を持つ。' +
-    'type フィールドで person/team を判別する。',
+    'type フィールドで person/team を判別する。 is_online と last_active_at の組合せで「subscribe 中 + active」「subscribe 中 + idle」 等を区別可能。',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -59,6 +59,7 @@ export type ParticipantEntry =
       display_name: string | null;
       mode: string | null;
       is_online: boolean;
+      last_active_at: string | null;
     }
   | {
       name: string;
@@ -94,6 +95,7 @@ export async function handleGetParticipants(
       display_name: p.display_name,
       mode: p.mode,
       is_online: isOnline(p.name),
+      last_active_at: p.last_active_at,
     }));
 
     // 各 team について members を都度 fetch する。

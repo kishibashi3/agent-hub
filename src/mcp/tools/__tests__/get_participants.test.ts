@@ -144,6 +144,7 @@ describe('get_participants ツール', () => {
       expect(team).not.toHaveProperty('display_name');
       expect(team).not.toHaveProperty('mode');
       expect(team).not.toHaveProperty('is_online');
+      expect(team).not.toHaveProperty('last_active_at');
     });
 
     it('person と team が混在する場合、person → team の順で返す', async () => {

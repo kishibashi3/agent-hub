@@ -134,7 +134,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 6;
+  const targetVersion = 7;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -296,6 +296,19 @@ export function applyMigrations(db: Database.Database): void {
 
         INSERT INTO schema_version (version, description)
         VALUES (6, 'multi-tenant: tenants table + tenant_id columns + composite PKs');
+      `,
+    });
+  }
+
+  // v6 → v7: participants に last_active_at 列を追加 (= productive activity timestamp、 issue #26)
+  if (currentVersion < 7) {
+    runMigration(db, {
+      version: 7,
+      description: 'add last_active_at column to participants for activity precision',
+      sql: `
+        ALTER TABLE participants ADD COLUMN last_active_at TEXT;
+        INSERT INTO schema_version (version, description)
+        VALUES (7, 'add last_active_at column to participants for activity precision');
       `,
     });
   }

@@ -116,6 +116,11 @@ export async function handleRegister(
       };
     }
 
+    // productive activity 観察 (= issue #26)、 register は spawn / re-register signal
+    // ("いま起き上がった") として update する。 失敗 path より後ろに置くことで
+    // 「実際に登録 / 更新が完了した時点」 を意味するようにする。
+    scope.updateLastActiveAt(handleName);
+
     return {
       content: [
         {

@@ -57,6 +57,9 @@ export async function handleMarkAsRead(
     // userId は authenticateUser middleware が canonical `@<name>` でセット済
     const reader = userId;
 
+    // productive activity 観察 (= issue #26)、 mark_as_read は inbox triage = active engagement
+    scope.updateLastActiveAt(reader);
+
     // メッセージの存在と権限を確認（getMessage で検証）
     scope.getMessage(input.message_id, reader);
 
