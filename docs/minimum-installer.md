@@ -172,6 +172,9 @@ docker compose -f compose.community.yml up -d  # CE
 
 server + bridge bundle、自家サーバー / ホームラボ環境向け。Phase 1/2 と orthogonal。
 
+> **update (= 2026-05-20、 issue #95 landing 後)**:
+> Phase 3 の **server + scheduler 部分は前倒し landing 完了** — `ghcr.io/kishibashi3/agent-hub:latest` (= anonymous public pull 可能) で `docker run` / `docker-compose up` の 1 コマンドで起動可能。 詳しくは [`docs/docker.md`](./docker.md) 参照。 bridge / role の bundle はまだ未着手、 Phase 3 残課題。
+
 ## 5. 前提条件の最小化
 
 ### 5.1 GitHub PAT
