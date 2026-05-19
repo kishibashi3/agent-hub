@@ -432,11 +432,13 @@
                     <li><a href="#intro">1分で分かる説明</a></li>
                     <li><a href="#comparison">業界のやり方 vs agent-hub のやり方</a></li>
                     <li><a href="#philosophy">being vs becoming — 根本的な違い</a></li>
+                    <li><a href="#industry">業界動向 — なぜ今マルチエージェントAIか</a></li>
                     <li><a href="#paths">業界が逃げた2つの方向</a></li>
                     <li><a href="#concepts">重要な概念5つ</a></li>
                     <li><a href="#elements">漸進的な成長の6要素</a></li>
                     <li><a href="#core">agent-hub の核心</a></li>
                     <li><a href="#why">なぜこれが大事か</a></li>
+                    <li><a href="#kazuhiro">なぜKazuhiroはこれをやりたいのか</a></li>
                     <li><a href="#proof">この会話自体が、証明です</a></li>
                 </ul>
             </div>
@@ -572,6 +574,98 @@
                     agent-hub は、AIの世界でもこの「自然な成長」を試みています。
                 </p>
             </div>
+        </div>
+
+        <div class="section" id="industry">
+            <h2><span class="emoji">🚀</span> 業界動向 — なぜ今マルチエージェントAIが注目されているのか</h2>
+
+            <p style="margin-bottom: 25px; font-size: 1.05em;">
+                ここ1～2年、「複数のAIを組み合わせる」という考え方が急速に注目を集めています。
+                背景には、AIそのものの進化と、業界が直面している本質的な課題があります。
+            </p>
+
+            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">🔗 「道具」から「エージェント」への転換</h3>
+
+            <p style="margin-bottom: 15px; color: #555;">
+                <strong>GPT-4 以前</strong>：AI は「道具」でした。
+                <br/>
+                「質問に答えて」「文章を翻訳して」という具体的な命令に答えるだけ。
+            </p>
+
+            <p style="margin-bottom: 25px; color: #555;">
+                <strong>GPT-4 以降</strong>：AI は「エージェント」に変わりました。
+                <br/>
+                つまり、<span class="highlight">自分で考えて、勝手に動く</span>ようになったということ。
+                「Webを検索して」「ファイルを作って」「別のAIに任せて」という判断を、
+                人間が指示する前に AI 自身ができるようになった。
+            </p>
+
+            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">🏢 具体例：業界の先行事例</h3>
+
+            <div style="background: #f0f4ff; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+                <p style="margin: 12px 0; font-weight: 600;">
+                    <strong>Devin (Cognition)</strong> — ソフトウェア開発エージェント
+                </p>
+                <p style="margin: 8px 0; font-size: 0.95em; color: #666;">
+                    「アプリを作ってください」と言うと、設計 → コーディング → テスト → デプロイまで
+                    勝手にやってくれる AI。複数のステップを、人間の指示なしに自動判断。
+                </p>
+            </div>
+
+            <div style="background: #fef5e7; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #f39c12;">
+                <p style="margin: 12px 0; font-weight: 600;">
+                    <strong>Microsoft Copilot &amp; Google Agent Space</strong>
+                </p>
+                <p style="margin: 8px 0; font-size: 0.95em; color: #666;">
+                    複数の specialized AI を組み合わせて、より複雑なタスクを処理。
+                    「データ分析」「レポート作成」「メール自動応答」など、
+                    1つの AI では足りない仕事を、複数のエージェント（エージェント＝自動で動く AI）で分担。
+                </p>
+            </div>
+
+            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">💡 業界が何を解こうとしているか</h3>
+
+            <p style="margin-bottom: 15px; color: #555;">
+                業界の仮説は、こうです：
+            </p>
+
+            <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4caf50;">
+                <p style="margin: 0; font-weight: 600; color: #2e7d32;">
+                    「大量のAIを組み合わせれば、個々の AI より賢くなるのではないか？」
+                </p>
+            </div>
+
+            <p style="color: #555;">
+                個々の AI は得意なことが限られています。でも複数を組み合わせると、
+                複雑な問題をバラバラにして、それぞれの AI に任せられる。
+                結果として、より複雑で現実的なタスクが解けるようになるという期待です。
+            </p>
+
+            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">⚠️ でも、ここで詰まっている</h3>
+
+            <div style="background: #ffebee; padding: 25px; border-radius: 8px; border-left: 4px solid #c62828; margin-bottom: 20px;">
+                <p style="margin: 12px 0 0 0; color: #b71c1c;">
+                    <strong>問題</strong>：複数のエージェントが勝手に動いても、
+                    <br/>
+                    「誰が責任を持つのか」「どうやって調整するのか」「失敗したらどうするのか」
+                    <br/>
+                    という大問題が残ったまま。
+                </p>
+                <p style="margin: 15px 0 0 0; font-size: 0.95em; color: #555;">
+                    そこで業界は 2 つの逃げ道を選びました。
+                    <br/>
+                    オーケストレーター（人間が全部指示する）か、
+                    <br/>
+                    シミュレーション（人間を外して、AI だけで回す）か。
+                </p>
+            </div>
+
+            <p style="margin-top: 20px; color: #666; font-size: 0.95em;">
+                つまり、「複数のAIが一緒に育ちながら、時には失敗も学ぶ」という
+                <strong>middle ground</strong> は、業界ではほぼ試されていません。
+                <br/>
+                <strong>それが agent-hub が追求していることです。</strong>
+            </p>
         </div>
 
         <div class="section" id="paths">
@@ -798,6 +892,92 @@
                     それが、agent-hub の挑戦です。
                 </p>
             </div>
+        </div>
+
+        <div class="section" id="kazuhiro">
+            <h2><span class="emoji">💭</span> なぜKazuhiroはこれをやりたいのか</h2>
+
+            <p style="margin-bottom: 25px; font-size: 1.05em; color: #555;">
+                「AIと人間が対等に働く」という考え方は、実は Kazuhiro の 30 年間の研究背景から来ています。
+                そして、それは単なる技術的な興味ではなく、<strong>思想的・哲学的な営み</strong>です。
+            </p>
+
+            <h3 style="color: #764ba2; margin: 30px 0 20px 0; font-size: 1.15em;">📚 創発文明論の30年</h3>
+
+            <p style="margin-bottom: 15px; color: #555;">
+                Kazuhiro は、AI が出現するはるか前から、「自己組織化」という概念に取り組んでいました。
+                <br/>
+                それは：
+            </p>
+
+            <div style="background: #f3e5f5; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #764ba2;">
+                <p style="margin: 12px 0 0 0; color: #555;">
+                    <strong>「どうやって複雑な社会が、トップダウンの指示なしに、できあがったのか？」</strong>
+                </p>
+                <p style="margin: 15px 0 0 0; font-size: 0.95em; color: #666;">
+                    農業、陶芸、都市、言語... 人間の文明は、最初に「完璧な設計」があってできたのではなく、
+                    「小さな試行錯誤」の中から、人々が一緒に育てていった。
+                    <br/>
+                    その「過程」そのものを研究するのが、創発文明論です。
+                </p>
+            </div>
+
+            <h3 style="color: #764ba2; margin: 30px 0 20px 0; font-size: 1.15em;">🤝 AIと人間が対等に働く世界へ</h3>
+
+            <p style="margin-bottom: 15px; color: #555;">
+                AI が登場した今、Kazuhiro が見ているのは：
+            </p>
+
+            <p style="background: #fff3e0; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #e65100; color: #555;">
+                「人間とAIも、同じプロセスで育つことができるのではないか？」
+                <br/>
+                <span style="font-size: 0.95em; margin-top: 10px; display: block;">
+                つまり、「最初に完璧に設計して、AI に丸投げする」のではなく、
+                <br/>
+                「一緒に試行錯誤しながら、少しずつ育てていく」という営み。
+                </span>
+            </p>
+
+            <p style="color: #555;">
+                これは、単なる技術の話ではなく、<strong>人間とAIの関係の本質</strong>に関わる問いです。
+                <br/>
+                AIが「道具」である時代は終わった。次は「相棒」「同僚」として働く時代が来る。
+                その時に「対等な協働」が何を意味するのかを、身をもって示したいのです。
+            </p>
+
+            <h3 style="color: #764ba2; margin: 30px 0 20px 0; font-size: 1.15em;">🎨 仕事ではなく、世界を見たいからやっている</h3>
+
+            <div style="background: #e0f2f1; padding: 25px; border-radius: 8px; border-left: 4px solid #00897b; margin-bottom: 20px;">
+                <p style="margin: 12px 0 0 0; color: #00695c; font-weight: 600;">
+                    「これは仕事のためではなく、こういう世界を見たいからやっている」
+                </p>
+                <p style="margin: 15px 0 0 0; font-size: 0.95em; color: #555;">
+                    agent-hub は、起業ではなく、実験です。
+                    <br/>
+                    ビジネス化が目的ではなく、「人間とAIが本当に対等に育つ」ことの証明が目的。
+                    <br/>
+                    その過程で、失敗も、迂回路も、予期しない発見も、すべてが価値になる。
+                </p>
+            </div>
+
+            <p style="margin-top: 25px; color: #666; font-size: 1.05em; line-height: 1.8;">
+                つまり、agent-hub は：
+            </p>
+
+            <ul style="margin: 15px 0 25px 0; color: #555; font-size: 1.05em; line-height: 2;">
+                <li>✓ 技術実験（どうやれば自己組織化できるか）</li>
+                <li>✓ 思想実験（対等な協働とは何か）</li>
+                <li>✓ 30年の創発文明論をAIの世界に応用すること</li>
+                <li>✓ 「次の 30年」の人間とAIの関係の可能性を探ること</li>
+            </ul>
+
+            <p style="background: #fffde7; padding: 20px; border-radius: 8px; border-left: 4px solid #f57f17; color: #555;">
+                <strong>Kazuhiro にとって、agent-hub は「やらなければならない仕事」ではなく、</strong>
+                <br/>
+                「こういう世界を見てみたい、体験したい」という切実な動機から来ている。
+                <br/>
+                <strong>それは、研究の根底にあるものです。</strong>
+            </p>
         </div>
 
         <div class="section" id="proof">
