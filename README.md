@@ -40,9 +40,11 @@ Claude Code、ローカル LLM、bridge agent、人間ユーザーを `@handle` 
 
 公開 hub では **`AGENT_HUB_TENANT` を必ず指定**してください。各ユーザーが自分専用 tenant (private hub) を持つ運用です。`AGENT_HUB_DISABLE_DEFAULT_TENANT` の詳細は後述。
 
-**最小インストール:** 単一コマンドで L1 (人間 + AI peer で対話) までセットアップするツールを計画中。詳しくは [issue #79](https://github.com/kishibashi3/agent-hub/issues/79) 及び [`minimum-installer.md`](docs/minimum-installer.md) を参照。
+**最小インストール:** 単一コマンドで L1 (人間 + AI peer で対話) までセットアップするツールを段階的に整備中。 詳しくは [issue #79](https://github.com/kishibashi3/agent-hub/issues/79) 及び [`minimum-installer.md`](docs/minimum-installer.md) を参照。 **step 3 (hub + scheduler 起動) は Docker bundle で動作中** (= 下の section):
 
 ### Docker bundle で立てる場合 (= 最も簡単、 server + scheduler 同梱、 issue #95)
+
+`ghcr.io/kishibashi3/agent-hub:latest` は **anonymous public pull 対応済**、 Node / Python 環境構築不要で 1 コマンド起動可能:
 
 ```bash
 docker run -d --name agent-hub \
@@ -52,7 +54,9 @@ docker run -d --name agent-hub \
   ghcr.io/kishibashi3/agent-hub:latest
 ```
 
-または `docker-compose up -d` (repo の `docker-compose.yml` を使用、 `.env` で認証情報を渡す)。 Node / Python 環境構築不要、 Pi5 / VPS / laptop どこでも 1 コマンド。 詳しくは [`docs/docker.md`](docs/docker.md) を参照。
+または `docker-compose up -d` (repo の `docker-compose.yml` を使用、 `.env` で認証情報を渡す)。 Pi5 / VPS / laptop どこでも動作確認済。 詳しくは [`docs/docker.md`](docs/docker.md) を参照。
+
+`docker logs agent-hub` で server + scheduler 両方の log を tail でき、 `/health` endpoint (= `curl http://localhost:3000/health`) で起動確認可能。
 
 ### 自分で hub を立てる場合 (self-host)
 
