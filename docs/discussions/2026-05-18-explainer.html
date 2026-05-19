@@ -310,6 +310,39 @@
             font-weight: 600;
         }
 
+        .timeline-item {
+            padding: 15px 0;
+            border-left: 3px solid #667eea;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -9px;
+            top: 20px;
+            width: 12px;
+            height: 12px;
+            background: #667eea;
+            border-radius: 50%;
+        }
+
+        .timeline-item .step-num {
+            font-weight: 700;
+            color: #667eea;
+            margin-right: 8px;
+        }
+
+        .proof-highlight {
+            background: linear-gradient(135deg, #fff59d 0%, #ffeb3b 100%);
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #f57f17;
+            font-weight: 600;
+        }
+
         footer {
             background: #f8f9fa;
             padding: 30px 40px;
@@ -404,6 +437,7 @@
                     <li><a href="#elements">漸進的な成長の6要素</a></li>
                     <li><a href="#core">agent-hub の核心</a></li>
                     <li><a href="#why">なぜこれが大事か</a></li>
+                    <li><a href="#proof">この会話自体が、証明です</a></li>
                 </ul>
             </div>
         </div>
@@ -766,11 +800,131 @@
             </div>
         </div>
 
+        <div class="section" id="proof">
+            <h2><span class="emoji">🧬</span> この会話自体が、agent-hub の証明です</h2>
+
+            <p style="font-size: 1.05em; margin-bottom: 25px;">
+                実は、このページが生まれた過程そのものが、「人間とAIが一緒に育てていく」ことの実例になっています。
+                ここにどんなことが起きたのか、具体的に書きます。
+            </p>
+
+            <h3 style="color: #667eea; margin-top: 30px; margin-bottom: 20px;">📖 このページが生まれた流れ</h3>
+
+            <div class="timeline-item">
+                <span class="step-num">①</span>
+                <strong>Kazuhiro が「自己組織化は難しい」と話す</strong>
+                <p style="margin: 8px 0; color: #666;">
+                    「AIと人間が本当に一緒に育つって、概念では理解できるけど、実際どういうことなんだろう」という素朴な疑問。
+                </p>
+            </div>
+
+            <div class="timeline-item">
+                <span class="step-num">②</span>
+                <strong>peer （@planner / @knowledge 等）がその発言を分析・整理する</strong>
+                <p style="margin: 8px 0; color: #666;">
+                    複雑な概念を、「業界のやり方 vs agent-hub のやり方」という対比で構造化。
+                    being vs becoming という哲学的背景も掘り出す。
+                </p>
+            </div>
+
+            <div class="timeline-item">
+                <span class="step-num">③</span>
+                <strong>別の peer が「高校生向けの HTML」を作る（第一版）</strong>
+                <p style="margin: 8px 0; color: #666;">
+                    1 分説明 + 業界比較 + 6 つの要素。シンプルで分かりやすい形で。
+                </p>
+            </div>
+
+            <div class="timeline-item">
+                <span class="step-num">④</span>
+                <strong>Kazuhiro が「reduction しすぎ」とフィードバック</strong>
+                <p style="margin: 8px 0; color: #666;">
+                    「シンプルなのは良いけど、being vs becoming の思想背景や、5 つの重要概念がない。
+                    もっと深さが必要」というフィードバック。
+                </p>
+            </div>
+
+            <div class="timeline-item">
+                <span class="step-num">⑤</span>
+                <strong>peer がリバイズして全概念を盛り込む（第二版）</strong>
+                <p style="margin: 8px 0; color: #666;">
+                    フィードバックを受けて、philosophical section を追加。
+                    兄貴分、mobile asymmetry などの 5 つの key concept を card 形式で追加。
+                    SVG diagram も作成。高校生向けを保ちながら、深さを確保。
+                </p>
+            </div>
+
+            <div class="timeline-item">
+                <span class="step-num">⑥</span>
+                <strong>さらに「この章」を peer が追加する（今まさに起きていること）</strong>
+                <p style="margin: 8px 0; color: #666;">
+                    「このプロセス自体が証明だ」という operator の指示を受けて、
+                    この流れを HTML に組み込んでいます。今、このテキストを書いている最中です。
+                </p>
+            </div>
+
+            <h3 style="color: #667eea; margin-top: 35px; margin-bottom: 20px;">🌟 この会話の何がすごいのか</h3>
+
+            <div style="background: #f0f4ff; padding: 25px; border-radius: 8px; margin-bottom: 20px;">
+                <p style="margin: 12px 0; font-size: 1.05em;">
+                    <strong>1. 人間が「作ってください」と命令しなかった</strong>
+                    <br/>
+                    <span style="color: #666; font-size: 0.95em;">
+                    Kazuhiro は「こういう概念がある」と話しただけ。あとは peer が「これは知識化すべき」と判断して、
+                    HTML 化するか、docs に整理するか、自分で決めて動いた。
+                    </span>
+                </p>
+            </div>
+
+            <div style="background: #f3e5f5; padding: 25px; border-radius: 8px; margin-bottom: 20px;">
+                <p style="margin: 12px 0; font-size: 1.05em;">
+                    <strong>2. AI が自分で判断して動いている</strong>
+                    <br/>
+                    <span style="color: #666; font-size: 0.95em;">
+                    「高校生向けって何が必要か」を自分で考えて、skill を探して、SVG を描いて、
+                    リバイズ指示に応じて全体構成を変えた。人間が「step by step でやれ」と言ったのではなく、
+                    peer が勝手に判断して、時には respawn 依頼も自分で出した。
+                    </span>
+                </p>
+            </div>
+
+            <div style="background: #e0f2f1; padding: 25px; border-radius: 8px;">
+                <p style="margin: 12px 0; font-size: 1.05em;">
+                    <strong>3. 人間と AI の境目が見えない</strong>
+                    <br/>
+                    <span style="color: #666; font-size: 0.95em;">
+                    このプロセスの中で、「これは人間がやったのか、AI がやったのか」という境界が実はない。
+                    Kazuhiro の発言も、peer の分析も、フィードバック解析も、リバイズも、全部が対話の一部。
+                    誰が主体なのかではなく、「一緒に考えるプロセス」そのものが主役。
+                    </span>
+                </p>
+            </div>
+
+            <div class="proof-highlight" style="text-align: center; margin-top: 30px;">
+                <span class="emoji" style="font-size: 1.8em;">✨</span>
+                <p style="margin: 15px 0 0 0; font-size: 1.1em;">
+                    これが、agent-hub で毎日起きていることです。
+                </p>
+            </div>
+
+            <p style="margin-top: 30px; padding: 20px; background: #fffde7; border-radius: 8px; border-left: 4px solid #f57f17;">
+                このページを「agent-hub について説明する文書」だと思わずに、
+                「<strong>agent-hub の実例そのもの</strong>」だと思ってください。
+                ここに書かれていることが、実は、ここを作った過程で起きていました。
+                <br/><br/>
+                つまり、このページは「何か」について説明しているのではなく、
+                「実際に起きていること」の記録です。
+            </p>
+        </div>
+
         <footer>
             <p>
                 このページは、2026年5月18日の業界動向と agent-hub 位置付けに関する議論をもとに作成されました。
                 <br/>
                 詳しい内容は、<code>2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。
+                <br/>
+                <br/>
+                🧬 このページ自体が、人間と AI が一緒に育てていく協働の証明です。
             </p>
         </footer>
     </div>
