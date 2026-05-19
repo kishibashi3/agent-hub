@@ -82,9 +82,15 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "schedules.json"
 
 
 def build_headers() -> dict[str, str]:
-    """MCP HTTP request headers (= auth + tenant + content-type)."""
+    """MCP HTTP request headers (= auth + tenant + content-type)。
+
+    Content-Type に **charset=utf-8** 明示 (= issue #70 Mojibake fix):
+    explicit charset で proxy / 中間層 / server 実装が Latin-1 解釈に倒れる risk を
+    減らす。 併せて body serialization で `ensure_ascii=False` を使い、 raw UTF-8
+    bytes として送出するのが `_encode_json_body()` helper の役割。
+    """
     headers: dict[str, str] = {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
         "Accept": "application/json, text/event-stream",
     }
     if TENANT:
@@ -136,6 +142,28 @@ def resolve_user_id(headers: dict[str, str]) -> str:
 # ============================================================
 
 
+def _encode_json_body(payload: dict[str, Any]) -> bytes:
+    """payload を UTF-8 bytes に encode (= issue #70 Mojibake 防止)。
+
+    `requests.post(..., json=payload, ...)` 直接利用で起きる問題:
+    1. 内部 `json.dumps()` が default `ensure_ascii=True` → non-ASCII char が
+       `\\uXXXX` escape される (= 通常は正常に decode されるが、 中間層次第で混乱)
+    2. requests が `json=` の場合 Content-Type charset を上書きする path あり
+    3. 一部 server / proxy が Content-Type charset 未指定で Latin-1 にフォールバック
+
+    本 helper で:
+    1. `json.dumps(..., ensure_ascii=False)` で raw Unicode を serialize
+    2. `.encode('utf-8')` で explicit UTF-8 bytes 化
+    3. caller は `requests.post(..., data=<bytes>, ...)` で bytes 直接送出
+    + Content-Type に `charset=utf-8` (= build_headers) で server に UTF-8 明示
+
+    これで scheduler → server の HTTP body は **bytes-level で UTF-8 invariant**、
+    中間層の charset 推定 / 自動変換に影響されない。 issue #70 「テストメッセージです」
+    等の日本語 Mojibake 根本対策。
+    """
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
 def _parse_response_body(resp: requests.Response) -> dict[str, Any]:
     """MCP server response を parse (= application/json と text/event-stream 両対応)。
 
@@ -176,7 +204,7 @@ def init_session(headers: dict[str, str]) -> str:
     resp = requests.post(
         HUB_URL,
         headers=headers,
-        json={
+        data=_encode_json_body({
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {
@@ -185,7 +213,7 @@ def init_session(headers: dict[str, str]) -> str:
                 "clientInfo": {"name": "agent-hub-scheduler", "version": "1.0"},
             },
             "id": 0,
-        },
+        }),
         timeout=10,
     )
     if resp.status_code != 200:
@@ -201,7 +229,7 @@ def init_session(headers: dict[str, str]) -> str:
     requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
-        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        data=_encode_json_body({"jsonrpc": "2.0", "method": "notifications/initialized"}),
         timeout=5,
     )
 
@@ -211,11 +239,16 @@ def init_session(headers: dict[str, str]) -> str:
 def send_dm(
     headers: dict[str, str], session_id: str, to: str, message: str
 ) -> dict[str, Any]:
-    """`send_message` tool を呼出。 成功時は response body を返す、 失敗時 raise。"""
+    """`send_message` tool を呼出。 成功時は response body を返す、 失敗時 raise。
+
+    issue #70 Mojibake fix: `_encode_json_body()` で UTF-8 bytes 化、
+    `Content-Type: application/json; charset=utf-8` (= build_headers) で server に
+    明示。 message が日本語含む場合の root encoding 整合性を保証。
+    """
     resp = requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
-        json={
+        data=_encode_json_body({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
@@ -223,7 +256,7 @@ def send_dm(
                 "arguments": {"to": to, "message": message},
             },
             "id": int(time.time() * 1000),
-        },
+        }),
         timeout=10,
     )
     if resp.status_code != 200:
@@ -242,7 +275,7 @@ def register_self(
     resp = requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
-        json={
+        data=_encode_json_body({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
@@ -250,7 +283,7 @@ def register_self(
                 "arguments": {"name": name, "display_name": display_name},
             },
             "id": int(time.time() * 1000),
-        },
+        }),
         timeout=10,
     )
     if resp.status_code != 200:
@@ -268,12 +301,12 @@ def subscribe_inbox(headers: dict[str, str], session_id: str, name: str) -> None
     resp = requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
-        json={
+        data=_encode_json_body({
             "jsonrpc": "2.0",
             "method": "resources/subscribe",
             "params": {"uri": f"inbox://@{name}"},
             "id": int(time.time() * 1000),
-        },
+        }),
         timeout=10,
     )
     if resp.status_code != 200:
@@ -289,12 +322,12 @@ def fetch_inbox(
     resp = requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
-        json={
+        data=_encode_json_body({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {"name": "get_messages", "arguments": {}},
             "id": int(time.time() * 1000),
-        },
+        }),
         timeout=10,
     )
     if resp.status_code != 200:
@@ -326,7 +359,7 @@ def mark_message_read(
     resp = requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
-        json={
+        data=_encode_json_body({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
@@ -334,7 +367,7 @@ def mark_message_read(
                 "arguments": {"message_id": message_id},
             },
             "id": int(time.time() * 1000),
-        },
+        }),
         timeout=10,
     )
     if resp.status_code != 200:
