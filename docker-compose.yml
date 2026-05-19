@@ -44,3 +44,27 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+
+  # ---- dashboard sidecar (= @admin 2026-05-20、 message traffic visualizer) ----
+  # SQLite DB を **read-only mount** で参照、 D3.js force-directed graph +
+  # message matrix heatmap として visualize。 Python stdlib only (= 軽量、 deps なし)。
+  #
+  # `AGENT_HUB_TENANT` 未指定 → 全 tenant aggregate (= ecosystem-wide view)
+  # `AGENT_HUB_TENANT=kaz` 等 set → 当該 tenant のみ filter (= per-deployment forensic)
+  dashboard:
+    image: ghcr.io/kishibashi3/agent-hub-dashboard:latest
+    container_name: agent-hub-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # agent-hub と同 host path を **read-only** で共有 (= WAL mode で並行 read 安全)
+      - ./data:/app/data:ro
+    environment:
+      DB_PATH: /app/data/app.db
+      PORT: "8080"
+      # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate (= admin clarification)
+      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
+    depends_on:
+      agent-hub:
+        condition: service_healthy
