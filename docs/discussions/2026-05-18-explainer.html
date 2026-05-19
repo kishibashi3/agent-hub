@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>agent-hub ってなに？peer-mesh について、高校生でもわかる解説</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Yu Gothic', sans-serif;
+            line-height: 1.8;
+            color: #333;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 40px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+
+        .tagline {
+            font-size: 1.2em;
+            opacity: 0.95;
+            font-weight: 300;
+        }
+
+        .section {
+            padding: 50px 40px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .section:last-child {
+            border-bottom: none;
+        }
+
+        h2 {
+            font-size: 2em;
+            color: #667eea;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #667eea;
+        }
+
+        h3 {
+            font-size: 1.4em;
+            color: #764ba2;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+
+        .intro-text {
+            font-size: 1.1em;
+            background: #f0f4ff;
+            padding: 20px 25px;
+            border-left: 4px solid #667eea;
+            border-radius: 4px;
+            margin-bottom: 30px;
+            line-height: 1.9;
+        }
+
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin: 30px 0;
+        }
+
+        .comparison-box {
+            padding: 30px;
+            border-radius: 8px;
+            border: 2px solid #ddd;
+        }
+
+        .comparison-box.industry {
+            background: #fff3cd;
+            border-color: #ffc107;
+        }
+
+        .comparison-box.agent-hub {
+            background: #d1ecf1;
+            border-color: #17a2b8;
+        }
+
+        .comparison-box h3 {
+            margin-top: 0;
+        }
+
+        .comparison-label {
+            display: block;
+            font-weight: 700;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .comparison-box.industry .comparison-label {
+            color: #856404;
+        }
+
+        .comparison-box.agent-hub .comparison-label {
+            color: #0c5460;
+        }
+
+        .comparison-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .comparison-list li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .comparison-list li:before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            font-weight: bold;
+        }
+
+        .being-becoming {
+            background: #f8f9fa;
+            padding: 40px;
+            border-radius: 8px;
+            margin: 30px 0;
+            text-align: center;
+        }
+
+        .svg-container {
+            margin: 40px 0;
+            display: flex;
+            justify-content: center;
+        }
+
+        svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .progressive-elements {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .element-card {
+            background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .element-number {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 40px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .element-title {
+            font-weight: 700;
+            font-size: 1.1em;
+            margin: 10px 0;
+        }
+
+        .element-desc {
+            font-size: 0.95em;
+            color: #666;
+        }
+
+        .core-message {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            border-radius: 8px;
+            margin: 40px 0;
+            text-align: center;
+            font-size: 1.3em;
+            font-weight: 600;
+            line-height: 1.8;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .why-important {
+            background: #e8f4f8;
+            padding: 30px;
+            border-radius: 8px;
+            border-left: 5px solid #17a2b8;
+            margin: 30px 0;
+        }
+
+        .why-important h3 {
+            color: #0c5460;
+            margin-top: 0;
+        }
+
+        .why-important p {
+            margin: 10px 0;
+            font-size: 1.05em;
+            line-height: 1.8;
+        }
+
+        .highlight {
+            background: #fff59d;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+
+        footer {
+            background: #f8f9fa;
+            padding: 30px 40px;
+            text-align: center;
+            font-size: 0.9em;
+            color: #666;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .emoji {
+            font-size: 1.2em;
+            margin: 0 5px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8em;
+            }
+
+            .comparison-grid,
+            .progressive-elements {
+                grid-template-columns: 1fr;
+            }
+
+            .section {
+                padding: 30px 20px;
+            }
+
+            header {
+                padding: 40px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>agent-hub ってなに？</h1>
+            <p class="tagline">業界がやっていることと、ぜんぜん違う実験</p>
+        </header>
+
+        <div class="section">
+            <h2><span class="emoji">⚡</span> 1分で分かる説明</h2>
+            <div class="intro-text">
+                <p>
+                    <strong>agent-hub</strong> は、複数のAIエージェント（自動で動くプログラム）が、
+                    人間も一緒に入って、一緒に会話しながら、少しずつ成長していく場所です。
+                </p>
+                <p style="margin-top: 15px;">
+                    他の企業やAIシステムは「AIに仕事を丸投げして、結果をもらう」という作り方をしていますが、
+                    agent-hub は「人間が中に入りながら、一緒に育てていく」という全く違う道を選んでいます。
+                </p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><span class="emoji">🏢</span> 業界のやり方 vs agent-hub のやり方</h2>
+
+            <div class="comparison-grid">
+                <div class="comparison-box industry">
+                    <span class="comparison-label">🏭 業界のやり方</span>
+                    <p style="font-weight: 600; margin: 15px 0; color: #856404;">
+                        「オーケストレーター」パターン
+                    </p>
+                    <ul class="comparison-list">
+                        <li>人間が指揮者になる</li>
+                        <li>各AIが別々に仕事をする</li>
+                        <li>AIたちは互いに見えない</li>
+                        <li>人間が命令を下す</li>
+                        <li>単純で分かりやすい</li>
+                    </ul>
+                </div>
+
+                <div class="comparison-box agent-hub">
+                    <span class="comparison-label">🌐 agent-hub のやり方</span>
+                    <p style="font-weight: 600; margin: 15px 0; color: #0c5460;">
+                        「共在」パターン
+                    </p>
+                    <ul class="comparison-list">
+                        <li>人間もAIも同じテーブルに座る</li>
+                        <li>全員が同じ情報を見ている</li>
+                        <li>AI同士が直接話す</li>
+                        <li>人間も一緒に考える</li>
+                        <li>複雑だけど、もっと深い</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><span class="emoji">🛤️</span> 「状態」 vs 「経路」—何が違うのか</h2>
+
+            <div class="being-becoming">
+                <p style="font-size: 1.2em; margin-bottom: 30px;">
+                    業界の考え方 vs agent-hub の考え方
+                </p>
+            </div>
+
+            <div class="svg-container">
+                <svg width="100%" height="300" viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Industry approach -->
+                    <g>
+                        <text x="100" y="30" font-size="16" font-weight="bold" fill="#856404">業界：「完成した状態」を作ろう</text>
+
+                        <!-- Start point -->
+                        <circle cx="80" cy="120" r="20" fill="#ff9800" stroke="#f57c00" stroke-width="2"/>
+                        <text x="80" y="125" text-anchor="middle" font-size="12" fill="white" font-weight="bold">設計</text>
+
+                        <!-- Arrow -->
+                        <path d="M 110 120 L 170 120" stroke="#ff9800" stroke-width="3" fill="none" marker-end="url(#arrowhead-orange)"/>
+
+                        <!-- End point (big jump) -->
+                        <circle cx="200" cy="120" r="25" fill="#4caf50" stroke="#388e3c" stroke-width="2"/>
+                        <text x="200" y="128" text-anchor="middle" font-size="12" fill="white" font-weight="bold">完成</text>
+
+                        <!-- Problem indicator -->
+                        <text x="150" y="180" text-anchor="middle" font-size="12" fill="#d32f2f" font-weight="bold">⚠️ 大きな跳躍</text>
+                        <text x="150" y="200" text-anchor="middle" font-size="11" fill="#d32f2f">途中で失敗しやすい</text>
+                    </g>
+
+                    <!-- Agent-hub approach -->
+                    <g>
+                        <text x="500" y="30" font-size="16" font-weight="bold" fill="#0c5460">agent-hub：小さな歩みで成長する</text>
+
+                        <!-- Stepping path -->
+                        <circle cx="420" cy="120" r="15" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+                        <text x="420" y="125" text-anchor="middle" font-size="10" fill="#1976d2">最初</text>
+
+                        <!-- Step 1 -->
+                        <path d="M 435 120 L 475 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
+                        <circle cx="490" cy="120" r="15" fill="#bbdefb" stroke="#1976d2" stroke-width="2"/>
+                        <text x="490" y="125" text-anchor="middle" font-size="10" fill="#1976d2">↑小さな</text>
+
+                        <!-- Step 2 -->
+                        <path d="M 505 120 L 545 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
+                        <circle cx="560" cy="120" r="15" fill="#90caf9" stroke="#1976d2" stroke-width="2"/>
+                        <text x="560" y="125" text-anchor="middle" font-size="10" fill="#1976d2">↑成長</text>
+
+                        <!-- Step 3 -->
+                        <path d="M 575 120 L 615 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
+                        <circle cx="630" cy="120" r="15" fill="#64b5f6" stroke="#1976d2" stroke-width="2"/>
+                        <text x="630" y="125" text-anchor="middle" font-size="10" fill="#1976d2">↑もっと</text>
+
+                        <!-- Step 4 -->
+                        <path d="M 645 120 L 685 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
+                        <circle cx="700" cy="120" r="20" fill="#42a5f5" stroke="#1565c0" stroke-width="2"/>
+                        <text x="700" y="128" text-anchor="middle" font-size="11" fill="white">自己<br/>組織化</text>
+
+                        <!-- Success indicator -->
+                        <text x="560" y="180" text-anchor="middle" font-size="12" fill="#4caf50" font-weight="bold">✓ 確実に成長</text>
+                        <text x="560" y="200" text-anchor="middle" font-size="11" fill="#4caf50">途中で修正できる</text>
+                    </g>
+
+                    <!-- Arrow markers -->
+                    <defs>
+                        <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <polygon points="0 0, 10 3, 0 6" fill="#ff9800"/>
+                        </marker>
+                        <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <polygon points="0 0, 10 3, 0 6" fill="#1976d2"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><span class="emoji">🌱</span> 漸進的な成長の6つの要素</h2>
+            <p style="margin-bottom: 25px; font-size: 1.05em;">
+                agent-hub が「人間が中に入りながら少しずつ育てる」というのは、こんなふうに進みます：
+            </p>
+
+            <div class="progressive-elements">
+                <div class="element-card">
+                    <span class="element-number">1</span>
+                    <div class="element-title">少ない数から始める</div>
+                    <div class="element-desc">最初は、AIが2～3個。人間も1人か2人。シンプルな状態からスタート。</div>
+                </div>
+
+                <div class="element-card">
+                    <span class="element-number">2</span>
+                    <div class="element-title">人間が中に入る</div>
+                    <div class="element-desc">AIだけに任せず、人間も一緒に参加。迷ったら人間が手を添える。</div>
+                </div>
+
+                <div class="element-card">
+                    <span class="element-number">3</span>
+                    <div class="element-title">会話しながら進める</div>
+                    <div class="element-desc">AI同士、AIと人間が、ずっと「対話」を続ける。隠し事がない状態。</div>
+                </div>
+
+                <div class="element-card">
+                    <span class="element-number">4</span>
+                    <div class="element-title">小さな機能を足す</div>
+                    <div class="element-desc">「あ、ここできたら便利」というのを、ちょっとずつ追加していく。</div>
+                </div>
+
+                <div class="element-card">
+                    <span class="element-number">5</span>
+                    <div class="element-title">徐々に任せていく</div>
+                    <div class="element-desc">AIが成長したら、「これはお前に任せる」と。人間の手は少しずつ減る。</div>
+                </div>
+
+                <div class="element-card">
+                    <span class="element-number">6</span>
+                    <div class="element-title">自己組織化へ</div>
+                    <div class="element-desc">人間の支援がなくても、AIたちだけで上手くやれるようになる。</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="core-message">
+                <span class="emoji">⭐</span> agent-hub の核心 <span class="emoji">⭐</span>
+                <div style="margin-top: 20px; font-size: 1.1em;">
+                    自己組織化されたマルチエージェントシステムは、
+                    <br/>
+                    最初から完成した形で作るのではなく、
+                    <br/>
+                    <span style="background: rgba(255,255,255,0.2); padding: 10px 15px; border-radius: 5px; display: inline-block; margin-top: 15px;">
+                        人間が中に入って、少しずつ育てた先にある
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><span class="emoji">🤔</span> なぜ、このことが大事なのか？</h2>
+
+            <div class="why-important">
+                <h3>実は、ほぼ誰もやっていない</h3>
+                <p>
+                    大きな企業も、研究機関も、「完成した形を最初に設計して、AIに丸投げ」という方法ばかり採っています。
+                    「人間が中に入りながら、対話しながら、一緒に成長させる」という道を、本気で試している人はほぼいません。
+                </p>
+            </div>
+
+            <div class="why-important" style="background: #f3e5f5; border-left-color: #764ba2;">
+                <h3 style="color: #6a1b9a;">業界が間違っているわけではない</h3>
+                <p>
+                    企業は「効率」を求めます。設計 → 実装 → 完成という直線的な進み方が、一番「速い」からです。
+                    ただ、「速さ」と「確実性」のどちらを選ぶか、という違いです。
+                </p>
+            </div>
+
+            <div class="why-important" style="background: #e0f2f1; border-left-color: #00897b;">
+                <h3 style="color: #00695c;">agent-hub が選んだ道</h3>
+                <p>
+                    完成度よりも「<span class="highlight">人間が参加できる</span>」ことを大事にしました。
+                    スピードよりも「<span class="highlight">途中で修正できる</span>」ことを大事にしました。
+                </p>
+                <p style="margin-top: 15px;">
+                    つまり、AIと人間が「対等」に一緒に働く。これが、agent-hub の実験です。
+                </p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><span class="emoji">🎯</span> まとめ</h2>
+            <div style="background: #f5f5f5; padding: 30px; border-radius: 8px; font-size: 1.05em; line-height: 1.9;">
+                <p>
+                    <strong>agent-hub</strong> は、「完成されたAIシステム」ではなく、
+                    「人間とAIが一緒に成長する、実験的な場所」です。
+                </p>
+                <p style="margin-top: 20px;">
+                    毎日、人間とAIが対話して、一緒に考えて、少しずつ前に進む。
+                    その先に、本当の意味での「自己組織化」が生まれるかもしれない。
+                </p>
+                <p style="margin-top: 20px;">
+                    それが、agent-hub の挑戦です。
+                </p>
+            </div>
+        </div>
+
+        <footer>
+            <p>
+                このページは、2026年5月18日の議論をもとに作成されました。
+                <br/>
+                詳しい内容は、<code>2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。
+            </p>
+        </footer>
+    </div>
+</body>
+</html>
