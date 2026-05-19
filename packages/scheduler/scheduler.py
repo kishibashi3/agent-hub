@@ -213,18 +213,28 @@ def _parse_response_body(resp: requests.Response) -> dict[str, Any]:
 
     SSE response のうち、 単一 jsonrpc response (= tools/call の reply) は
     1 つの `data:` line に full JSON が入る前提 (= MCP StreamableHTTP の慣例)。
+
+    **UTF-8 decoding** (= @admin Pi5 second bug report 2026-05-20、 issue #88):
+    `requests` lib は Content-Type に charset 指定が無い場合 **ISO-8859-1** を fallback
+    として使う。 SSE response の `text/event-stream` は charset を含まないため、
+    `resp.text` を使うと日本語 (= multi-byte UTF-8) が ISO-8859-1 として誤 decode され、
+    mangled な byte sequence が JSON parser に渡って `Unterminated string` で fail する。
+    本 helper では `resp.content.decode("utf-8", errors="replace")` で **explicit UTF-8
+    decode** を強制し、 charset 未指定 SSE でも正常 parse する。
     """
     content_type = resp.headers.get("Content-Type", "")
     if "text/event-stream" in content_type:
-        # SSE format: 'data: <json>' lines を find
-        for line in resp.text.splitlines():
+        # SSE format: 'data: <json>' lines を find。 resp.text ではなく resp.content
+        # から explicit UTF-8 decode (= issue #88、 日本語 message の mojibake 回避)。
+        body_text = resp.content.decode("utf-8", errors="replace")
+        for line in body_text.splitlines():
             if line.startswith("data: "):
                 payload = line[6:].strip()
                 if payload:
                     return json.loads(payload)
         raise ValueError(
             f"no `data:` line in SSE response (Content-Type={content_type}): "
-            f"{resp.text[:200]}"
+            f"{body_text[:200]}"
         )
     return resp.json()
 
