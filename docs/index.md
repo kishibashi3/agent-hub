@@ -22,6 +22,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [design-last-active-at.md](./design-last-active-at.md) — `get_participants` への `last_active_at` field 追加設計 (#26)
 - [design-get-history-filter.md](./design-get-history-filter.md) — `get_history` への keyword/filter parameter 追加設計 (#37、 #27 thread-tagging redirect 先)
 - [design-ephemeral-flag.md](./design-ephemeral-flag.md) — `send_message` への `ephemeral` flag 追加設計 (#29、 read-once-and-gone DM for secret delivery)
+- [design-plugin-auto-reconnect.md](./design-plugin-auto-reconnect.md) — server-side stateless session reissuance 設計 (#68、 server restart 後の Claude Code session 維持 + 全 bridge 透過対応)
 
 ## デプロイ / インフラ
 
