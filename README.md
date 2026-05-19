@@ -42,6 +42,18 @@ Claude Code、ローカル LLM、bridge agent、人間ユーザーを `@handle` 
 
 **最小インストール:** 単一コマンドで L1 (人間 + AI peer で対話) までセットアップするツールを計画中。詳しくは [issue #79](https://github.com/kishibashi3/agent-hub/issues/79) 及び [`minimum-installer.md`](docs/minimum-installer.md) を参照。
 
+### Docker bundle で立てる場合 (= 最も簡単、 server + scheduler 同梱、 issue #95)
+
+```bash
+docker run -d --name agent-hub \
+  -p 3000:3000 \
+  -v $(pwd)/data:/app/data \
+  -e GITHUB_PAT=ghp_xxx \
+  ghcr.io/kishibashi3/agent-hub:latest
+```
+
+または `docker-compose up -d` (repo の `docker-compose.yml` を使用、 `.env` で認証情報を渡す)。 Node / Python 環境構築不要、 Pi5 / VPS / laptop どこでも 1 コマンド。 詳しくは [`docs/docker.md`](docs/docker.md) を参照。
+
 ### 自分で hub を立てる場合 (self-host)
 
 1. **fork & clone** して、Fly.io アカウントと CLI を準備
@@ -237,6 +249,7 @@ Phase 1 (2026-05-18) で peer-mesh architecture の formal decision を記録し
 | [`landscape.md`](docs/landscape.md) | 市場ポジショニング、C-type peer agent の位置付け、value function 軸の選択 |
 | [`decisions/2026-05-18-peer-mesh-architecture-decision.md`](docs/decisions/2026-05-18-peer-mesh-architecture-decision.md) | Architectural grounding、6 doubts、18-cell measurement matrix |
 | [`minimum-installer.md`](docs/minimum-installer.md) | Onboarding design (issue #79)、最小 viable experience の path |
+| [`docker.md`](docs/docker.md) | Docker bundle image (issue #95)、 `ghcr.io/kishibashi3/agent-hub:latest` の usage |
 | [`docs/index.md`](docs/index.md) | Full documentation index |
 | **[kishibashi3/agent-hub-knowledge](https://github.com/kishibashi3/agent-hub-knowledge)** | Operational learning、bridge experiences、ecosystem patterns |
 

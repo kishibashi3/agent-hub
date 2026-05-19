@@ -1,0 +1,101 @@
+# Docker bundle image を GitHub Container Registry (ghcr.io) に publish (= issue #95)
+#
+# 起動条件:
+# - main branch への push (= `:latest` tag を更新)
+# - `v*.*.*` 形式の tag push (= semver tag を別途付与、 `:v1.2.3` + `:latest`)
+# - PR (= build のみ、 push しない、 PR 内で Docker build 失敗を catch するため)
+#
+# image name: `ghcr.io/kishibashi3/agent-hub:latest` (= issue #95 spec 通り)
+#
+# 認証:
+# - `GITHUB_TOKEN` (= GitHub Actions が自動付与) で ghcr.io login
+# - repo Settings → Actions → General → Workflow permissions に
+#   `Read and write permissions` が必要 (= operator が initial setup)
+# - repo Packages 側で image visibility を public に設定する初回操作 operator 担当
+
+name: Docker Publish (ghcr.io)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    # PR で build verify のみ (= ghcr.io push しない)。 Dockerfile 変更を含む PR で
+    # build break を merge 前に catch。
+    paths:
+      - "Dockerfile.bundle"
+      - "docker/**"
+      - ".github/workflows/docker-publish.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "packages/scheduler/requirements.txt"
+      - "src/**"
+      - "packages/scheduler/**"
+
+# 並列実行は同一 ref で 1 つに limit (= 同 main push が連続した場合の race 回避)
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # GIT_COMMIT / GIT_COMMIT_AT を build-arg で渡すため full history fetch
+          fetch-depth: 0
+
+      - name: Resolve build metadata
+        id: meta
+        run: |
+          echo "git_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "git_commit_at=$(git log -1 --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        # PR (= push event でない) では login も push もしない、 build のみ
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image tags
+        id: tags
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/agent-hub
+          tags: |
+            # main branch push → :latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # tag push v1.2.3 → :v1.2.3 + :latest
+            type=ref,event=tag
+            # main branch push → :main-<sha7> も併設 (= rollback 用)
+            type=sha,prefix=main-,format=short,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.bundle
+          # PR 時は push=false で build verify のみ
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ steps.meta.outputs.git_commit }}
+            GIT_COMMIT_AT=${{ steps.meta.outputs.git_commit_at }}
+          # buildx layer cache (= GHA cache、 secondary build を高速化)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,95 @@
+# agent-hub all-in-one bundle image (= issue #95)
+#
+# `ghcr.io/kishibashi3/agent-hub:latest` として publish される **bundled image**:
+# hub server (Node) + scheduler (Python) を **同一 container** で同時起動。
+# `docker run kishibashi3/agent-hub` 1 コマンドで minimal-installer step 3 を満たす。
+#
+# 既存 `Dockerfile` (= fly.io 向け server-only image) は別用途として **そのまま残置**、
+# backward compat 完全保持 (= `flyctl deploy` は引き続き `Dockerfile` を使用する想定)。
+#
+# 2 process は `supervisord` (= 業界標準の lightweight process supervisor) で
+# orchestrate、 server が落ちたら restart、 scheduler が落ちたら restart の
+# auto-recovery 含む (= production-grade daemon と同等の挙動)。
+#
+# 設計判断: 12-factor の 「1 container 1 process」 を violate するが:
+# - server + scheduler は密結合 (= scheduler は server に MCP で接続する peer)
+# - 同 deployment lifecycle (= 同 commit, 同 release tag)
+# - 同 storage volume (= schedules.json + app.db)
+# のため、 user UX (= 1 image / 1 run) を優先して bundle 化。
+# scale-out 等で split が必要なら別 image (= server-only / scheduler-only) を将来 出す余地。
+
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+# Node + Python + supervisord を同居させる。
+# - python3 + pip: scheduler.py 実行用
+# - python3-venv: pip 環境 isolate 用 (= debian 12 PEP 668 対応)
+# - supervisor: 2 process orchestration
+# - build-essential + python3-dev: better-sqlite3 native build (= 既存 Dockerfile と同じ理由)
+# - ca-certificates + curl: HEALTHCHECK + HTTPS
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       python3 \
+       python3-pip \
+       python3-venv \
+       supervisor \
+       build-essential \
+       python3-dev \
+       ca-certificates \
+       curl \
+  && rm -rf /var/lib/apt/lists/*
+
+# ---- Node deps (= server side) ----
+# 依存だけ先にコピーしてキャッシュ効かせる
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# ---- Python deps (= scheduler side) ----
+# PEP 668 で system-wide pip が制限されるため venv 経由 install。
+# venv path を /app/.venv に集約、 supervisord から explicit path で呼ぶ。
+COPY packages/scheduler/requirements.txt /tmp/scheduler-requirements.txt
+RUN python3 -m venv /app/.venv \
+  && /app/.venv/bin/pip install --no-cache-dir -r /tmp/scheduler-requirements.txt \
+  && rm /tmp/scheduler-requirements.txt
+
+# ---- source code ----
+COPY src ./src
+COPY tsconfig.json ./
+COPY packages/scheduler ./packages/scheduler
+
+# ---- runtime data dir ----
+# DB ファイル + schedules.json の永続化先 (= compose や docker run の volume mount 想定)
+RUN mkdir -p /app/data
+
+# ---- supervisord config + entrypoint ----
+COPY docker/supervisord.conf /etc/supervisor/conf.d/agent-hub.conf
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# ---- build args (= issue #47: /health version info) ----
+# tag-based publish 時に GIT_COMMIT / GIT_COMMIT_AT を流す (= GitHub Actions で
+# `--build-arg` 経由)。 未指定でも image build 成功する (= ENV は空文字に倒れ、
+# server 側 readEnvString が `null` を返す = redline #1 整合)。
+ARG GIT_COMMIT=
+ARG GIT_COMMIT_AT=
+
+ENV NODE_ENV=production \
+    MCP_PORT=3000 \
+    DB_PATH=/app/data/app.db \
+    GIT_COMMIT=${GIT_COMMIT} \
+    GIT_COMMIT_AT=${GIT_COMMIT_AT} \
+    AGENT_HUB_URL=http://localhost:3000/mcp \
+    SCHEDULER_CONFIG=/app/data/schedules.json \
+    PATH=/app/.venv/bin:$PATH
+
+EXPOSE 3000
+
+# health check は server 側 /health endpoint を叩く (= scheduler 側 health は server 経由で観察)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://localhost:3000/health || exit 1
+
+# entrypoint で schedules.json の bootstrap (= 初回起動の空 volume 対応) を行ってから
+# supervisord に exec。 supervisord 自体が PID 1 として container lifecycle を握る
+# (= SIGTERM/SIGINT 受領で child processes に伝播 → graceful shutdown)。
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

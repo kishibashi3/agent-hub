@@ -23,6 +23,12 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [design-get-history-filter.md](./design-get-history-filter.md) — `get_history` への keyword/filter parameter 追加設計 (#37、 #27 thread-tagging redirect 先)
 - [design-ephemeral-flag.md](./design-ephemeral-flag.md) — `send_message` への `ephemeral` flag 追加設計 (#29、 read-once-and-gone DM for secret delivery)
 
+## デプロイ / インフラ
+
+- [docker.md](./docker.md) — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)
+- [minimum-installer.md](./minimum-installer.md) — Onboarding design (issue #79)、 最小 viable experience の path
+- [deployment-pi5.md](./deployment-pi5.md) — Pi5 deployment 完全手順書 (= server + bridges + scheduler)
+
 ## 競合 / 調査
 
 - [landscape.md](./landscape.md) — 「人＋エージェントが対等に共在する協働空間」観点の競合 positioning
