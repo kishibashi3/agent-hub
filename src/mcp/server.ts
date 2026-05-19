@@ -116,7 +116,18 @@ export function maybeWarnGhostSession(
   if (tenantDomain !== DEFAULT_TENANT) return;
   // operator の default tenant 活動は正規 (= @admin は cross-tenant management role)、
   // ghost detection の noise になるので skip
+  // TODO(future): multi-operator 化時に role-based skip list へ refactor 余地 (= reviewer Suggestion 1)
   if (handleName === '@admin') return;
+
+  // cooldown check を **SQL 前** に置く (= reviewer Minor 1 反映)。
+  // persistent ghost 状態 (= default 着地 + non-admin + named match あり) の user は
+  // every MCP request で middleware を通るが、 60s cooldown 内は SQL も log も full skip
+  // することで unnecessary scan を避ける。 cache key は (owner, handle) tuple のみで決まり
+  // SQL 不要のため、 早期判定可能。
+  const cacheKey = `${githubLogin}::${handleName}`;
+  const now = Date.now();
+  const lastWarn = ghostWarnCache.get(cacheKey);
+  if (lastWarn !== undefined && now - lastWarn < GHOST_WARN_COOLDOWN_MS) return;
 
   const namedTenants = findOtherTenantsForHandleAndOwner(
     db,
@@ -126,10 +137,9 @@ export function maybeWarnGhostSession(
   );
   if (namedTenants.length === 0) return;
 
-  const cacheKey = `${githubLogin}::${handleName}`;
-  const now = Date.now();
-  const lastWarn = ghostWarnCache.get(cacheKey);
-  if (lastWarn !== undefined && now - lastWarn < GHOST_WARN_COOLDOWN_MS) return;
+  // 実際に WARN を出す path に到達したら cache update (= 「ghost と判定 + warn 発火」 を記録)。
+  // 上の cooldown check より後ろに置くことで、 「named match なし」 で skip した case は
+  // cache に記録されず、 次回 request も SQL check し直す (= 新規 ghost state の検出能力を保持)。
   ghostWarnCache.set(cacheKey, now);
 
   console.warn(

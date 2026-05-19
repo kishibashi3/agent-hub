@@ -157,4 +157,40 @@ describe('ghost-session detection WARN (issue #28)', () => {
     expect(warnMsg).toContain('tenant-b');
     expect(warnMsg).toContain('tenant-c');
   });
+
+  it('cooldown 期限 (60s) を過ぎたら同 (owner, handle) で再 WARN 発火 (= reviewer Suggestion 2)', () => {
+    // setup: ghost state
+    registerParticipant(db, 'default', { name: 'bridge-claude' }, 'alice');
+    ensureTenant('tenant-a', 'alice');
+    registerParticipant(db, 'tenant-a', { name: 'bridge-claude' }, 'alice');
+
+    // 1 回目: fire
+    maybeWarnGhostSession(db, '@bridge-claude', 'default', 'alice');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // 2 回目 immediate: cooldown で suppressed (= 既存 test の重複だが期限前 baseline 確認)
+    maybeWarnGhostSession(db, '@bridge-claude', 'default', 'alice');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // 3 回目: fake timer で 61s 経過 → cooldown 切れて再 fire 期待
+    // (= Date.now() を stub することで `now - lastWarn >= 60_000` の path に到達)
+    vi.useFakeTimers();
+    try {
+      // fake timer は import 時刻基準で start するので、 spec 通り 61s 進める前に
+      // 「現在時刻」 を fake timer 時刻に lock するため `setSystemTime` で実時刻に揃える
+      const baseTime = new Date();
+      vi.setSystemTime(baseTime);
+      vi.advanceTimersByTime(61_000);
+
+      maybeWarnGhostSession(db, '@bridge-claude', 'default', 'alice');
+      // cooldown 切れて 2 回目の fire
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      // さらに immediate 再 call → 新たな cooldown 内なので suppressed
+      maybeWarnGhostSession(db, '@bridge-claude', 'default', 'alice');
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
