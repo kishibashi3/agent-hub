@@ -54,6 +54,9 @@ export async function handleSendMessage(
     // userId は authenticateUser middleware が canonical `@<name>` でセット済
     const sender = userId;
 
+    // productive activity 観察 (= issue #26)、 send は確実に productive
+    scope.updateLastActiveAt(sender);
+
     // メッセージ送信
     const message = scope.sendMessage(input, sender);
 

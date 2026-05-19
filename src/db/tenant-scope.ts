@@ -36,6 +36,7 @@ export interface TenantScope {
   getParticipantByNameIncludingDeleted(name: string): Participant | null;
   softDeleteParticipant(name: string): boolean;
   reviveParticipant(name: string, owner: string): boolean;
+  updateLastActiveAt(name: string): void;
 
   // messages
   sendMessage(input: SendMessageInput, sender: string): Message;
@@ -78,6 +79,7 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
       P.softDeleteParticipant(db, tenantId, name),
     reviveParticipant: (name, owner) =>
       P.reviveParticipant(db, tenantId, name, owner),
+    updateLastActiveAt: (name) => P.updateLastActiveAt(db, tenantId, name),
 
     // messages
     sendMessage: (input, sender) => M.sendMessage(db, tenantId, input, sender),

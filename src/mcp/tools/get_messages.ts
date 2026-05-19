@@ -38,6 +38,10 @@ export async function handleGetMessages(
   userId: string
 ): Promise<CallToolResult> {
   try {
+    // productive activity 観察 (= issue #26)、 inbox 消費は active engagement
+    // (= empty fetch も polling-style active check を兼ねるため update する)
+    scope.updateLastActiveAt(userId);
+
     // userId は authenticateUser middleware が canonical `@<name>` でセット済
     const messages = scope.getUnreadMessages(userId);
 
