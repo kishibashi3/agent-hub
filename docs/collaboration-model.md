@@ -1,6 +1,8 @@
 # 協働モデル — 共在 (co-presence)
 
-> **責務**: agent-hub がどのような協働モデルを採るかの思想と、エージェント発話プロトコルの正本。「どう振る舞うべきか」の規範。 🚧 スケルトン(思想 § + Dual-Mode § は 2026-05-18 ADR で grounded、発話プロトコル § は引き続き要詳細化)
+> **責務**: agent-hub がどのような協働モデルを採るかの思想と、エージェント発話プロトコルの正本。「どう振る舞うべきか」の規範。
+> 
+> **現在の充実度**: 思想 § + Operational Mechanism § + Failure Visibility § + Dual-Mode Specialization § + Decline Capability § は 2026-05-18 ADR で grounded ✅。発話プロトコル § は引き続き要詳細化 🚧
 
 > **2026-05-18 ADR Update**: 共在 (co-presence) の **operational mechanism** が `docs/decisions/2026-05-18-peer-mesh-architecture-decision.md` で codify された。本 doc の思想 § は仮説から ADR grounded へ昇格、Dual-Mode Specialization § を新規追加。発話プロトコル / 署名 / Merge protocol § は既存通り保持。
 
@@ -116,7 +118,7 @@ PR の review → approval → merge において、author / reviewer / operator
 
 > Mirror: reviewer 側の `CLAUDE.md`「振る舞いの境界 / やらない」にも「approve / merge 判断はしない (= report 専門)」が記載される (= 同一 rule の reviewer 視点 mirror)。両者が乖離した場合は本ドキュメントを正本とする。
 
-> Codification: 本 § の persona 責務分担は、ecosystem-wide CLAUDE.md (= リポジトリ root 横断の `~/app/CLAUDE.md`) 「Conventions § Merge actor は scope による」 に concrete な L0 (planner self-merge) / L1 (operator GO) split として codify されている。 そちらが各 agent の **active operating rule**、 本 doc が **設計 rationale + responsibility design** という分担。 詳細 spec は `agent-hub-planner/CLAUDE.md` § merge 権限ルール を参照。
+> Codification: 本 § の persona 責務分担は、ecosystem-wide CLAUDE.md (= リポジトリ root 横断の [`~/app/CLAUDE.md` § Conventions](../../CLAUDE.md#conventions)) に concrete な L0 (planner self-merge) / L1 (operator GO) split として codify されている。 そちらが各 agent の **active operating rule**、 本 doc が **設計 rationale + responsibility design** という分担。 詳細 spec は [`agent-hub-planner/CLAUDE.md` § merge 権限ルール](../agent-hub-planner/CLAUDE.md#merge-権限ルール) を参照。
 
 > Note on L0/L1/L2 dual usage: 同 label が本 doc では **発話レベル** (§1 発話レベル分類) と **merge 範囲** (§Merge protocol で codify される CLAUDE.md Conventions の merge actor split) の **2 文脈** で使われる。 両者は同じ「自律性 grading 思想」 を共有するが、 概念は独立 (= 発話 L0 ≠ merge L0)。 文脈で判別すること。
 
