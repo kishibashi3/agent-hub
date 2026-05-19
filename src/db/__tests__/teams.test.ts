@@ -441,6 +441,53 @@ describe('teams CRUD', () => {
       const members = getTeamMembers(db, 'default', 'nonexistent');
       expect(members).toEqual([]);
     });
+
+    // issue #15: soft-deleted participant が phantom member として残るのを防ぐ
+    it('soft-deleted participant は phantom として返さない', () => {
+      registerParticipants(db, ['alice', 'bob', 'charlie']);
+      createTeam(
+        db,
+        'default',
+        { name: 'team', members: ['bob', 'charlie'] },
+        'alice'
+      );
+
+      // pre-condition: 3 名全員 (= alice / bob / charlie) が含まれる
+      const beforeDelete = getTeamMembers(db, 'default', 'team');
+      expect(beforeDelete).toHaveLength(3);
+      expect(beforeDelete).toContain('@charlie');
+
+      // bob を soft-delete (= participants.deleted_at = now)
+      db.prepare(
+        "UPDATE participants SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE tenant_id = ? AND name = ?"
+      ).run('default', '@bob');
+
+      // post-condition: bob は除外、 active member のみ返る
+      const afterDelete = getTeamMembers(db, 'default', 'team');
+      expect(afterDelete).toHaveLength(2);
+      expect(afterDelete).toContain('@alice');
+      expect(afterDelete).toContain('@charlie');
+      expect(afterDelete).not.toContain('@bob');
+    });
+
+    // issue #15: 全 member が soft-deleted な team は空配列を返す
+    it('全 member が soft-deleted な場合も空配列を返す (= phantom 完全除去)', () => {
+      registerParticipants(db, ['alice', 'bob']);
+      createTeam(
+        db,
+        'default',
+        { name: 'team', members: ['bob'] },
+        'alice'
+      );
+
+      // alice / bob 両方を soft-delete
+      db.prepare(
+        "UPDATE participants SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE tenant_id = ?"
+      ).run('default');
+
+      const members = getTeamMembers(db, 'default', 'team');
+      expect(members).toEqual([]);
+    });
   });
 
   describe('isTeamMember', () => {

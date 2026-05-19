@@ -198,7 +198,18 @@ export function getTeams(db: Database.Database, tenantId: string): Team[] {
 }
 
 /**
- * チームのメンバー一覧を取得する
+ * チームのメンバー一覧を取得する (= active participant のみ、 soft-deleted は除外)。
+ *
+ * 既知 bug fix (issue #15): participants は `deleted_at` で soft-delete されるが、
+ * `team_members.member_name` の FK は `participants(tenant_id, name)` に対し
+ * `ON DELETE CASCADE` が `teams` 側にしか張られていないため、 soft-delete された
+ * participant が `team_members` row として残存する。 結果 `getTeamMembers` が
+ * 「person 一覧には居ない deleted handle」 を phantom として返す状態が PR #14
+ * (= `get_participants` の team metadata 統合) の reviewer review で発覚。
+ *
+ * 修正: `team_members` を `participants` と INNER JOIN し、
+ * `participants.deleted_at IS NULL` で filter (= active のみ)。 これにより
+ * `getParticipants` (active only) と `team.members` の listing が常に整合する。
  */
 export function getTeamMembers(
   db: Database.Database,
@@ -209,7 +220,14 @@ export function getTeamMembers(
 
   const members = db
     .prepare(
-      'SELECT member_name FROM team_members WHERE tenant_id = ? AND team_name = ? ORDER BY joined_at'
+      `SELECT tm.member_name
+       FROM team_members tm
+       INNER JOIN participants p
+         ON p.tenant_id = tm.tenant_id AND p.name = tm.member_name
+       WHERE tm.tenant_id = ?
+         AND tm.team_name = ?
+         AND p.deleted_at IS NULL
+       ORDER BY tm.joined_at`
     )
     .all(tenantId, name) as { member_name: string }[];
 
