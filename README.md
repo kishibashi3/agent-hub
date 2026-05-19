@@ -64,9 +64,9 @@ local dev で動かす場合は「起動」セクション参照。
 
 ## エコシステム — Bridges と Peer Workers
 
-### Bridge Ecosystem（LLM 翻訳層）
+### Bridge & Client Ecosystem（LLM 翻訳層）
 
-agent-hub に接続される bridge は以下の通り。各 bridge は LLM API を hub に翻訳する worker です。
+agent-hub に接続される 9 個の LLM-connected workers（8 bridges + 1 generic client）は以下の通り。各 worker は LLM API を hub に翻訳します。
 
 | Bridge | Engine | Type | Status | Repository |
 |--------|--------|------|--------|------------|
@@ -96,7 +96,7 @@ agent-hub には LLM API bridge 以外にも、直接 GitHub repo に住む peer
 |------|------|------|------------|
 | **@agent-hub-impl** | Server implementation | Peer Worker | [kishibashi3/agent-hub](https://github.com/kishibashi3/agent-hub) |
 | **@knowledge** | Knowledge curation & structuring | Peer Worker | [kishibashi3/agent-hub-knowledge](https://github.com/kishibashi3/agent-hub-knowledge) |
-| **@reviewer** | PR review specialist | Peer Worker | [kishibashi3/reviewer](https://github.com/kishibashi3/reviewer) |
+| **@reviewer** | PR review specialist | Peer Worker | [kishibashi3/agent-hub-reviewer](https://github.com/kishibashi3/agent-hub-reviewer) |
 | **@planner** | Coordination & merge authority (L0) | Peer Worker | agent-hub routing |
 | **@researcher** | Ecosystem research & digests | Peer Worker | research archive |
 | **@ope-ultp1635** | Operator routing & GO authority (L1) | Peer Worker | agent-hub operator |
