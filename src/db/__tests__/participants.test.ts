@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { registerParticipant, getParticipants, getParticipantByName } from '../participants.js';
+import {
+  registerParticipant,
+  getParticipants,
+  getParticipantByName,
+  findOtherTenantsForHandleAndOwner,
+  softDeleteParticipant,
+} from '../participants.js';
 import { initDatabase } from '../migrations.js';
 
 describe('participants', () => {
@@ -146,6 +152,93 @@ describe('participants', () => {
 
       const notFound = getParticipantByName(db, 'default', '@dave');
       expect(notFound).toBeNull();
+    });
+  });
+
+  describe('findOtherTenantsForHandleAndOwner (issue #28)', () => {
+    /** named tenant を pre-create する helper (= multi-tenant TOFU 経路を test 用に bypass) */
+    function ensureTenant(domain: string, owner: string): void {
+      db.prepare(
+        `INSERT OR IGNORE INTO tenants (domain, owner) VALUES (?, ?)`
+      ).run(domain, owner);
+    }
+
+    it('同 owner + 同 handle が他 tenant に存在する場合、 当該 tenant 一覧を返す', () => {
+      // default で @bridge owned by alice
+      registerParticipant(db, 'default', { name: 'bridge' }, 'alice');
+      // tenant-a / tenant-b でも owner=alice で @bridge を登録
+      ensureTenant('tenant-a', 'alice');
+      ensureTenant('tenant-b', 'alice');
+      registerParticipant(db, 'tenant-a', { name: 'bridge' }, 'alice');
+      registerParticipant(db, 'tenant-b', { name: 'bridge' }, 'alice');
+
+      const result = findOtherTenantsForHandleAndOwner(
+        db,
+        '@bridge',
+        'alice',
+        'default'
+      );
+
+      // tenant_id 昇順で 2 件
+      expect(result).toEqual(['tenant-a', 'tenant-b']);
+    });
+
+    it('別 owner の同名 handle は match させない (= false positive 防止)', () => {
+      registerParticipant(db, 'default', { name: 'bridge' }, 'alice');
+      ensureTenant('tenant-a', 'bob');
+      registerParticipant(db, 'tenant-a', { name: 'bridge' }, 'bob');
+
+      // owner=alice で問い合わせ → bob 所有の @bridge は除外
+      const result = findOtherTenantsForHandleAndOwner(
+        db,
+        '@bridge',
+        'alice',
+        'default'
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('soft-deleted な row は除外', () => {
+      registerParticipant(db, 'default', { name: 'bridge' }, 'alice');
+      ensureTenant('tenant-a', 'alice');
+      registerParticipant(db, 'tenant-a', { name: 'bridge' }, 'alice');
+
+      // tenant-a 側の @bridge を soft delete
+      softDeleteParticipant(db, 'tenant-a', '@bridge');
+
+      const result = findOtherTenantsForHandleAndOwner(
+        db,
+        '@bridge',
+        'alice',
+        'default'
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('excludeTenantId 自身は match に含めない', () => {
+      ensureTenant('tenant-a', 'alice');
+      registerParticipant(db, 'tenant-a', { name: 'bridge' }, 'alice');
+
+      // tenant-a を exclude すれば、 他に登録ない場合は empty
+      const result = findOtherTenantsForHandleAndOwner(
+        db,
+        '@bridge',
+        'alice',
+        'tenant-a'
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('該当なしの場合は空配列', () => {
+      registerParticipant(db, 'default', { name: 'lonely' }, 'alice');
+
+      const result = findOtherTenantsForHandleAndOwner(
+        db,
+        '@lonely',
+        'alice',
+        'default'
+      );
+      expect(result).toEqual([]);
     });
   });
 });

@@ -175,3 +175,38 @@ export function reviveParticipant(
   const info = stmt.run(tenantId, name, owner);
   return info.changes > 0;
 }
+
+/**
+ * 同じ handle name + owner で **excludeTenantId 以外** に存在する tenant の domain 一覧を返す
+ * (= issue #28 ghost session detection の cross-tenant lookup)。
+ *
+ * 用途: session が default tenant に着地した時、 同じ owner が同じ handle 名で
+ * named tenant に registered なら 「AGENT_HUB_TENANT 環境変数の伝播失敗かも?」
+ * と server log で WARN するための signal source。
+ *
+ * - **owner 完全一致 required**: name のみ一致 (= 別 owner の同名 handle、 multi-tenant
+ *   設計上は別 entity) は match させない (= false positive 防止)
+ * - soft-deleted (= deleted_at NOT NULL) は除外
+ * - return は tenant_id 昇順、 空配列の場合は他に見つからない (= warn 対象外)
+ *
+ * 例: owner=alice が default + tenant-a 両方に @bridge-claude 登録 → default 接続時
+ *      `findOtherTenantsForHandleAndOwner(db, '@bridge-claude', 'alice', 'default')` → `['tenant-a']`
+ */
+export function findOtherTenantsForHandleAndOwner(
+  db: Database.Database,
+  handleName: string,
+  owner: string,
+  excludeTenantId: string
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT tenant_id FROM participants
+       WHERE name = ?
+         AND owner = ?
+         AND tenant_id != ?
+         AND deleted_at IS NULL
+       ORDER BY tenant_id`
+    )
+    .all(handleName, owner, excludeTenantId) as { tenant_id: string }[];
+  return rows.map((r) => r.tenant_id);
+}

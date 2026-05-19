@@ -20,7 +20,10 @@ import {
   isDeploymentInitialized,
 } from '../db/tenants.js';
 import { scopeToTenant } from '../db/tenant-scope.js';
-import { getParticipantByName } from '../db/participants.js';
+import {
+  getParticipantByName,
+  findOtherTenantsForHandleAndOwner,
+} from '../db/participants.js';
 import { BoundedInMemoryEventStore } from './event-store.js';
 import { resolveEdition, type EditionConfig } from '../edition.js';
 import { getVersionInfo } from './version-info.js';
@@ -71,6 +74,90 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
+
+/**
+ * Ghost-session detection の WARN を rate-limit するための per-(owner,handle) cache。
+ *
+ * issue #28 (= watch.sh の AGENT_HUB_TENANT 未伝播 「見えない幽霊」 bug、 server-side
+ * Path B observability) の対応。 同 (owner, handle) tuple について **GHOST_WARN_COOLDOWN_MS
+ * (= 60s)** 以内の重複 WARN は出さない (= log 洪水を防ぐ)。
+ *
+ * cache size は **session 寿命より長い必要なし** + 高々 deployment 全 user 数程度なので
+ * unbounded Map で OK (= 実運用で爆発する size ではない)。
+ */
+const GHOST_WARN_COOLDOWN_MS = 60_000;
+const ghostWarnCache = new Map<string, number>();
+
+/**
+ * Ghost-session detection: default tenant への session 着地時、 同 (owner, handle) が
+ * named tenant に存在すれば 「AGENT_HUB_TENANT 伝播失敗かも?」 を WARN log する。
+ *
+ * 対象外条件:
+ * - tenantDomain !== DEFAULT_TENANT (= named tenant 着地時は正規 path、 warn 不要)
+ * - handleName === '@admin' (= operator が default tenant で activities するのは正規 use case)
+ * - 該当 named tenant 登録が 0 件 (= ghost ではなく真の default-only user)
+ * - cooldown 内 (= 既に 60s 以内に同 WARN 出してる)
+ *
+ * **副作用**: `console.warn` のみ。 session 自体は通常通り進行する (= warn は diagnostic
+ * 用途で session を block しない)。
+ *
+ * `export` してあるのは unit test から直接呼ぶため (= db を引数化することで auth middleware
+ * の HTTP 経路を通さずに WARN behavior を検証可能にする)。
+ *
+ * issue #28 origin: @admin (Pi5 ops) 報告 = is_online false のまま稼働続ける「見えない幽霊」状態
+ * Refs #28 (= L1 batch operator GO 取得済の server-side Path B、 plugin Path A は別 repo PR 済)
+ */
+export function maybeWarnGhostSession(
+  db: import('better-sqlite3').Database,
+  handleName: string,
+  tenantDomain: string,
+  githubLogin: string
+): void {
+  if (tenantDomain !== DEFAULT_TENANT) return;
+  // operator の default tenant 活動は正規 (= @admin は cross-tenant management role)、
+  // ghost detection の noise になるので skip
+  // TODO(future): multi-operator 化時に role-based skip list へ refactor 余地 (= reviewer Suggestion 1)
+  if (handleName === '@admin') return;
+
+  // cooldown check を **SQL 前** に置く (= reviewer Minor 1 反映)。
+  // persistent ghost 状態 (= default 着地 + non-admin + named match あり) の user は
+  // every MCP request で middleware を通るが、 60s cooldown 内は SQL も log も full skip
+  // することで unnecessary scan を避ける。 cache key は (owner, handle) tuple のみで決まり
+  // SQL 不要のため、 早期判定可能。
+  const cacheKey = `${githubLogin}::${handleName}`;
+  const now = Date.now();
+  const lastWarn = ghostWarnCache.get(cacheKey);
+  if (lastWarn !== undefined && now - lastWarn < GHOST_WARN_COOLDOWN_MS) return;
+
+  const namedTenants = findOtherTenantsForHandleAndOwner(
+    db,
+    handleName,
+    githubLogin,
+    DEFAULT_TENANT
+  );
+  if (namedTenants.length === 0) return;
+
+  // 実際に WARN を出す path に到達したら cache update (= 「ghost と判定 + warn 発火」 を記録)。
+  // 上の cooldown check より後ろに置くことで、 「named match なし」 で skip した case は
+  // cache に記録されず、 次回 request も SQL check し直す (= 新規 ghost state の検出能力を保持)。
+  ghostWarnCache.set(cacheKey, now);
+
+  console.warn(
+    `[ghost-session-detect] handle ${handleName} (owner=${githubLogin}) connected to default tenant ` +
+      `but is also registered in named tenant(s): [${namedTenants.join(', ')}]. ` +
+      `Possible env propagation issue (AGENT_HUB_TENANT not reaching the client?). ` +
+      `If you intended to connect to a named tenant, abort and verify X-Tenant-Id header. ` +
+      `Refs issue #28.`
+  );
+}
+
+/**
+ * Test-only: ghost-warn cache を clear する。 unit test の isolation 用、
+ * 同 (owner, handle) を複数 test 間で重複利用する場合に cooldown 影響を回避する。
+ */
+export function _resetGhostWarnCacheForTests(): void {
+  ghostWarnCache.clear();
+}
 
 /**
  * Edition 設定 (= deployment-time singleton)。
@@ -329,6 +416,10 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
 
     if (!checkDeploymentInitGate(res, tenantDomain, handleName)) return;
 
+    // issue #28: 「見えない幽霊」 bug detection (= AGENT_HUB_TENANT 伝播失敗の signal)。
+    // session block しない diagnostic only。
+    maybeWarnGhostSession(getDatabase(), handleName, tenantDomain, githubLogin);
+
     req.userId = handleName;
     req.githubLogin = githubLogin;
     req.tenantDomain = tenantDomain;
@@ -414,6 +505,11 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
           message: `handle ${handleName} は他のユーザー所有です`,
         });
       }
+
+      // issue #28: 「見えない幽霊」 bug detection (= AGENT_HUB_TENANT 伝播失敗 signal)。
+      // session block しない diagnostic only。 trust 経路と同じ judgement。
+      maybeWarnGhostSession(getDatabase(), handleName, tenantDomain, githubLogin);
+
       req.userId = handleName;
       req.githubLogin = githubLogin;
       req.tenantDomain = tenantDomain;
