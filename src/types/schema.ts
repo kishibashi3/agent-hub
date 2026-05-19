@@ -17,6 +17,7 @@ export const participantSchema = z.object({
   owner: z.string().nullable(),
   mode: peerModeSchema.nullable(),
   deleted_at: z.string().nullable(),
+  last_active_at: z.string().nullable(),
   created_at: z.string(),
 });
 

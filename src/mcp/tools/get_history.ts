@@ -54,6 +54,9 @@ export async function handleGetHistory(
     // 入力バリデーション
     const input = getHistoryInputSchema.parse(args);
 
+    // productive activity 観察 (= issue #26)、 履歴閲覧は能動的な content consumption
+    scope.updateLastActiveAt(userId);
+
     // DB から履歴を取得
     const messages = scope.getHistory(input, userId);
 

@@ -210,3 +210,30 @@ export function findOtherTenantsForHandleAndOwner(
     .all(handleName, owner, excludeTenantId) as { tenant_id: string }[];
   return rows.map((r) => r.tenant_id);
 }
+
+/**
+ * 参加者の last_active_at を `now()` で update する (= issue #26)。
+ *
+ * **productive activity** (= 能動的な hub 利用) が観察された時点で呼び出す。
+ * 対象 tool: `send_message` / `get_messages` / `mark_as_read` / `register` / `get_history`。
+ *
+ * **非対象 (= 呼ばない側)**: `get_participants` (= 観察行為) / SSE keepalive (= `is_online`
+ * で表現済) / `initialize` (= プロトコル handshake) / admin tool (= management 行為)。
+ *
+ * 設計判断の根拠は `docs/design-last-active-at.md` §3 参照。
+ *
+ * - soft-deleted (= deleted_at NOT NULL) でも update する (= revive 直前の最後の
+ *   activity も観察したいため、 design doc §5.3 edge case)。
+ * - 該当 row が存在しなければ NO-OP (= changes 0)、 silent return。
+ */
+export function updateLastActiveAt(
+  db: Database.Database,
+  tenantId: string,
+  name: string
+): void {
+  db.prepare(
+    `UPDATE participants
+       SET last_active_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+       WHERE tenant_id = ? AND name = ?`
+  ).run(tenantId, name);
+}
