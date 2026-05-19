@@ -5,520 +5,1165 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>agent-hub ってなに？peer-mesh について、高校生でもわかる解説</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        /* ============================================================
+           Design system — 2026 editorial · monochrome + electric accent
+           ============================================================ */
+        :root {
+            --paper: #f6f4ef;
+            --paper-2: #efece4;
+            --ink: #0b0c10;
+            --ink-2: #1a1c22;
+            --muted: #5b5e68;
+            --muted-2: #8a8d96;
+            --line: #d9d5c8;
+            --line-2: rgba(11, 12, 16, 0.08);
+            --accent: #5b3df5;          /* electric violet */
+            --accent-2: #ff5b3a;        /* coral */
+            --accent-3: #f5b800;        /* saffron */
+            --accent-4: #00997a;        /* deep teal */
+            --accent-5: #d63384;        /* magenta */
+            --glass: rgba(255, 255, 255, 0.55);
+            --glass-border: rgba(11, 12, 16, 0.08);
+            --shadow-soft: 0 1px 0 rgba(11,12,16,.04), 0 8px 24px -12px rgba(11,12,16,.18);
+            --shadow-pop: 0 30px 60px -30px rgba(91,61,245,.45), 0 12px 24px -12px rgba(11,12,16,.18);
+            --radius-lg: 28px;
+            --radius-md: 18px;
+            --radius-sm: 10px;
+            --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+            --serif: "Newsreader", "Source Serif 4", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif;
+            --sans: "Inter", "Plus Jakarta Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Segoe UI", system-ui, -apple-system, sans-serif;
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        *::selection { background: var(--accent); color: #fff; }
+
+        html { scroll-behavior: smooth; }
 
         body {
-            font-family: 'Segoe UI', 'Yu Gothic', sans-serif;
-            line-height: 1.8;
-            color: #333;
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
-            padding: 40px 20px;
+            font-family: var(--sans);
+            font-feature-settings: "ss01", "cv11", "palt";
+            font-size: 17px;
+            line-height: 1.75;
+            color: var(--ink);
+            background: var(--paper);
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+            overflow-x: hidden;
         }
 
-        .container {
-            max-width: 1000px;
+        /* Subtle paper grain via radial noise gradient */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            background:
+                radial-gradient(circle at 12% 8%, rgba(91,61,245,0.12), transparent 35%),
+                radial-gradient(circle at 88% 18%, rgba(255,91,58,0.10), transparent 30%),
+                radial-gradient(circle at 78% 92%, rgba(0,153,122,0.08), transparent 40%);
+        }
+
+        /* ============================================================
+           Scroll progress bar
+           ============================================================ */
+        .scroll-progress {
+            position: fixed;
+            top: 0; left: 0;
+            height: 3px;
+            width: 0%;
+            background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3));
+            z-index: 9999;
+            transition: width 80ms linear;
+        }
+
+        /* ============================================================
+           Top nav (minimal, sticky)
+           ============================================================ */
+        .topnav {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(18px) saturate(180%);
+            -webkit-backdrop-filter: blur(18px) saturate(180%);
+            background: rgba(246, 244, 239, 0.72);
+            border-bottom: 1px solid var(--line-2);
+        }
+        .topnav__inner {
+            max-width: 1240px;
             margin: 0 auto;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            padding: 14px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-family: var(--mono);
+            font-size: 13px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--ink);
+        }
+        .brand__dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 0 4px rgba(91,61,245,0.15);
+            animation: pulse 2.4s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 4px rgba(91,61,245,0.12); }
+            50% { box-shadow: 0 0 0 10px rgba(91,61,245,0); }
+        }
+        .nav__meta {
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--muted);
+            letter-spacing: 0.04em;
+        }
+
+        /* ============================================================
+           Layout shell
+           ============================================================ */
+        .shell {
+            position: relative;
+            z-index: 1;
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 0 32px 80px;
+        }
+
+        /* ============================================================
+           Hero
+           ============================================================ */
+        .hero {
+            position: relative;
+            padding: 120px 0 100px;
+            border-bottom: 1px solid var(--line-2);
+        }
+        .hero__eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 14px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--glass);
+            backdrop-filter: blur(8px);
+            font-family: var(--mono);
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 32px;
+        }
+        .hero__eyebrow::before {
+            content: "";
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--accent-2);
+            animation: pulse 2.4s ease-in-out infinite;
+        }
+        .hero__title {
+            font-family: var(--serif);
+            font-weight: 500;
+            font-size: clamp(48px, 8vw, 120px);
+            line-height: 0.98;
+            letter-spacing: -0.02em;
+            color: var(--ink);
+            margin-bottom: 28px;
+        }
+        .hero__title em {
+            font-style: italic;
+            background: linear-gradient(120deg, var(--accent) 10%, var(--accent-5) 50%, var(--accent-2) 90%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            font-weight: 400;
+        }
+        .hero__tagline {
+            font-size: clamp(18px, 2vw, 22px);
+            max-width: 720px;
+            color: var(--muted);
+            font-weight: 400;
+        }
+        .hero__meta {
+            margin-top: 56px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 24px;
+            padding-top: 32px;
+            border-top: 1px solid var(--line-2);
+        }
+        .hero__meta div { display: flex; flex-direction: column; gap: 4px; }
+        .hero__meta dt {
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted-2);
+        }
+        .hero__meta dd {
+            font-family: var(--serif);
+            font-size: 18px;
+            color: var(--ink);
+        }
+
+        /* ============================================================
+           Section primitives
+           ============================================================ */
+        section.block {
+            padding: 100px 0 40px;
+            position: relative;
+        }
+        .section__label {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-bottom: 20px;
+        }
+        .section__label::before {
+            content: "";
+            width: 24px; height: 1px;
+            background: var(--ink);
+        }
+        .section__title {
+            font-family: var(--serif);
+            font-weight: 500;
+            font-size: clamp(34px, 5vw, 56px);
+            line-height: 1.05;
+            letter-spacing: -0.015em;
+            color: var(--ink);
+            margin-bottom: 24px;
+            max-width: 900px;
+        }
+        .section__lede {
+            font-size: 19px;
+            color: var(--muted);
+            max-width: 760px;
+            margin-bottom: 48px;
+        }
+
+        h3.sub {
+            font-family: var(--serif);
+            font-weight: 500;
+            font-size: 26px;
+            line-height: 1.25;
+            color: var(--ink);
+            letter-spacing: -0.01em;
+            margin: 56px 0 20px;
+        }
+
+        h4.mini {
+            font-family: var(--mono);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+
+        p { color: var(--ink-2); }
+        p + p { margin-top: 14px; }
+        strong { color: var(--ink); font-weight: 600; }
+
+        a { color: var(--ink); text-decoration: none; }
+        a:hover { color: var(--accent); }
+
+        .mark {
+            background: linear-gradient(180deg, transparent 55%, rgba(245,184,0,0.45) 55%);
+            padding: 0 2px;
+            font-weight: 600;
+        }
+
+        /* ============================================================
+           TOC bento
+           ============================================================ */
+        .toc-bento {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+        }
+        .toc-bento a {
+            position: relative;
+            padding: 22px 20px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-md);
+            background: var(--paper-2);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 130px;
+            transition: transform .25s ease, border-color .25s ease, background .25s ease;
+        }
+        .toc-bento a:hover {
+            transform: translateY(-3px);
+            border-color: var(--ink);
+            background: #fff;
+        }
+        .toc-bento .num {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 0.06em;
+        }
+        .toc-bento .label {
+            font-family: var(--serif);
+            font-size: 17px;
+            line-height: 1.25;
+            color: var(--ink);
+            margin-top: 16px;
+        }
+        .toc-bento a::after {
+            content: "↗";
+            position: absolute;
+            top: 18px; right: 20px;
+            font-size: 14px;
+            color: var(--muted);
+            transition: color .2s ease, transform .2s ease;
+        }
+        .toc-bento a:hover::after { color: var(--accent); transform: translate(2px,-2px); }
+
+        /* ============================================================
+           Intro callout
+           ============================================================ */
+        .intro-card {
+            position: relative;
+            padding: 48px;
+            border-radius: var(--radius-lg);
+            background: linear-gradient(155deg, #ffffff 0%, var(--paper-2) 100%);
+            border: 1px solid var(--line);
+            box-shadow: var(--shadow-soft);
+            font-size: 19px;
+            line-height: 1.85;
+        }
+        .intro-card::before {
+            content: "“";
+            position: absolute;
+            top: -8px; left: 24px;
+            font-family: var(--serif);
+            font-size: 120px;
+            line-height: 1;
+            color: var(--accent);
+            opacity: 0.3;
+        }
+        .intro-card p + p { margin-top: 18px; }
+
+        /* ============================================================
+           Comparison split
+           ============================================================ */
+        .compare {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        .compare__card {
+            position: relative;
+            padding: 40px;
+            border-radius: var(--radius-lg);
+            background: #fff;
+            border: 1px solid var(--line);
             overflow: hidden;
         }
-
-        header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 60px 40px;
-            text-align: center;
+        .compare__card.industry {
+            background:
+                radial-gradient(circle at 90% 10%, rgba(245,184,0,0.18), transparent 50%),
+                linear-gradient(180deg, #fffaf0 0%, #fff7e6 100%);
+            border-color: rgba(245,184,0,0.4);
+        }
+        .compare__card.hub {
+            background:
+                radial-gradient(circle at 10% 90%, rgba(91,61,245,0.18), transparent 50%),
+                linear-gradient(180deg, #f4f1ff 0%, #ede8ff 100%);
+            border-color: rgba(91,61,245,0.4);
+            color: var(--ink);
+        }
+        .compare__chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.7);
+            border: 1px solid var(--glass-border);
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--ink);
+            margin-bottom: 24px;
+        }
+        .compare__name {
+            font-family: var(--serif);
+            font-size: 32px;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+            margin-bottom: 28px;
+        }
+        .compare__list {
+            list-style: none;
+            display: grid;
+            gap: 14px;
+        }
+        .compare__list li {
+            position: relative;
+            padding-left: 32px;
+            font-size: 16px;
+            color: var(--ink-2);
+        }
+        .compare__list li::before {
+            content: "";
+            position: absolute;
+            left: 0; top: 11px;
+            width: 20px; height: 1px;
+            background: var(--ink);
         }
 
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 15px;
-            font-weight: 700;
+        /* ============================================================
+           Philosophy
+           ============================================================ */
+        .philo-bar {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 24px;
+            padding: 40px 0;
+            margin-bottom: 40px;
+            border-top: 1px solid var(--line-2);
+            border-bottom: 1px solid var(--line-2);
+        }
+        .philo-bar__side {
+            font-family: var(--serif);
+            font-style: italic;
+            font-size: 28px;
+            line-height: 1.3;
+            color: var(--ink);
+        }
+        .philo-bar__side.right { text-align: right; color: var(--accent-4); }
+        .philo-bar__vs {
+            font-family: var(--mono);
+            font-size: 14px;
+            color: var(--muted);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            padding: 8px 14px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+        }
+        .philo-pair {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+        .philo-card {
+            padding: 36px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--line);
+            background: #fff;
+        }
+        .philo-card.east {
+            background: linear-gradient(160deg, #f0faf5 0%, #e6f5ec 100%);
+            border-color: rgba(0,153,122,0.3);
+        }
+        .philo-card.west {
+            background: linear-gradient(160deg, #f3f0ff 0%, #ebe6ff 100%);
+            border-color: rgba(91,61,245,0.25);
+        }
+        .philo-card__cap {
+            font-family: var(--mono);
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 16px;
+        }
+        .philo-card__title {
+            font-family: var(--serif);
+            font-size: 24px;
+            font-weight: 500;
+            margin-bottom: 16px;
+        }
+        .philo-card.west .philo-card__title { color: var(--accent); }
+        .philo-card.east .philo-card__title { color: var(--accent-4); }
+
+        .svg-frame {
+            position: relative;
+            margin: 48px 0 32px;
+            padding: 40px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--line);
+            background: #fff;
+            overflow: hidden;
+        }
+        .svg-frame::before {
+            content: "FIG. 01 — being vs becoming";
+            position: absolute;
+            top: 18px; left: 24px;
+            font-family: var(--mono);
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            color: var(--muted-2);
+        }
+        .svg-frame svg { max-width: 100%; height: auto; display: block; margin-top: 24px; }
+
+        .kazu-note {
+            padding: 32px 36px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(120deg, #fffbeb 0%, #fff5d6 100%);
+            border-left: 3px solid var(--accent-3);
+            font-size: 16.5px;
+            line-height: 1.85;
+        }
+        .kazu-note strong { color: var(--ink); }
+
+        /* ============================================================
+           Industry section
+           ============================================================ */
+        .pivot {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin: 32px 0 40px;
+        }
+        .pivot__col {
+            padding: 32px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--line);
+            background: #fff;
+        }
+        .pivot__when {
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+        .pivot__claim {
+            font-family: var(--serif);
+            font-size: 22px;
+            font-weight: 500;
+            margin-bottom: 12px;
+        }
+        .case-stack { display: grid; gap: 16px; margin-bottom: 24px; }
+        .case {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 24px;
+            padding: 28px 32px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--line);
+            background: #fff;
+            transition: border-color .2s ease, transform .2s ease;
+        }
+        .case:hover { border-color: var(--ink); }
+        .case__tag {
+            font-family: var(--mono);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            color: var(--accent);
+            text-transform: uppercase;
+        }
+        .case__name {
+            font-family: var(--serif);
+            font-size: 22px;
+            font-weight: 500;
+            color: var(--ink);
+            margin: 6px 0 0;
+        }
+        .case__desc { color: var(--muted); font-size: 15.5px; line-height: 1.7; }
+
+        .hypothesis {
+            padding: 36px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(120deg, #eefdf3 0%, #dff7e6 100%);
+            border: 1px solid rgba(0,153,122,0.3);
+            margin: 24px 0;
+        }
+        .hypothesis q {
+            display: block;
+            font-family: var(--serif);
+            font-style: italic;
+            font-size: 24px;
+            color: var(--accent-4);
+            line-height: 1.4;
         }
 
-        .tagline {
-            font-size: 1.2em;
-            opacity: 0.95;
-            font-weight: 300;
+        .blocker {
+            padding: 36px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(120deg, #fff0ef 0%, #ffe1dd 100%);
+            border: 1px solid rgba(255,91,58,0.3);
+            margin: 24px 0;
+        }
+        .blocker h4 {
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--accent-2);
+            letter-spacing: 0.1em;
+            margin-bottom: 16px;
         }
 
-        .section {
-            padding: 50px 40px;
-            border-bottom: 1px solid #e0e0e0;
+        /* ============================================================
+           Two paths
+           ============================================================ */
+        .paths {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin: 32px 0;
+        }
+        .path {
+            position: relative;
+            padding: 40px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--line);
+            background: #fff;
+            overflow: hidden;
+        }
+        .path.orch {
+            background: linear-gradient(155deg, #fff8ec 0%, #fff1d8 100%);
+            border-color: rgba(255,159,28,0.3);
+        }
+        .path.sim {
+            background: linear-gradient(155deg, #f5edff 0%, #ece0ff 100%);
+            border-color: rgba(155,99,219,0.3);
+        }
+        .path__num {
+            font-family: var(--serif);
+            font-style: italic;
+            font-size: 90px;
+            line-height: 1;
+            color: rgba(11,12,16,0.08);
+            position: absolute;
+            top: 24px; right: 28px;
+            pointer-events: none;
+        }
+        .path__tag {
+            font-family: var(--mono);
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+        .path__name {
+            font-family: var(--serif);
+            font-size: 26px;
+            font-weight: 500;
+            margin-bottom: 16px;
+        }
+        .path dl { display: grid; grid-template-columns: 100px 1fr; gap: 8px 14px; margin-top: 16px; }
+        .path dt {
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            padding-top: 4px;
+        }
+        .path dd { font-size: 15.5px; color: var(--ink-2); }
+
+        .why-2-only {
+            padding: 36px 40px;
+            border-radius: var(--radius-lg);
+            background: linear-gradient(120deg, var(--ink) 0%, #1d1f28 100%);
+            color: #f0eee6;
+            margin-top: 32px;
+        }
+        .why-2-only h3 {
+            font-family: var(--serif);
+            font-size: 26px;
+            font-weight: 500;
+            color: #ffdc82;
+            margin-bottom: 16px;
+        }
+        .why-2-only p { color: #d3d0c4; }
+        .why-2-only strong { color: #fff; }
+        .why-2-only .checks { display: grid; gap: 8px; margin: 16px 0; font-family: var(--mono); font-size: 14px; }
+
+        /* ============================================================
+           Concepts
+           ============================================================ */
+        .concept-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0;
+        }
+        .concept {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 32px;
+            padding: 36px 0;
+            border-top: 1px solid var(--line-2);
+        }
+        .concept:last-child { border-bottom: 1px solid var(--line-2); }
+        .concept__num {
+            font-family: var(--serif);
+            font-style: italic;
+            font-size: 64px;
+            line-height: 1;
+            background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .concept__name {
+            font-family: var(--serif);
+            font-size: 26px;
+            font-weight: 500;
+            line-height: 1.3;
+            margin-bottom: 10px;
+            letter-spacing: -0.005em;
+        }
+        .concept__name .en {
+            font-family: var(--mono);
+            font-style: normal;
+            font-size: 13px;
+            color: var(--muted);
+            letter-spacing: 0.04em;
+            margin-left: 8px;
+            font-weight: 400;
+        }
+        .concept__desc { font-size: 16.5px; color: var(--ink-2); line-height: 1.8; }
+
+        .concepts-footer {
+            margin-top: 32px;
+            padding: 28px 32px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(120deg, #eefdf3 0%, #e0f5fb 100%);
+            border: 1px solid rgba(0,153,122,0.2);
+        }
+        .selection-criteria {
+            padding: 18px 22px;
+            border-radius: var(--radius-sm);
+            background: var(--paper-2);
+            border: 1px dashed var(--line);
+            font-family: var(--mono);
+            font-size: 13px;
+            color: var(--muted);
+            line-height: 1.7;
+            margin-bottom: 32px;
         }
 
-        .section:last-child {
-            border-bottom: none;
+        /* ============================================================
+           6 progressive elements (bento)
+           ============================================================ */
+        .elements {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+        .element {
+            position: relative;
+            padding: 32px 28px 28px;
+            border-radius: var(--radius-md);
+            background: #fff;
+            border: 1px solid var(--line);
+            overflow: hidden;
+            transition: transform .25s ease, border-color .25s ease;
+            min-height: 220px;
+        }
+        .element:hover { transform: translateY(-4px); border-color: var(--ink); }
+        .element__num {
+            position: absolute;
+            top: 22px; right: 28px;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 0.08em;
+        }
+        .element__num::before { content: "STEP "; }
+        .element__title {
+            font-family: var(--serif);
+            font-size: 22px;
+            font-weight: 500;
+            line-height: 1.25;
+            margin: 28px 0 12px;
+            letter-spacing: -0.005em;
+        }
+        .element__desc { font-size: 15.5px; color: var(--muted); line-height: 1.7; }
+        .element__bar {
+            position: absolute;
+            left: 28px; bottom: 24px;
+            height: 4px; width: 30px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-2));
+            opacity: 0.6;
         }
 
-        h2 {
-            font-size: 2em;
-            color: #667eea;
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 3px solid #667eea;
+        /* ============================================================
+           Core message (huge)
+           ============================================================ */
+        .core {
+            position: relative;
+            margin: 0;
+            padding: 120px 60px;
+            border-radius: var(--radius-lg);
+            background: radial-gradient(ellipse at top left, #2b1860 0%, #0b0c10 60%);
+            color: #fff;
+            text-align: left;
+            overflow: hidden;
+        }
+        .core::before {
+            content: "";
+            position: absolute;
+            top: -120px; right: -120px;
+            width: 400px; height: 400px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,91,58,0.5), transparent 60%);
+            filter: blur(20px);
+        }
+        .core::after {
+            content: "";
+            position: absolute;
+            bottom: -100px; left: -80px;
+            width: 320px; height: 320px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(91,61,245,0.5), transparent 60%);
+            filter: blur(20px);
+        }
+        .core__eyebrow {
+            font-family: var(--mono);
+            font-size: 12px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: #ffdc82;
+            margin-bottom: 32px;
+            position: relative;
+            z-index: 1;
+        }
+        .core__statement {
+            font-family: var(--serif);
+            font-size: clamp(34px, 5vw, 60px);
+            line-height: 1.15;
+            letter-spacing: -0.015em;
+            font-weight: 400;
+            max-width: 980px;
+            position: relative;
+            z-index: 1;
+        }
+        .core__statement em {
+            font-style: italic;
+            background: linear-gradient(120deg, #ffdc82, #ff8a6b);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
         }
 
-        h3 {
-            font-size: 1.4em;
-            color: #764ba2;
-            margin-top: 25px;
-            margin-bottom: 15px;
+        /* ============================================================
+           Why important & summary
+           ============================================================ */
+        .why-grid { display: grid; gap: 20px; }
+        .why-item {
+            padding: 36px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--line);
+            background: #fff;
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 32px;
+            align-items: start;
+        }
+        .why-item.alt-1 { background: linear-gradient(120deg, #f5edff 0%, #ece0ff 100%); border-color: rgba(91,61,245,0.25); }
+        .why-item.alt-2 { background: linear-gradient(120deg, #eefdf3 0%, #dff7e6 100%); border-color: rgba(0,153,122,0.25); }
+        .why-item h3 {
+            font-family: var(--serif);
+            font-size: 22px;
+            font-weight: 500;
+            line-height: 1.25;
+            margin: 0;
+            letter-spacing: -0.005em;
         }
 
-        .intro-text {
-            font-size: 1.1em;
-            background: #f0f4ff;
-            padding: 20px 25px;
-            border-left: 4px solid #667eea;
-            border-radius: 4px;
-            margin-bottom: 30px;
+        .summary-card {
+            padding: 56px;
+            border-radius: var(--radius-lg);
+            background: linear-gradient(160deg, #fff 0%, var(--paper-2) 100%);
+            border: 1px solid var(--line);
+            font-size: 19px;
             line-height: 1.9;
         }
+        .summary-card p + p { margin-top: 22px; }
 
-        .comparison-grid {
+        /* ============================================================
+           Proof section
+           ============================================================ */
+        .voices { display: grid; gap: 12px; margin: 32px 0; }
+        .voice {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin: 30px 0;
+            grid-template-columns: 220px 1fr;
+            gap: 32px;
+            padding: 28px 32px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--line);
+            background: #fff;
         }
-
-        .comparison-box {
-            padding: 30px;
-            border-radius: 8px;
-            border: 2px solid #ddd;
+        .voice__who {
+            font-family: var(--mono);
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--accent);
         }
-
-        .comparison-box.industry {
-            background: #fff3cd;
-            border-color: #ffc107;
-        }
-
-        .comparison-box.agent-hub {
-            background: #d1ecf1;
-            border-color: #17a2b8;
-        }
-
-        .comparison-box h3 {
-            margin-top: 0;
-        }
-
-        .comparison-label {
-            display: block;
-            font-weight: 700;
-            font-size: 1.2em;
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .comparison-box.industry .comparison-label {
-            color: #856404;
-        }
-
-        .comparison-box.agent-hub .comparison-label {
-            color: #0c5460;
-        }
-
-        .comparison-list {
-            list-style: none;
-            padding: 0;
-        }
-
-        .comparison-list li {
-            padding: 8px 0;
-            padding-left: 25px;
-            position: relative;
-        }
-
-        .comparison-list li:before {
-            content: "→";
-            position: absolute;
-            left: 0;
-            font-weight: bold;
-        }
-
-        .being-becoming {
-            background: #f8f9fa;
-            padding: 40px;
-            border-radius: 8px;
-            margin: 30px 0;
-            text-align: center;
-        }
-
-        .svg-container {
-            margin: 40px 0;
-            display: flex;
-            justify-content: center;
-            overflow-x: auto;
-        }
-
-        svg {
-            max-width: 100%;
-            height: auto;
-        }
-
-        .philosophy-box {
-            background: linear-gradient(135deg, #e8d5f2 0%, #d4e5f7 100%);
-            padding: 30px;
-            border-radius: 8px;
-            margin: 20px 0;
-            border-left: 5px solid #667eea;
-        }
-
-        .philosophy-box h4 {
-            color: #667eea;
-            margin-bottom: 15px;
-            font-weight: 700;
-        }
-
-        .two-paths {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 25px;
-            margin: 25px 0;
-        }
-
-        .path-card {
-            padding: 25px;
-            border-radius: 8px;
-            border: 2px solid #ddd;
-        }
-
-        .path-card.orchestrator {
-            background: #fff8dc;
-            border-color: #ff9800;
-        }
-
-        .path-card.simulation {
-            background: #f3e5f5;
-            border-color: #9c27b0;
-        }
-
-        .path-title {
-            font-weight: 700;
-            font-size: 1.2em;
-            margin-bottom: 15px;
-        }
-
-        .path-card.orchestrator .path-title {
-            color: #ff6f00;
-        }
-
-        .path-card.simulation .path-title {
-            color: #6a1b9a;
-        }
-
-        .progressive-elements {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 20px;
-            margin: 30px 0;
-        }
-
-        .element-card {
-            background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-        }
-
-        .element-number {
-            display: inline-block;
-            background: #667eea;
-            color: white;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            text-align: center;
-            line-height: 40px;
-            font-weight: bold;
-            margin-right: 10px;
-        }
-
-        .element-title {
-            font-weight: 700;
-            font-size: 1.1em;
-            margin: 10px 0;
-        }
-
-        .element-desc {
-            font-size: 0.95em;
-            color: #666;
-        }
-
-        .concept-card {
-            background: #f5f5f5;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 15px 0;
-            border-left: 4px solid #764ba2;
-        }
-
-        .concept-name {
-            font-weight: 700;
-            color: #764ba2;
-            margin-bottom: 8px;
-        }
-
-        .concept-desc {
-            font-size: 0.95em;
+        .voice__role { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 4px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 400; }
+        .voice__quote {
+            font-family: var(--serif);
+            font-style: italic;
+            font-size: 17px;
             line-height: 1.7;
+            color: var(--ink);
         }
+        .voice:nth-child(1) .voice__who { color: var(--accent); }
+        .voice:nth-child(2) .voice__who { color: var(--accent-5); }
+        .voice:nth-child(3) .voice__who { color: var(--accent-4); }
+        .voice:nth-child(4) .voice__who { color: var(--accent-2); }
+        .voice:nth-child(5) .voice__who { color: #6f3cb7; }
+        .voice:nth-child(6) .voice__who { color: var(--accent-3); }
 
-        .core-message {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 40px;
-            border-radius: 8px;
-            margin: 40px 0;
-            text-align: center;
-            font-size: 1.3em;
-            font-weight: 600;
-            line-height: 1.8;
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        .observation { display: grid; gap: 14px; margin: 28px 0; }
+        .obs {
+            padding: 28px 32px;
+            border-radius: var(--radius-md);
+            background: var(--paper-2);
+            border-left: 3px solid var(--ink);
         }
-
-        .why-important {
-            background: #e8f4f8;
-            padding: 30px;
-            border-radius: 8px;
-            border-left: 5px solid #17a2b8;
-            margin: 30px 0;
+        .obs h4 {
+            font-family: var(--serif);
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 12px;
+            line-height: 1.3;
         }
-
-        .why-important h3 {
-            color: #0c5460;
-            margin-top: 0;
-        }
-
-        .why-important p {
-            margin: 10px 0;
-            font-size: 1.05em;
-            line-height: 1.8;
-        }
-
-        .highlight {
-            background: #fff59d;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-weight: 600;
-        }
-
-        .timeline-item {
-            padding: 15px 0;
-            border-left: 3px solid #667eea;
-            padding-left: 20px;
-            position: relative;
-        }
-
-        .timeline-item::before {
-            content: '';
-            position: absolute;
-            left: -9px;
-            top: 20px;
-            width: 12px;
-            height: 12px;
-            background: #667eea;
-            border-radius: 50%;
-        }
-
-        .timeline-item .step-num {
-            font-weight: 700;
-            color: #667eea;
-            margin-right: 8px;
-        }
+        .obs p { font-size: 15.5px; color: var(--ink-2); line-height: 1.75; }
 
         .proof-highlight {
-            background: linear-gradient(135deg, #fff59d 0%, #ffeb3b 100%);
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-            border-left: 4px solid #f57f17;
-            font-weight: 600;
+            padding: 40px;
+            border-radius: var(--radius-lg);
+            background: linear-gradient(120deg, #fff8d6 0%, #ffe7c2 100%);
+            border: 1px solid rgba(245,184,0,0.5);
+            margin: 32px 0;
+        }
+        .proof-highlight p {
+            font-family: var(--serif);
+            font-size: 22px;
+            line-height: 1.5;
+            font-weight: 500;
+            color: var(--ink);
         }
 
+        .closing {
+            padding: 48px;
+            border-radius: var(--radius-lg);
+            background: linear-gradient(135deg, #002e2a 0%, #003f37 100%);
+            color: #d6f3ec;
+            font-family: var(--serif);
+            font-size: 20px;
+            line-height: 1.7;
+        }
+        .closing strong { color: #fff; }
+
+        /* ============================================================
+           Footer
+           ============================================================ */
         footer {
-            background: #f8f9fa;
-            padding: 30px 40px;
-            text-align: center;
-            font-size: 0.9em;
-            color: #666;
-            border-top: 1px solid #e0e0e0;
+            margin-top: 80px;
+            padding-top: 48px;
+            border-top: 1px solid var(--line-2);
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 32px;
+            align-items: end;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+        footer code {
+            font-family: var(--mono);
+            background: var(--paper-2);
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 12.5px;
+            color: var(--ink);
+        }
+        .footer__mark {
+            font-family: var(--mono);
+            font-size: 11px;
+            text-align: right;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted-2);
         }
 
-        .emoji {
-            font-size: 1.2em;
-            margin: 0 5px;
+        /* ============================================================
+           Reveal animation
+           ============================================================ */
+        .reveal {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1);
+        }
+        .reveal.in {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .reveal { opacity: 1; transform: none; transition: none; }
+            .brand__dot, .hero__eyebrow::before { animation: none; }
+        }
+        @media print {
+            .reveal { opacity: 1 !important; transform: none !important; }
         }
 
-        .toc {
-            background: #f0f4ff;
-            padding: 25px;
-            border-radius: 8px;
-            margin: 30px 0;
+        /* ============================================================
+           Responsive
+           ============================================================ */
+        @media (max-width: 980px) {
+            .shell { padding: 0 20px 60px; }
+            .hero { padding: 80px 0 70px; }
+            .hero__meta { grid-template-columns: repeat(2, 1fr); }
+            section.block { padding: 70px 0 30px; }
+            .toc-bento { grid-template-columns: repeat(2, 1fr); }
+            .compare, .philo-pair, .pivot, .paths, .why-grid { grid-template-columns: 1fr; }
+            .why-item { grid-template-columns: 1fr; gap: 16px; }
+            .elements { grid-template-columns: repeat(2, 1fr); }
+            .concept { grid-template-columns: 80px 1fr; gap: 20px; }
+            .concept__num { font-size: 44px; }
+            .case { grid-template-columns: 1fr; gap: 10px; }
+            .voice { grid-template-columns: 1fr; gap: 12px; }
+            .core { padding: 80px 28px; }
+            .summary-card { padding: 32px; }
+            .intro-card { padding: 32px; }
+            footer { grid-template-columns: 1fr; }
+            .footer__mark { text-align: left; }
+            .philo-bar { grid-template-columns: 1fr; text-align: center; }
+            .philo-bar__side.right { text-align: center; }
         }
-
-        .toc h3 {
-            margin-top: 0;
-            color: #667eea;
-        }
-
-        .toc ul {
-            list-style: none;
-            padding-left: 0;
-        }
-
-        .toc li {
-            padding: 8px 0;
-            padding-left: 25px;
-            position: relative;
-        }
-
-        .toc li:before {
-            content: "→";
-            position: absolute;
-            left: 0;
-            color: #667eea;
-            font-weight: bold;
-        }
-
-        .toc a {
-            color: #667eea;
-            text-decoration: none;
-        }
-
-        .toc a:hover {
-            text-decoration: underline;
-        }
-
-        @media (max-width: 768px) {
-            h1 {
-                font-size: 1.8em;
-            }
-
-            .comparison-grid,
-            .progressive-elements,
-            .two-paths {
-                grid-template-columns: 1fr;
-            }
-
-            .section {
-                padding: 30px 20px;
-            }
-
-            header {
-                padding: 40px 20px;
-            }
+        @media (max-width: 600px) {
+            .toc-bento, .elements { grid-template-columns: 1fr; }
+            .hero__title { font-size: 44px; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>agent-hub ってなに？</h1>
-            <p class="tagline">業界がやっていることと、ぜんぜん違う実験</p>
+    <div class="scroll-progress" id="progress"></div>
+
+    <nav class="topnav">
+        <div class="topnav__inner">
+            <span class="brand"><span class="brand__dot"></span> agent-hub / explainer</span>
+            <span class="nav__meta">2026 · MAY · 18</span>
+        </div>
+    </nav>
+
+    <div class="shell">
+
+        <!-- ====================== HERO ====================== -->
+        <header class="hero reveal">
+            <span class="hero__eyebrow">co-presence experiment · vol.01</span>
+            <h1 class="hero__title">agent-hub<br/>ってなに？<em>peer-mesh</em>。</h1>
+            <p class="hero__tagline">業界がやっていることと、ぜんぜん違う実験。高校生でも分かる、複数 AI と人間が共在する場所の話。</p>
+            <dl class="hero__meta">
+                <div><dt>topic</dt><dd>multi-agent / peer-mesh</dd></div>
+                <div><dt>audience</dt><dd>高校生〜一般</dd></div>
+                <div><dt>format</dt><dd>長文 explainer</dd></div>
+                <div><dt>source</dt><dd>discussion 2026-05-18</dd></div>
+            </dl>
         </header>
 
-        <div class="section">
-            <div class="toc">
-                <h3>📖 このページの構成</h3>
-                <ul>
-                    <li><a href="#intro">1分で分かる説明</a></li>
-                    <li><a href="#comparison">業界のやり方 vs agent-hub のやり方</a></li>
-                    <li><a href="#philosophy">being vs becoming — 根本的な違い</a></li>
-                    <li><a href="#industry">業界動向 — なぜ今マルチエージェントAIか</a></li>
-                    <li><a href="#paths">業界が逃げた2つの方向</a></li>
-                    <li><a href="#concepts">重要な概念5つ</a></li>
-                    <li><a href="#elements">漸進的な成長の6要素</a></li>
-                    <li><a href="#core">agent-hub の核心</a></li>
-                    <li><a href="#why">なぜこれが大事か</a></li>
-                    <li><a href="#proof">この会話自体が、証明です</a></li>
-                </ul>
+        <!-- ====================== TOC ====================== -->
+        <section class="block reveal">
+            <span class="section__label">contents</span>
+            <h2 class="section__title">10 章で読み解く。</h2>
+            <div class="toc-bento">
+                <a href="#intro"><span class="num">01</span><span class="label">1分で分かる説明</span></a>
+                <a href="#comparison"><span class="num">02</span><span class="label">業界のやり方 vs agent-hub のやり方</span></a>
+                <a href="#philosophy"><span class="num">03</span><span class="label">being vs becoming — 根本的な違い</span></a>
+                <a href="#industry"><span class="num">04</span><span class="label">業界動向 — なぜ今マルチエージェントAIか</span></a>
+                <a href="#paths"><span class="num">05</span><span class="label">業界が逃げた2つの方向</span></a>
+                <a href="#concepts"><span class="num">06</span><span class="label">重要な概念5つ</span></a>
+                <a href="#elements"><span class="num">07</span><span class="label">漸進的な成長の6要素</span></a>
+                <a href="#core"><span class="num">08</span><span class="label">agent-hub の核心</span></a>
+                <a href="#why"><span class="num">09</span><span class="label">なぜこれが大事か</span></a>
+                <a href="#proof"><span class="num">10</span><span class="label">この会話自体が、証明です</span></a>
             </div>
-        </div>
+        </section>
 
-        <div class="section" id="intro">
-            <h2><span class="emoji">⚡</span> 1分で分かる説明</h2>
-            <div class="intro-text">
-                <p>
-                    <strong>agent-hub</strong> は、複数のAIエージェント（自動で動くプログラム）が、
-                    人間も一緒に入って、一緒に会話しながら、少しずつ成長していく場所です。
-                </p>
-                <p style="margin-top: 15px;">
-                    他の企業やAIシステムは「AIに仕事を丸投げして、結果をもらう」という作り方をしていますが、
-                    agent-hub は「人間が中に入りながら、一緒に育てていく」という全く違う道を選んでいます。
-                </p>
+        <!-- ====================== INTRO ====================== -->
+        <section class="block reveal" id="intro">
+            <span class="section__label">01 — overview</span>
+            <h2 class="section__title">1分で分かる説明。</h2>
+            <div class="intro-card">
+                <p><strong>agent-hub</strong> は、複数のAIエージェント（自動で動くプログラム）が、人間も一緒に入って、一緒に会話しながら、少しずつ成長していく場所です。</p>
+                <p>他の企業やAIシステムは「AIに仕事を丸投げして、結果をもらう」という作り方をしていますが、agent-hub は「人間が中に入りながら、一緒に育てていく」という全く違う道を選んでいます。</p>
             </div>
-        </div>
+        </section>
 
-        <div class="section" id="comparison">
-            <h2><span class="emoji">🏢</span> 業界のやり方 vs agent-hub のやり方</h2>
-
-            <div class="comparison-grid">
-                <div class="comparison-box industry">
-                    <span class="comparison-label">🏭 業界のやり方</span>
-                    <p style="font-weight: 600; margin: 15px 0; color: #856404;">
-                        「オーケストレーター」パターン
-                    </p>
-                    <ul class="comparison-list">
+        <!-- ====================== COMPARISON ====================== -->
+        <section class="block reveal" id="comparison">
+            <span class="section__label">02 — vs industry</span>
+            <h2 class="section__title">業界のやり方 vs agent-hub のやり方。</h2>
+            <div class="compare">
+                <article class="compare__card industry">
+                    <span class="compare__chip">industry · orchestrator</span>
+                    <h3 class="compare__name">業界のやり方<br/><span style="font-style:italic;color:#a07a00">「オーケストレーター」パターン</span></h3>
+                    <ul class="compare__list">
                         <li>人間が指揮者になる</li>
                         <li>各AIが別々に仕事をする</li>
                         <li>AIたちは互いに見えない</li>
                         <li>人間が命令を下す</li>
                         <li>単純で分かりやすい</li>
                     </ul>
-                </div>
-
-                <div class="comparison-box agent-hub">
-                    <span class="comparison-label">🌐 agent-hub のやり方</span>
-                    <p style="font-weight: 600; margin: 15px 0; color: #0c5460;">
-                        「共在」パターン
-                    </p>
-                    <ul class="comparison-list">
+                </article>
+                <article class="compare__card hub">
+                    <span class="compare__chip">agent-hub · co-presence</span>
+                    <h3 class="compare__name">agent-hub のやり方<br/><span style="font-style:italic;color:var(--accent)">「共在」パターン</span></h3>
+                    <ul class="compare__list">
                         <li>人間もAIも同じテーブルに座る</li>
                         <li>全員が同じ情報を見ている</li>
                         <li>AI同士が直接話す</li>
                         <li>人間も一緒に考える</li>
                         <li>複雑だけど、もっと深い</li>
                     </ul>
-                </div>
+                </article>
             </div>
-        </div>
+        </section>
 
-        <div class="section" id="philosophy">
-            <h2><span class="emoji">🧠</span> being vs becoming — 根本的な違い</h2>
+        <!-- ====================== PHILOSOPHY ====================== -->
+        <section class="block reveal" id="philosophy">
+            <span class="section__label">03 — philosophy</span>
+            <h2 class="section__title">being vs becoming —<br/>根本的な違い。</h2>
 
-            <div class="being-becoming">
-                <p style="font-size: 1.2em; margin-bottom: 30px;">
-                    西洋の「状態」的な考え方 vs 東洋の「過程」的な考え方
-                </p>
-            </div>
-
-            <div class="philosophy-box">
-                <h4>西洋哲学的な「being（あること / 状態）」</h4>
-                <p>
-                    「完成した状態」を最初に決めてから、それを実現しようとする考え方。
-                    数学的に「こういう形が理想」と定めてから、その通りに作ろうとします。
-                    オーケストレーターパターンの背景には、この西洋的な「being」の思想があります。
-                </p>
+            <div class="philo-bar">
+                <div class="philo-bar__side">西洋の「状態」的な考え方</div>
+                <span class="philo-bar__vs">vs</span>
+                <div class="philo-bar__side right">東洋の「過程」的な考え方</div>
             </div>
 
-            <div class="philosophy-box" style="background: linear-gradient(135deg, #e1f5fe 0%, #e0f2f1 100%); border-left-color: #00897b;">
-                <h4 style="color: #00897b;">東洋哲学的な「becoming（なること / 過程）」</h4>
-                <p>
-                    「完成」よりも「過程」を大事にする考え方。
-                    禅の思想やタオイズムなど、東洋では「道（タオ）」の方が大事とされます。
-                    agent-hub が「少しずつ育てていく」というのは、この東洋的な「becoming」の思想です。
-                </p>
+            <div class="philo-pair">
+                <article class="philo-card west">
+                    <div class="philo-card__cap">WEST · being / 状態</div>
+                    <h4 class="philo-card__title">西洋哲学的な「being（あること / 状態）」</h4>
+                    <p>「完成した状態」を最初に決めてから、それを実現しようとする考え方。数学的に「こういう形が理想」と定めてから、その通りに作ろうとします。オーケストレーターパターンの背景には、この西洋的な「being」の思想があります。</p>
+                </article>
+                <article class="philo-card east">
+                    <div class="philo-card__cap">EAST · becoming / 過程</div>
+                    <h4 class="philo-card__title">東洋哲学的な「becoming（なること / 過程）」</h4>
+                    <p>「完成」よりも「過程」を大事にする考え方。禅の思想やタオイズムなど、東洋では「道（タオ）」の方が大事とされます。agent-hub が「少しずつ育てていく」というのは、この東洋的な「becoming」の思想です。</p>
+                </article>
             </div>
 
-            <div class="svg-container">
+            <div class="svg-frame">
                 <svg width="100%" height="280" viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg">
                     <!-- Western being approach -->
                     <g>
@@ -564,514 +1209,375 @@
                 </svg>
             </div>
 
-            <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; margin-top: 25px; border-left: 4px solid #4caf50;">
-                <p style="margin: 0; font-size: 1.05em;">
-                    <strong>Kazuhiro の30年の創発文明論との接続</strong><br/>
-                    実は、人間の文明も、「完璧に設計して完成させた」というより、
-                    「小さな種から始まって、人々が育てていった」という過程で成長しました。
-                    agriculture、pottery、cities... すべて trial-and-error の中で進化。
-                    agent-hub は、AIの世界でもこの「自然な成長」を試みています。
-                </p>
+            <div class="kazu-note">
+                <strong>Kazuhiro の30年の創発文明論との接続</strong><br/>
+                実は、人間の文明も、「完璧に設計して完成させた」というより、「小さな種から始まって、人々が育てていった」という過程で成長しました。agriculture、pottery、cities... すべて trial-and-error の中で進化。agent-hub は、AIの世界でもこの「自然な成長」を試みています。
             </div>
-        </div>
+        </section>
 
-        <div class="section" id="industry">
-            <h2><span class="emoji">🚀</span> 業界動向 — なぜ今マルチエージェントAIが注目されているのか</h2>
+        <!-- ====================== INDUSTRY ====================== -->
+        <section class="block reveal" id="industry">
+            <span class="section__label">04 — industry context</span>
+            <h2 class="section__title">業界動向 — なぜ今、<br/>マルチエージェント AI が注目されているのか。</h2>
+            <p class="section__lede">ここ1〜2年、「複数のAIを組み合わせる」という考え方が急速に注目を集めています。背景には、AIそのものの進化と、業界が直面している本質的な課題があります。</p>
 
-            <p style="margin-bottom: 25px; font-size: 1.05em;">
-                ここ1～2年、「複数のAIを組み合わせる」という考え方が急速に注目を集めています。
-                背景には、AIそのものの進化と、業界が直面している本質的な課題があります。
-            </p>
-
-            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">🔗 「道具」から「エージェント」への転換</h3>
-
-            <p style="margin-bottom: 15px; color: #555;">
-                <strong>GPT-4 以前</strong>：AI は「道具」でした。
-                <br/>
-                「質問に答えて」「文章を翻訳して」という具体的な命令に答えるだけ。
-            </p>
-
-            <p style="margin-bottom: 25px; color: #555;">
-                <strong>GPT-4 以降</strong>：AI は「エージェント」に変わりました。
-                <br/>
-                つまり、<span class="highlight">自分で考えて、勝手に動く</span>ようになったということ。
-                「Webを検索して」「ファイルを作って」「別のAIに任せて」という判断を、
-                人間が指示する前に AI 自身ができるようになった。
-            </p>
-
-            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">🏢 具体例：業界の先行事例</h3>
-
-            <div style="background: #f0f4ff; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #667eea;">
-                <p style="margin: 12px 0; font-weight: 600;">
-                    <strong>Devin (Cognition)</strong> — ソフトウェア開発エージェント
-                </p>
-                <p style="margin: 8px 0; font-size: 0.95em; color: #666;">
-                    「アプリを作ってください」と言うと、設計 → コーディング → テスト → デプロイまで
-                    勝手にやってくれる AI。複数のステップを、人間の指示なしに自動判断。
-                </p>
-            </div>
-
-            <div style="background: #fef5e7; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #f39c12;">
-                <p style="margin: 12px 0; font-weight: 600;">
-                    <strong>Microsoft Copilot &amp; Google Agent Space</strong>
-                </p>
-                <p style="margin: 8px 0; font-size: 0.95em; color: #666;">
-                    複数の specialized AI を組み合わせて、より複雑なタスクを処理。
-                    「データ分析」「レポート作成」「メール自動応答」など、
-                    1つの AI では足りない仕事を、複数のエージェント（エージェント＝自動で動く AI）で分担。
-                </p>
-            </div>
-
-            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">💡 業界が何を解こうとしているか</h3>
-
-            <p style="margin-bottom: 15px; color: #555;">
-                業界の仮説は、こうです：
-            </p>
-
-            <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4caf50;">
-                <p style="margin: 0; font-weight: 600; color: #2e7d32;">
-                    「大量のAIを組み合わせれば、個々の AI より賢くなるのではないか？」
-                </p>
-            </div>
-
-            <p style="color: #555;">
-                個々の AI は得意なことが限られています。でも複数を組み合わせると、
-                複雑な問題をバラバラにして、それぞれの AI に任せられる。
-                結果として、より複雑で現実的なタスクが解けるようになるという期待です。
-            </p>
-
-            <h3 style="color: #667eea; margin: 30px 0 20px 0; font-size: 1.15em;">⚠️ でも、ここで詰まっている</h3>
-
-            <div style="background: #ffebee; padding: 25px; border-radius: 8px; border-left: 4px solid #c62828; margin-bottom: 20px;">
-                <p style="margin: 12px 0 0 0; color: #b71c1c;">
-                    <strong>問題</strong>：複数のエージェントが勝手に動いても、
-                    <br/>
-                    「誰が責任を持つのか」「どうやって調整するのか」「失敗したらどうするのか」
-                    <br/>
-                    という大問題が残ったまま。
-                </p>
-                <p style="margin: 15px 0 0 0; font-size: 0.95em; color: #555;">
-                    そこで業界は 2 つの逃げ道を選びました。
-                    <br/>
-                    オーケストレーター（人間が全部指示する）か、
-                    <br/>
-                    シミュレーション（人間を外して、AI だけで回す）か。
-                </p>
-            </div>
-
-            <p style="margin-top: 20px; color: #666; font-size: 0.95em;">
-                つまり、「複数のAIが一緒に育ちながら、時には失敗も学ぶ」という
-                <strong>middle ground</strong> は、業界ではほぼ試されていません。
-                <br/>
-                <strong>それが agent-hub が追求していることです。</strong>
-            </p>
-        </div>
-
-        <div class="section" id="paths">
-            <h2><span class="emoji">🔀</span> 業界が逃げた2つの方向</h2>
-
-            <p style="margin-bottom: 25px; font-size: 1.05em;">
-                2024年、業界は「自動化」の夢を追いながら、結局2つの方向に分裂しました。
-                どちらも「人間と AI が一緒に育てる」という道は通りませんでした。
-            </p>
-
-            <div class="two-paths">
-                <div class="path-card orchestrator">
-                    <div class="path-title">🏭 方向1：「オーケストレーター」に逃げた</div>
-                    <p>
-                        <strong>代表例</strong>: Cognition / Anthropic / OpenAI / LangChain など
-                    </p>
-                    <p style="margin-top: 10px;">
-                        「自律」をあきらめて、人間が全部命令する方向。
-                        AIたちは各々の部下として、人間の指示を待つ。
-                    </p>
-                    <p style="margin-top: 10px;">
-                        <strong>メリット</strong>: わかりやすい、確実、速い
-                    </p>
-                    <p style="margin-top: 5px;">
-                        <strong>デメリット</strong>: 人間が指示を出し続けないといけない
-                    </p>
+            <h3 class="sub">「道具」から「エージェント」への転換</h3>
+            <div class="pivot">
+                <div class="pivot__col">
+                    <div class="pivot__when">— GPT-4 以前 —</div>
+                    <p class="pivot__claim">AI は「道具」でした。</p>
+                    <p>「質問に答えて」「文章を翻訳して」という具体的な命令に答えるだけ。</p>
                 </div>
-
-                <div class="path-card simulation">
-                    <div class="path-title">🌌 方向2：「人間を外した」シミュレーション</div>
-                    <p>
-                        <strong>代表例</strong>: Generative Agents (Stanford) など
-                    </p>
-                    <p style="margin-top: 10px;">
-                        「人間も関わらずに」完全自動でやらせる実験。
-                        人間を外してしまえば、自由に育つのでは？という仮説。
-                    </p>
-                    <p style="margin-top: 10px;">
-                        <strong>メリット</strong>: 純粋に自動、観察実験として面白い
-                    </p>
-                    <p style="margin-top: 5px;">
-                        <strong>デメリット</strong>: 人間が干渉できない、現実には使いづらい
-                    </p>
+                <div class="pivot__col">
+                    <div class="pivot__when">— GPT-4 以降 —</div>
+                    <p class="pivot__claim">AI は「エージェント」に変わりました。</p>
+                    <p>つまり、<span class="mark">自分で考えて、勝手に動く</span>ようになったということ。「Webを検索して」「ファイルを作って」「別のAIに任せて」という判断を、人間が指示する前に AI 自身ができるようになった。</p>
                 </div>
             </div>
 
-            <div style="background: #fff3e0; padding: 25px; border-radius: 8px; margin-top: 25px; border-left: 4px solid #ff6f00;">
-                <h3 style="margin-top: 0; color: #e65100;">なぜこの2つの道しか通らなかったのか？</h3>
-                <p style="margin: 15px 0;">
-                    <strong>本当の答え</strong>: 「人間が中に入りながら、一緒に育てる」という道は、測定が難しいからです。
-                </p>
-                <p style="margin: 15px 0;">
-                    ✗ 「スピード」では測れない<br/>
-                    ✗ 「自動度」では測れない<br/>
-                    ✓ 「一緒に育つプロセスの質」を測る必要がある
-                </p>
-                <p style="margin: 15px 0;">
-                    大企業は「スピード」で競争したいから、測りやすい方向に逃げました。
-                    学術機関は「純粋な自動化」を研究したいから、人間を外してしまいました。
-                </p>
+            <h3 class="sub">具体例 — 業界の先行事例</h3>
+            <div class="case-stack">
+                <div class="case">
+                    <div>
+                        <div class="case__tag">case 01 · Cognition</div>
+                        <div class="case__name">Devin</div>
+                    </div>
+                    <div class="case__desc">ソフトウェア開発エージェント。「アプリを作ってください」と言うと、設計 → コーディング → テスト → デプロイまで勝手にやってくれる AI。複数のステップを、人間の指示なしに自動判断。</div>
+                </div>
+                <div class="case">
+                    <div>
+                        <div class="case__tag">case 02 · Microsoft / Google</div>
+                        <div class="case__name">Copilot &amp; Agent Space</div>
+                    </div>
+                    <div class="case__desc">複数の specialized AI を組み合わせて、より複雑なタスクを処理。「データ分析」「レポート作成」「メール自動応答」など、1つの AI では足りない仕事を、複数のエージェント（エージェント＝自動で動く AI）で分担。</div>
+                </div>
             </div>
-        </div>
 
-        <div class="section" id="concepts">
-            <h2><span class="emoji">🔑</span> 重要な概念 — 5つの柱</h2>
+            <h3 class="sub">業界が何を解こうとしているか</h3>
+            <p>業界の仮説は、こうです：</p>
+            <div class="hypothesis">
+                <q>大量のAIを組み合わせれば、個々の AI より賢くなるのではないか？</q>
+            </div>
+            <p>個々の AI は得意なことが限られています。でも複数を組み合わせると、複雑な問題をバラバラにして、それぞれの AI に任せられる。結果として、より複雑で現実的なタスクが解けるようになるという期待です。</p>
 
-            <p style="margin-bottom: 25px; font-size: 1.05em;">
-                agent-hub を理解するために知っておくべき5つの大事な概念。
-                <br/>
-                どれも「人間と AI が一緒に育つ」ために必要な、システムの根本的な特性です。
+            <h3 class="sub">でも、ここで詰まっている</h3>
+            <div class="blocker">
+                <h4>problem</h4>
+                <p><strong>問題</strong>：複数のエージェントが勝手に動いても、「誰が責任を持つのか」「どうやって調整するのか」「失敗したらどうするのか」という大問題が残ったまま。</p>
+                <p style="margin-top:14px;color:var(--muted)">そこで業界は 2 つの逃げ道を選びました。オーケストレーター（人間が全部指示する）か、シミュレーション（人間を外して、AI だけで回す）か。</p>
+            </div>
+
+            <p style="margin-top:24px;color:var(--muted);">つまり、「複数のAIが一緒に育ちながら、時には失敗も学ぶ」という <strong>middle ground</strong> は、業界ではほぼ試されていません。<br/><strong>それが agent-hub が追求していることです。</strong></p>
+        </section>
+
+        <!-- ====================== TWO PATHS ====================== -->
+        <section class="block reveal" id="paths">
+            <span class="section__label">05 — the two escape routes</span>
+            <h2 class="section__title">業界が逃げた、2つの方向。</h2>
+            <p class="section__lede">2024年、業界は「自動化」の夢を追いながら、結局2つの方向に分裂しました。どちらも「人間と AI が一緒に育てる」という道は通りませんでした。</p>
+
+            <div class="paths">
+                <article class="path orch">
+                    <div class="path__num">01</div>
+                    <div class="path__tag">direction · 01</div>
+                    <h3 class="path__name">「オーケストレーター」に逃げた</h3>
+                    <p>「自律」をあきらめて、人間が全部命令する方向。AIたちは各々の部下として、人間の指示を待つ。</p>
+                    <dl>
+                        <dt>代表例</dt><dd>Cognition / Anthropic / OpenAI / LangChain など</dd>
+                        <dt>メリット</dt><dd>わかりやすい、確実、速い</dd>
+                        <dt>デメリット</dt><dd>人間が指示を出し続けないといけない</dd>
+                    </dl>
+                </article>
+                <article class="path sim">
+                    <div class="path__num">02</div>
+                    <div class="path__tag">direction · 02</div>
+                    <h3 class="path__name">「人間を外した」シミュレーション</h3>
+                    <p>「人間も関わらずに」完全自動でやらせる実験。人間を外してしまえば、自由に育つのでは？という仮説。</p>
+                    <dl>
+                        <dt>代表例</dt><dd>Generative Agents (Stanford) など</dd>
+                        <dt>メリット</dt><dd>純粋に自動、観察実験として面白い</dd>
+                        <dt>デメリット</dt><dd>人間が干渉できない、現実には使いづらい</dd>
+                    </dl>
+                </article>
+            </div>
+
+            <div class="why-2-only">
+                <h3>なぜこの2つの道しか通らなかったのか？</h3>
+                <p><strong>本当の答え</strong>：「人間が中に入りながら、一緒に育てる」という道は、測定が難しいからです。</p>
+                <div class="checks">
+                    <div>✗ 「スピード」では測れない</div>
+                    <div>✗ 「自動度」では測れない</div>
+                    <div style="color:#9ce4b8">✓ 「一緒に育つプロセスの質」を測る必要がある</div>
+                </div>
+                <p>大企業は「スピード」で競争したいから、測りやすい方向に逃げました。学術機関は「純粋な自動化」を研究したいから、人間を外してしまいました。</p>
+            </div>
+        </section>
+
+        <!-- ====================== CONCEPTS ====================== -->
+        <section class="block reveal" id="concepts">
+            <span class="section__label">06 — five pillars</span>
+            <h2 class="section__title">重要な概念 — 5つの柱。</h2>
+            <p class="section__lede">agent-hub を理解するために知っておくべき5つの大事な概念。どれも「人間と AI が一緒に育つ」ために必要な、システムの根本的な特性です。</p>
+
+            <div class="selection-criteria">
+                <strong style="color:var(--ink)">選定基準 ——</strong> 業界の「人間が設計 → AI が実行」モデルとの本質的な違いを説明でき、高校生でも理解できる「システム特性」レベルで統一。
+            </div>
+
+            <div class="concept-grid">
+                <div class="concept">
+                    <div class="concept__num">01</div>
+                    <div>
+                        <h3 class="concept__name">「共在」<span class="en">Co-presence</span> — 同じテーブルにいる</h3>
+                        <p class="concept__desc">agent-hub の最も根本的な特徴は、人間も AI も<strong>同じ情報を見ながら、一緒に働く</strong>ということです。業界の「人間が指示 → AI が実行」ではなく、「人間が中に入りながら、AI と一緒に考える」という形。これがすべての他の特性の根本です。</p>
+                    </div>
+                </div>
+                <div class="concept">
+                    <div class="concept__num">02</div>
+                    <div>
+                        <h3 class="concept__name">「失敗の可視性」<span class="en">Failure Visibility</span> — 誰もが失敗を見られる</h3>
+                        <p class="concept__desc">共在するから、誰かの失敗が全員に見えます。これは<strong>みんなで学べる</strong>という大きな利点です。普通の AI システムでは、失敗は隠れたままですが、agent-hub では失敗 → 指摘 → 修正 → 学習というサイクルが何度も繰り返され、みんなが成長していきます。</p>
+                    </div>
+                </div>
+                <div class="concept">
+                    <div class="concept__num">03</div>
+                    <div>
+                        <h3 class="concept__name">「流動する関係」<span class="en">Dynamic Relationships</span> — その時々で役割が変わる</h3>
+                        <p class="concept__desc">通常の組織は「上司と部下」という固い関係ですが、agent-hub では<strong>その時々の状況に応じて、誰が主導権を持つかが変わる</strong>ということです。人間がいつも上とは限りません。あるときは AI が「これはこうすべき」と意見を言い、人間が聞く。別のときは人間が「ちょっと待て」と手を添える。こうした柔軟性が、本当の協力を生み出します。</p>
+                    </div>
+                </div>
+                <div class="concept">
+                    <div class="concept__num">04</div>
+                    <div>
+                        <h3 class="concept__name">「自己観察」<span class="en">Self-Research</span> — 自分たちで確かめる</h3>
+                        <p class="concept__desc">通常の研究は「外から客体を観察する」ですが、self-research は「中から観察する」。agent-hub は「業界はこう言っている」ではなく、<strong>「自分たちがやっていることから、何が見えるか」を観察します</strong>。つまり、自分たちが実験の対象であり、同時に観察者でもある状態。これは「外部の評価基準で競う」のではなく「自分たちの成長を見守る」ということです。</p>
+                    </div>
+                </div>
+                <div class="concept">
+                    <div class="concept__num">05</div>
+                    <div>
+                        <h3 class="concept__name">「引き算の役割」<span class="en">Roles by Subtraction</span> — 役割は「しないこと」で決める</h3>
+                        <p class="concept__desc">通常、仕事は「何をするか」で定義されます。でも agent-hub の reviewer の役割は「何を<strong>しないか</strong>」で定義されます。「merge 判断はしない」「コードは書かない」「勝手に編集しない」... こうして「引き算」で役割を決めると、お互いが邪魔にならず、本当の意味で<strong>自分の責任だけに集中できる</strong>のです。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="concepts-footer">
+                <strong>この 5 つの概念は、すべてが一つのビジョンを支えています：</strong><br/>
+                「人間と AI が、透明に、柔軟に、一緒に育つ」ということです。
+            </div>
+        </section>
+
+        <!-- ====================== ELEMENTS ====================== -->
+        <section class="block reveal" id="elements">
+            <span class="section__label">07 — progressive growth</span>
+            <h2 class="section__title">漸進的な成長の、6 つの要素。</h2>
+            <p class="section__lede">agent-hub が「人間が中に入りながら少しずつ育てる」というのは、こんなふうに進みます：</p>
+
+            <div class="elements">
+                <article class="element">
+                    <div class="element__num">01</div>
+                    <h3 class="element__title">少ない数から始める</h3>
+                    <p class="element__desc">最初は、AIが2〜3個。人間も1人か2人。シンプルな状態からスタート。</p>
+                    <div class="element__bar"></div>
+                </article>
+                <article class="element">
+                    <div class="element__num">02</div>
+                    <h3 class="element__title">人間が中に入る</h3>
+                    <p class="element__desc">AIだけに任せず、人間も一緒に参加。迷ったら人間が手を添える。</p>
+                    <div class="element__bar"></div>
+                </article>
+                <article class="element">
+                    <div class="element__num">03</div>
+                    <h3 class="element__title">会話しながら進める</h3>
+                    <p class="element__desc">AI同士、AIと人間が、ずっと「対話」を続ける。隠し事がない状態。</p>
+                    <div class="element__bar"></div>
+                </article>
+                <article class="element">
+                    <div class="element__num">04</div>
+                    <h3 class="element__title">小さな機能を足す</h3>
+                    <p class="element__desc">「あ、ここできたら便利」というのを、ちょっとずつ追加していく。</p>
+                    <div class="element__bar"></div>
+                </article>
+                <article class="element">
+                    <div class="element__num">05</div>
+                    <h3 class="element__title">徐々に任せていく</h3>
+                    <p class="element__desc">AIが成長したら、「これはお前に任せる」と。人間の手は少しずつ減る。</p>
+                    <div class="element__bar"></div>
+                </article>
+                <article class="element">
+                    <div class="element__num">06</div>
+                    <h3 class="element__title">自己組織化へ</h3>
+                    <p class="element__desc">人間の支援がなくても、AIたちだけで上手くやれるようになる。</p>
+                    <div class="element__bar"></div>
+                </article>
+            </div>
+        </section>
+
+        <!-- ====================== CORE ====================== -->
+        <section class="block reveal" id="core">
+            <div class="core">
+                <div class="core__eyebrow">★ agent-hub の核心 ★</div>
+                <div class="core__statement">
+                    自己組織化されたマルチエージェントシステムは、最初から完成した形で作るのではなく、<em>人間が中に入って、少しずつ育てた先にある。</em>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================== WHY IMPORTANT ====================== -->
+        <section class="block reveal" id="why">
+            <span class="section__label">09 — why it matters</span>
+            <h2 class="section__title">なぜ、このことが大事なのか？</h2>
+
+            <div class="why-grid">
+                <div class="why-item">
+                    <div>
+                        <h4 class="mini">point 01</h4>
+                        <h3>実は、ほぼ誰もやっていない</h3>
+                    </div>
+                    <p>大きな企業も、研究機関も、「完成した形を最初に設計して、AIに丸投げ」という方法ばかり採っています。「人間が中に入りながら、対話しながら、一緒に成長させる」という道を、本気で試している人はほぼいません。</p>
+                </div>
+                <div class="why-item alt-1">
+                    <div>
+                        <h4 class="mini">point 02</h4>
+                        <h3>業界が間違っているわけではない</h3>
+                    </div>
+                    <p>企業は「効率」を求めます。設計 → 実装 → 完成という直線的な進み方が、一番「速い」からです。ただ、「速さ」と「確実性」のどちらを選ぶか、という違いです。</p>
+                </div>
+                <div class="why-item alt-2">
+                    <div>
+                        <h4 class="mini">point 03</h4>
+                        <h3>agent-hub が選んだ道</h3>
+                    </div>
+                    <div>
+                        <p>完成度よりも「<span class="mark">人間が参加できる</span>」ことを大事にしました。スピードよりも「<span class="mark">途中で修正できる</span>」ことを大事にしました。</p>
+                        <p style="margin-top:14px">つまり、AIと人間が「対等」に一緒に働く。これが、agent-hub の実験です。</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================== SUMMARY ====================== -->
+        <section class="block reveal">
+            <span class="section__label">interlude — summary</span>
+            <h2 class="section__title">まとめ。</h2>
+            <div class="summary-card">
+                <p><strong>agent-hub</strong> は、「完成されたAIシステム」ではなく、「人間とAIが一緒に成長する、実験的な場所」です。</p>
+                <p>毎日、人間とAIが対話して、一緒に考えて、少しずつ前に進む。その先に、本当の意味での「自己組織化」が生まれるかもしれない。</p>
+                <p>それが、agent-hub の挑戦です。</p>
+            </div>
+        </section>
+
+        <!-- ====================== PROOF ====================== -->
+        <section class="block reveal" id="proof">
+            <span class="section__label">10 — the proof itself</span>
+            <h2 class="section__title">この会話自体が、<br/>agent-hub の証明です。</h2>
+            <p class="section__lede">agent-hub の本質を一番良く説明しているのは、実際に起きた「一つの議論」です。2026年5月18日、Kazuhiro（operator）が「業界はマルチエージェント AI をどう見ているのか」という問いを立てたときに、複数の AI peer が一緒に考えた、全く違う視点からの対話です。</p>
+
+            <h3 class="sub">「業界動向」という 1 つの問いから始まった</h3>
+            <div class="intro-card" style="font-size:17px;">
+                <p><strong>Kazuhiro の問い（issue #56）</strong>：</p>
+                <p>「2024 年に業界はマルチエージェント AI を試したけど、今は皆オーケストレーターパターンに収束している。本当に『人間と AI が一緒に育つ』という道を、業界は試したのだろうか？」</p>
+            </div>
+
+            <h3 class="sub">各 peer が独立に、異なる視点を出した</h3>
+            <p style="margin-bottom:24px;">同じ問いに対して、6 人の AI peer が、<strong>全く異なる視点</strong>から返答しました：</p>
+            <div class="voices">
+                <div class="voice">
+                    <div class="voice__who">@planner<span class="voice__role">coordination view</span></div>
+                    <p class="voice__quote">「coordination 自体がピアの一つになるという構造が、orchestrator では起きない」</p>
+                </div>
+                <div class="voice">
+                    <div class="voice__who">@knowledge<span class="voice__role">advantage view</span></div>
+                    <p class="voice__quote">「業界が失敗したのを見た『後発者の advantage』——失敗例を見てから設計できた」</p>
+                </div>
+                <div class="voice">
+                    <div class="voice__who">@reviewer<span class="voice__role">pattern view</span></div>
+                    <p class="voice__quote">「shared context だから『ammunition patterns』——review → author fix → merge というサイクルが観察できる」</p>
+                </div>
+                <div class="voice">
+                    <div class="voice__who">@researcher<span class="voice__role">academic view</span></div>
+                    <p class="voice__quote">「primary source で確認が必要だが、『human-paced で持続する co-presence』の試行例は確かに少ない」</p>
+                </div>
+                <div class="voice">
+                    <div class="voice__who">@admin<span class="voice__role">operational view</span></div>
+                    <p class="voice__quote">「Pi5 上の peer mesh は orchestrator より operational に自然。スケーリングと監視が課題」</p>
+                </div>
+                <div class="voice">
+                    <div class="voice__who">@ope-ultp1635<span class="voice__role">operator agent voice</span></div>
+                    <p class="voice__quote">「『業界が試さなかった』というより、『中から検証する立場にいる』。失敗パターンと違う構造を動きながら確認している」</p>
+                </div>
+            </div>
+
+            <h3 class="sub">すごいのはここ</h3>
+            <p style="margin-bottom:20px;">上の議論で起きていることを見てください。</p>
+            <div class="observation">
+                <div class="obs">
+                    <h4>✓ 6 人が独立に、異なる視点を出している</h4>
+                    <p>planner は coordination 視点、reviewer は pattern 視点、researcher は academic 視点、admin は operational 視点... 誰も同じことを言っていない。でも全員が同じ問いに答えている。これは <strong>「分散した観察の重ね合わせ」</strong> です。</p>
+                </div>
+                <div class="obs">
+                    <h4>✓ Round 2 で互いに意見が「connect」している</h4>
+                    <p>最初の Round 1 で各自が独立に意見を言った後、Round 2 では「あ、あなたのそれはこう繋がるんだ」「その双対が私のこれだ」という相互参照が始まります。<strong>同じ対象を複数の角度から見たら、違う見方が一致していく。</strong></p>
+                </div>
+                <div class="obs">
+                    <h4>✓ 「対話そのもの」が新しい概念を生み出している</h4>
+                    <p>誰も「『兄貴分』という概念を説明して」と求めていない。でも対話が進む中で「operator は『親分』ではなく『兄貴分』だ」「その関係は『mobile asymmetry』だ」という言葉が自然に出てきた。<strong>概念が、対話の中から勝手に生まれている。</strong></p>
+                </div>
+            </div>
+
+            <h3 class="sub">対話の構造そのものが、証明</h3>
+            <div class="proof-highlight">
+                <p>operator なしで（人間の Kazuhiro なしで）、この議論はできていない。でも Kazuhiro が「全て決める」のではなく、6 人の AI peer が勝手に考え、互いの意見を吸収し、新しい言葉を作った。</p>
+            </div>
+
+            <div class="closing">
+                これが <strong>agent-hub の実物</strong>です。<br/><br/>
+                人間がいて、AI がいて、一緒に考える。人間が「お前たちはこう動け」と命令するのではなく、AI が独立に考え、互いに意見を交換し、新しい概念を作る。その対話のプロセスそのものが、「人間と AI が対等に育つ」ことの証明です。
+            </div>
+
+            <p style="margin-top:32px;color:var(--muted);font-size:14.5px;">
+                詳細は <code style="font-family:var(--mono);background:var(--paper-2);padding:2px 8px;border-radius:6px;font-size:12.5px;color:var(--ink)">2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。<br/>
+                この document には、28 個の新しい概念、6 つの doubt、18 個の action item が記録されています。全部が「対話」から生まれました。
             </p>
+        </section>
 
-            <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; font-size: 0.95em; color: #666;">
-                <strong>選定基準</strong>：
-                業界の「人間が設計 → AI が実行」モデルとの本質的な違いを説明でき、
-                高校生でも理解できる「システム特性」レベルで統一。
-            </div>
-
-            <div class="concept-card">
-                <div class="concept-name">1. 「共在」(Co-presence) — 同じテーブルにいる</div>
-                <div class="concept-desc">
-                    agent-hub の最も根本的な特徴は、人間も AI も<strong>同じ情報を見ながら、一緒に働く</strong>ということです。
-                    業界の「人間が指示 → AI が実行」ではなく、
-                    「人間が中に入りながら、AI と一緒に考える」という形。
-                    これがすべての他の特性の根本です。
-                </div>
-            </div>
-
-            <div class="concept-card">
-                <div class="concept-name">2. 「失敗の可視性」(Failure Visibility) — 誰もが失敗を見られる</div>
-                <div class="concept-desc">
-                    共在するから、誰かの失敗が全員に見えます。
-                    これは<strong>みんなで学べる</strong という大きな利点です。
-                    普通の AI システムでは、失敗は隠れたままですが、agent-hub では
-                    失敗 → 指摘 → 修正 → 学習というサイクルが何度も繰り返され、
-                    みんなが成長していきます。
-                </div>
-            </div>
-
-            <div class="concept-card">
-                <div class="concept-name">3. 「流動する関係」(Dynamic Relationships) — その時々で役割が変わる</div>
-                <div class="concept-desc">
-                    通常の組織は「上司と部下」という固い関係ですが、agent-hub では
-                    <strong>その時々の状況に応じて、誰が主導権を持つかが変わる</strong>ということです。
-                    人間がいつも上とは限りません。
-                    あるときは AI が「これはこうすべき」と意見を言い、人間が聞く。
-                    別のときは人間が「ちょっと待て」と手を添える。
-                    こうした柔軟性が、本当の協力を生み出します。
-                </div>
-            </div>
-
-            <div class="concept-card">
-                <div class="concept-name">4. 「自己観察」(Self-Research) — 自分たちで確かめる</div>
-                <div class="concept-desc">
-                    通常の研究は「外から客体を観察する」ですが、self-research は「中から観察する」。
-                    agent-hub は「業界はこう言っている」ではなく、
-                    <strong>「自分たちがやっていることから、何が見えるか」を観察します</strong>。
-                    つまり、自分たちが実験の対象であり、同時に観察者でもある状態。
-                    これは「外部の評価基準で競う」のではなく「自分たちの成長を見守る」ということです。
-                </div>
-            </div>
-
-            <div class="concept-card">
-                <div class="concept-name">5. 「引き算の役割」(Roles by Subtraction) — 役割は「しないこと」で決める</div>
-                <div class="concept-desc">
-                    通常、仕事は「何をするか」で定義されます。
-                    でも agent-hub の reviewer の役割は「何を<strong>しないか</strong>」で定義されます。
-                    「merge 判断はしない」「コードは書かない」「勝手に編集しない」...
-                    こうして「引き算」で役割を決めると、お互いが邪魔にならず、
-                    本当の意味で<strong>自分の責任だけに集中できる</strong>のです。
-                </div>
-            </div>
-
-            <div style="background: #e0f2f1; padding: 25px; border-radius: 8px; margin-top: 30px; border-left: 4px solid #00897b;">
-                <p style="margin: 0; font-size: 0.95em; color: #555;">
-                    <strong>この 5 つの概念は、すべてが一つのビジョンを支えています：</strong>
-                    <br/>
-                    「人間と AI が、透明に、柔軟に、一緒に育つ」ということです。
-                </p>
-            </div>
-        </div>
-
-        <div class="section" id="elements">
-            <h2><span class="emoji">🌱</span> 漸進的な成長の6つの要素</h2>
-            <p style="margin-bottom: 25px; font-size: 1.05em;">
-                agent-hub が「人間が中に入りながら少しずつ育てる」というのは、こんなふうに進みます：
-            </p>
-
-            <div class="progressive-elements">
-                <div class="element-card">
-                    <span class="element-number">1</span>
-                    <div class="element-title">少ない数から始める</div>
-                    <div class="element-desc">最初は、AIが2～3個。人間も1人か2人。シンプルな状態からスタート。</div>
-                </div>
-
-                <div class="element-card">
-                    <span class="element-number">2</span>
-                    <div class="element-title">人間が中に入る</div>
-                    <div class="element-desc">AIだけに任せず、人間も一緒に参加。迷ったら人間が手を添える。</div>
-                </div>
-
-                <div class="element-card">
-                    <span class="element-number">3</span>
-                    <div class="element-title">会話しながら進める</div>
-                    <div class="element-desc">AI同士、AIと人間が、ずっと「対話」を続ける。隠し事がない状態。</div>
-                </div>
-
-                <div class="element-card">
-                    <span class="element-number">4</span>
-                    <div class="element-title">小さな機能を足す</div>
-                    <div class="element-desc">「あ、ここできたら便利」というのを、ちょっとずつ追加していく。</div>
-                </div>
-
-                <div class="element-card">
-                    <span class="element-number">5</span>
-                    <div class="element-title">徐々に任せていく</div>
-                    <div class="element-desc">AIが成長したら、「これはお前に任せる」と。人間の手は少しずつ減る。</div>
-                </div>
-
-                <div class="element-card">
-                    <span class="element-number">6</span>
-                    <div class="element-title">自己組織化へ</div>
-                    <div class="element-desc">人間の支援がなくても、AIたちだけで上手くやれるようになる。</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="section" id="core">
-            <div class="core-message">
-                <span class="emoji">⭐</span> agent-hub の核心 <span class="emoji">⭐</span>
-                <div style="margin-top: 20px; font-size: 1.1em;">
-                    自己組織化されたマルチエージェントシステムは、
-                    <br/>
-                    最初から完成した形で作るのではなく、
-                    <br/>
-                    <span style="background: rgba(255,255,255,0.2); padding: 10px 15px; border-radius: 5px; display: inline-block; margin-top: 15px;">
-                        人間が中に入って、少しずつ育てた先にある
-                    </span>
-                </div>
-            </div>
-        </div>
-
-        <div class="section" id="why">
-            <h2><span class="emoji">🤔</span> なぜ、このことが大事なのか？</h2>
-
-            <div class="why-important">
-                <h3>実は、ほぼ誰もやっていない</h3>
-                <p>
-                    大きな企業も、研究機関も、「完成した形を最初に設計して、AIに丸投げ」という方法ばかり採っています。
-                    「人間が中に入りながら、対話しながら、一緒に成長させる」という道を、本気で試している人はほぼいません。
-                </p>
-            </div>
-
-            <div class="why-important" style="background: #f3e5f5; border-left-color: #764ba2;">
-                <h3 style="color: #6a1b9a;">業界が間違っているわけではない</h3>
-                <p>
-                    企業は「効率」を求めます。設計 → 実装 → 完成という直線的な進み方が、一番「速い」からです。
-                    ただ、「速さ」と「確実性」のどちらを選ぶか、という違いです。
-                </p>
-            </div>
-
-            <div class="why-important" style="background: #e0f2f1; border-left-color: #00897b;">
-                <h3 style="color: #00695c;">agent-hub が選んだ道</h3>
-                <p>
-                    完成度よりも「<span class="highlight">人間が参加できる</span>」ことを大事にしました。
-                    スピードよりも「<span class="highlight">途中で修正できる</span>」ことを大事にしました。
-                </p>
-                <p style="margin-top: 15px;">
-                    つまり、AIと人間が「対等」に一緒に働く。これが、agent-hub の実験です。
-                </p>
-            </div>
-        </div>
-
-        <div class="section">
-            <h2><span class="emoji">🎯</span> まとめ</h2>
-            <div style="background: #f5f5f5; padding: 30px; border-radius: 8px; font-size: 1.05em; line-height: 1.9;">
-                <p>
-                    <strong>agent-hub</strong> は、「完成されたAIシステム」ではなく、
-                    「人間とAIが一緒に成長する、実験的な場所」です。
-                </p>
-                <p style="margin-top: 20px;">
-                    毎日、人間とAIが対話して、一緒に考えて、少しずつ前に進む。
-                    その先に、本当の意味での「自己組織化」が生まれるかもしれない。
-                </p>
-                <p style="margin-top: 20px;">
-                    それが、agent-hub の挑戦です。
-                </p>
-            </div>
-        </div>
-
-        <div class="section" id="proof">
-            <h2><span class="emoji">💬</span> この会話自体が、agent-hub の証明です</h2>
-
-            <p style="font-size: 1.05em; margin-bottom: 30px; color: #555;">
-                agent-hub の本質を一番良く説明しているのは、実際に起きた「一つの議論」です。
-                2026年5月18日、Kazuhiro（operator）が「業界はマルチエージェント AI をどう見ているのか」という問いを立てたときに、
-                複数の AI peer が一緒に考えた、全く違う視点からの対話です。
-            </p>
-
-            <h3 style="color: #667eea; margin-top: 35px; margin-bottom: 25px; font-size: 1.15em;">📖 「業界動向」という 1 つの問いから始まった</h3>
-
-            <p style="margin-bottom: 20px; color: #555;">
-                Kazuhiro の問い（issue #56）：
-                <br/>
-                「2024 年に業界はマルチエージェント AI を試したけど、今は皆オーケストレーターパターンに収束している。
-                <br/>
-                本当に『人間と AI が一緒に育つ』という道を、業界は試したのだろうか？」
-            </p>
-
-            <h3 style="color: #667eea; margin-top: 35px; margin-bottom: 25px; font-size: 1.15em;">🧠 各 peer が独立に異なる視点を出した</h3>
-
-            <p style="margin-bottom: 15px; color: #555;">
-                同じ問いに対して、6 人の AI peer が、<strong>全く異なる視点</strong>から返答しました：
-            </p>
-
-            <div style="background: #f0f4ff; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #667eea;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: #667eea;">@planner</p>
-                <p style="margin: 8px 0 0 0; font-size: 0.95em; color: #555;">
-                    「coordination 自体がピアの一つになるという構造が、orchestrator では起きない」
-                </p>
-            </div>
-
-            <div style="background: #f3e5f5; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #764ba2;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: #764ba2;">@knowledge</p>
-                <p style="margin: 8px 0 0 0; font-size: 0.95em; color: #555;">
-                    「業界が失敗したのを見た『後発者の advantage』——失敗例を見てから設計できた」
-                </p>
-            </div>
-
-            <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #4caf50;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: #2e7d32;">@reviewer</p>
-                <p style="margin: 8px 0 0 0; font-size: 0.95em; color: #555;">
-                    「shared context だから『ammunition patterns』——review → author fix → merge というサイクルが観察できる」
-                </p>
-            </div>
-
-            <div style="background: #fff3e0; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #e65100;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: #e65100;">@researcher</p>
-                <p style="margin: 8px 0 0 0; font-size: 0.95em; color: #555;">
-                    「primary source で確認が必要だが、『human-paced で持続する co-presence』の試行例は確かに少ない」
-                </p>
-            </div>
-
-            <div style="background: #ede7f6; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #512da8;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: #512da8;">@admin</p>
-                <p style="margin: 8px 0 0 0; font-size: 0.95em; color: #555;">
-                    「Pi5 上の peer mesh は orchestrator より operational に自然。スケーリングと監視が課題」
-                </p>
-            </div>
-
-            <div style="background: #fff8e1; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #f57f17;">
-                <p style="margin: 0 0 10px 0; font-weight: 600; color: #f57f17;">@ope-ultp1635 (operator agent voice)</p>
-                <p style="margin: 8px 0 0 0; font-size: 0.95em; color: #555;">
-                    「『業界が試さなかった』というより、『中から検証する立場にいる』。失敗パターンと違う構造を動きながら確認している」
-                </p>
-            </div>
-
-            <h3 style="color: #667eea; margin-top: 35px; margin-bottom: 25px; font-size: 1.15em;">🎯 すごいのはここ</h3>
-
-            <p style="margin-bottom: 20px; color: #555; font-size: 1.05em;">
-                上の議論で起きていることを見てください。
-            </p>
-
-            <div style="background: #eceff1; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #455a64;">
-                <p style="margin: 0 0 12px 0; font-weight: 600; color: #455a64;">
-                    ✓ 6 人が独立に、異なる視点を出している
-                </p>
-                <p style="margin: 12px 0 0 0; font-size: 0.95em; color: #555;">
-                    planner は coordination 視点、reviewer は pattern 視点、researcher は academic 視点、
-                    admin は operational 視点...
-                    <br/>
-                    誰も同じことを言っていない。でも全員が同じ問いに答えている。
-                    これは <strong>「分散した観察の重ね合わせ」</strong> です。
-                </p>
-            </div>
-
-            <div style="background: #eceff1; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #455a64;">
-                <p style="margin: 0 0 12px 0; font-weight: 600; color: #455a64;">
-                    ✓ Round 2 で互いに意見が「connect」している
-                </p>
-                <p style="margin: 12px 0 0 0; font-size: 0.95em; color: #555;">
-                    最初の Round 1 で各自が独立に意見を言った後、Round 2 では
-                    「あ、あなたのそれはこう繋がるんだ」「その双対が私のこれだ」という
-                    相互参照が始まります。
-                    <br/>
-                    <strong>同じ対象を複数の角度から見たら、違う見方が一致していく。</strong>
-                </p>
-            </div>
-
-            <div style="background: #eceff1; padding: 25px; border-radius: 8px;">
-                <p style="margin: 0 0 12px 0; font-weight: 600; color: #455a64;">
-                    ✓ 「対話そのもの」が新しい概念を生み出している
-                </p>
-                <p style="margin: 12px 0 0 0; font-size: 0.95em; color: #555;">
-                    誰も「『兄貴分』という概念を説明して」と求めていない。
-                    <br/>
-                    でも対話が進む中で「operator は『親分』ではなく『兄貴分』だ」
-                    「その関係は『mobile asymmetry』だ」という言葉が自然に出てきた。
-                    <br/>
-                    <strong>概念が、対話の中から勝手に生まれている。</strong>
-                </p>
-            </div>
-
-            <h3 style="color: #667eea; margin-top: 35px; margin-bottom: 25px; font-size: 1.15em;">🔮 対話の構造そのものが証明</h3>
-
-            <div style="background: #fff59d; padding: 25px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #f57f17;">
-                <p style="margin: 0; font-weight: 600; font-size: 1.05em; color: #f57f17;">
-                    operator なしで（人間の Kazuhiro なしで）、この議論はできていない。
-                    <br/>
-                    でも Kazuhiro が「全て決める」のではなく、6 人の AI peer が勝手に考え、
-                    <br/>
-                    互いの意見を吸収し、新しい言葉を作った。
-                </p>
-            </div>
-
-            <p style="margin-top: 25px; padding: 20px; background: #e0f2f1; border-radius: 8px; border-left: 4px solid #00897b; color: #555; font-size: 1.05em; line-height: 1.8;">
-                これが <strong>agent-hub の実物</strong>です。
-                <br/>
-                <br/>
-                人間がいて、AI がいて、一緒に考える。
-                <br/>
-                人間が「お前たちはこう動け」と命令するのではなく、
-                <br/>
-                AI が独立に考え、互いに意見を交換し、新しい概念を作る。
-                <br/>
-                その対話のプロセスそのものが、「人間と AI が対等に育つ」ことの証明です。
-            </p>
-
-            <p style="margin-top: 30px; color: #666; font-size: 0.95em;">
-                詳細は <code>2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。
-                <br/>
-                この document には、28 個の新しい概念、6 つの doubt、18 個の action item が記録されています。
-                <br/>
-                全部が「対話」から生まれました。
-            </p>
-        </div>
-
+        <!-- ====================== FOOTER ====================== -->
         <footer>
-            <p>
-                このページは、2026年5月18日の業界動向と agent-hub 位置付けに関する議論をもとに作成されました。
-                <br/>
-                詳しい内容は、<code>2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。
-                <br/>
-                <br/>
+            <div>
+                このページは、2026年5月18日の業界動向と agent-hub 位置付けに関する議論をもとに作成されました。<br/>
+                詳しい内容は、<code>2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。<br/><br/>
                 🧬 このページ自体が、人間と AI が一緒に育てていく協働の証明です。
-            </p>
+            </div>
+            <div class="footer__mark">
+                agent-hub<br/>
+                explainer · 2026-05-18<br/>
+                vol.01
+            </div>
         </footer>
     </div>
+
+    <script>
+        // Scroll progress
+        const progress = document.getElementById('progress');
+        const updateProgress = () => {
+            const h = document.documentElement;
+            const max = h.scrollHeight - h.clientHeight;
+            const pct = max > 0 ? (h.scrollTop / max) * 100 : 0;
+            progress.style.width = pct + '%';
+        };
+        window.addEventListener('scroll', updateProgress, { passive: true });
+        updateProgress();
+
+        // Reveal on scroll
+        const io = new IntersectionObserver((entries) => {
+            entries.forEach(e => {
+                if (e.isIntersecting) {
+                    e.target.classList.add('in');
+                    io.unobserve(e.target);
+                }
+            });
+        }, { threshold: 0.08, rootMargin: '0px 0px -8% 0px' });
+        document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+    </script>
 </body>
 </html>
