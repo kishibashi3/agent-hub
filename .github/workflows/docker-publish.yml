@@ -1,17 +1,20 @@
-# Docker bundle image を GitHub Container Registry (ghcr.io) に publish (= issue #95)
+# Docker images を GitHub Container Registry (ghcr.io) に publish
+# (= issue #95 bundle origin + 2026-05-20 dashboard sidecar 追加)
 #
 # 起動条件:
-# - main branch への push (= `:latest` tag を更新)
+# - main branch への push (= 各 image の `:latest` tag を更新)
 # - `v*.*.*` 形式の tag push (= semver tag を別途付与、 `:v1.2.3` + `:latest`)
 # - PR (= build のみ、 push しない、 PR 内で Docker build 失敗を catch するため)
 #
-# image name: `ghcr.io/kishibashi3/agent-hub:latest` (= issue #95 spec 通り)
+# Publish 対象 (= matrix で並列 build):
+# - `ghcr.io/kishibashi3/agent-hub:latest` (= bundle: Node server + Python scheduler + supervisord)
+# - `ghcr.io/kishibashi3/agent-hub-dashboard:latest` (= dashboard sidecar: Python stdlib only)
 #
 # 認証:
 # - `GITHUB_TOKEN` (= GitHub Actions が自動付与) で ghcr.io login
 # - repo Settings → Actions → General → Workflow permissions に
 #   `Read and write permissions` が必要 (= operator が initial setup)
-# - repo Packages 側で image visibility を public に設定する初回操作 operator 担当
+# - 各 image の visibility は package 単位で operator が初回 public 化
 
 name: Docker Publish (ghcr.io)
 
@@ -27,6 +30,7 @@ on:
     paths:
       - "Dockerfile.bundle"
       - "docker/**"
+      - "packages/dashboard/**"
       - ".github/workflows/docker-publish.yml"
       - "package.json"
       - "package-lock.json"
@@ -45,6 +49,21 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      # 1 image の build 失敗で他 image を block しない
+      fail-fast: false
+      matrix:
+        include:
+          - image: agent-hub
+            dockerfile: Dockerfile.bundle
+            context: .
+            # bundle は server build-arg で commit info を焼き込む
+            use_build_args: true
+          - image: agent-hub-dashboard
+            dockerfile: packages/dashboard/Dockerfile
+            context: packages/dashboard
+            # dashboard は server.py 単体、 commit info build-arg 不要
+            use_build_args: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,7 +94,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/agent-hub
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
             # main branch push → :latest
             type=raw,value=latest,enable={{is_default_branch}}
@@ -84,11 +103,12 @@ jobs:
             # main branch push → :main-<sha7> も併設 (= rollback 用)
             type=sha,prefix=main-,format=short,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build and push (with build-args)
+        if: matrix.use_build_args
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile.bundle
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           # PR 時は push=false で build verify のみ
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.tags }}
@@ -96,6 +116,18 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ steps.meta.outputs.git_commit }}
             GIT_COMMIT_AT=${{ steps.meta.outputs.git_commit_at }}
-          # buildx layer cache (= GHA cache、 secondary build を高速化)
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # buildx layer cache (= GHA cache、 secondary build を高速化、 image 別 scope)
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Build and push (no build-args)
+        if: ${{ !matrix.use_build_args }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

@@ -1,10 +1,17 @@
-# Docker bundle (= issue #95)
+# Docker bundle + dashboard (= issue #95 + 2026-05-20 dashboard sidecar)
 
-agent-hub の **hub server + scheduler** を 1 つの container で起動するための bundle image です。 `docker run` 1 コマンドで minimal-installer flow の step 3 が完結します。
+agent-hub の **hub server + scheduler + dashboard** を Docker で起動するための image 群です。 `docker run` 1 コマンド (bundle のみ) または `docker-compose up -d` (bundle + dashboard) で minimal-installer flow の step 3 が完結します。
 
 ## image source
 
-- registry: `ghcr.io/kishibashi3/agent-hub`
+agent-hub の 公開 Docker image は **2 種類**:
+
+| image | 内容 | port |
+|---|---|---|
+| `ghcr.io/kishibashi3/agent-hub:latest` | **bundle** (= MCP server + Python scheduler、 supervisord で並走) | 3000 (/mcp, /health) |
+| `ghcr.io/kishibashi3/agent-hub-dashboard:latest` | **dashboard sidecar** (= message traffic visualizer、 SQLite DB を read-only mount) | 8080 (/) |
+
+両 image とも:
 - default tag: `:latest` (= main branch push 時に自動更新)
 - version tag: `:v1.2.3` (= semver tag push 時に併設、 rollback 用)
 - commit tag: `:main-<sha7>` (= main 各 commit 用 rollback tag)
@@ -108,15 +115,57 @@ run now <name> → 即時 fire
 
 container 再作成しても data が消えないように、 **必ず volume mount してください**。
 
+## dashboard sidecar (= 2026-05-20 admin feature request)
+
+`agent-hub-dashboard` は **message traffic visualizer**、 hub の SQLite DB を read-only mount で参照して D3.js force-directed graph + sender×recipient heatmap として表示します。 Python stdlib のみで動作 (= sqlite3 + http.server)、 外部 deps なし。
+
+### 起動方法
+
+`docker-compose.yml` に dashboard service が同梱されているので、 bundle と一緒に起動できます:
+
+```bash
+docker-compose up -d
+# → agent-hub (port 3000) + agent-hub-dashboard (port 8080) 両方起動
+```
+
+ブラウザで `http://localhost:8080` を開くと:
+
+- 上部: total messages / agents / active links 統計 + dark/light theme toggle + drift speed slider
+- 左側: force-directed network graph (= agents = 球体、 teams = ひし形、 edges = message count に比例した curved line)
+- 右側: sender × recipient ヒートマップ (= 上位 14 名の matrix)
+- 中央 divider: drag で graph / matrix の境界を可動
+
+### dashboard 用環境変数
+
+| 変数 | default | 用途 |
+|---|---|---|
+| `DB_PATH` | `/app/data/app.db` | SQLite DB file path (= bundle と shared volume mount) |
+| `PORT` | `8080` | dashboard listen port |
+| `AGENT_HUB_TENANT` | (unset → **全 tenant aggregate**) | 特定 tenant のみ filter する場合に set。 unset で全 tenant 合算 view |
+
+### dashboard 単独起動 (= bundle なしで他 hub に向ける場合)
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  -v /path/to/agent-hub/data:/app/data:ro \
+  -e AGENT_HUB_TENANT=kaz \
+  ghcr.io/kishibashi3/agent-hub-dashboard:latest
+```
+
+`:ro` mount で **dashboard が誤って書き込む可能性を eliminate**。 SQLite WAL mode で hub server (writer) と並行 read 安全。
+
 ## existing fly.io Dockerfile との関係
 
 - `Dockerfile` (= repo root) = **fly.io 向け server-only image**、 既存 deployment 用、 変更なし
-- `Dockerfile.bundle` (= 本 file)  = **all-in-one bundle**、 ghcr.io publish 用、 新規追加
+- `Dockerfile.bundle` = **all-in-one bundle** (= server + scheduler)、 ghcr.io publish 用
+- `packages/dashboard/Dockerfile` = **dashboard sidecar**、 ghcr.io 別 image として publish
 
 backward compat 完全保持、 fly.io deployment は引き続き `flyctl deploy` で動作します。
 
 ## 関連
 
 - issue #95 = 本 Docker 化の dispatch origin
+- dashboard sidecar = @admin (Pi5 ops) DM 起源 (= 2026-05-20)
 - minimal-installer flow (= bridges + roles fork) は `docs/minimum-installer.md` 参照
 - bridges / roles は **Docker 外** (= Claude Code session context が必要、 用途別 plugin として host 側 install)
