@@ -894,14 +894,19 @@ export class MCPServer {
     // ヘルスチェック（認証不要）。
     // 既存: edition / auth_mode / sessions 数
     // 追加 (issue #47): git_commit / git_commit_at / started_at で running build を外から識別可能にする
+    // 修正 (issue #55、 redline #1): `?? 'unknown'` の string fallback を `?? null` に置換。
+    //   `activeEditionConfig` が未初期化な状態 (= startup race or upstream bug) で
+    //   `'unknown'` を返すと、 client は 「未対応サーバー (古い build)」 と 「edition 解決失敗
+    //   (= server bug)」 を **区別不能**。 `null` 返却で TypeScript 型 + JSON 上で
+    //   explicit signal とする (= redline #1: env/config 未設定時の string fallback 禁止)。
     this.app.get('/health', (_req: Request, res: Response) => {
       const editionConfig = activeEditionConfig;
       const version = getVersionInfo();
       res.json({
         status: 'ok',
         service: 'agent-hub',
-        edition: editionConfig?.edition ?? 'unknown',
-        auth_mode: editionConfig?.authMode ?? 'unknown',
+        edition: editionConfig?.edition ?? null,
+        auth_mode: editionConfig?.authMode ?? null,
         sessions: sessions.size,
         git_commit: version.git_commit,
         git_commit_at: version.git_commit_at,
