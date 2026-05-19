@@ -20,7 +20,7 @@
         }
 
         .container {
-            max-width: 900px;
+            max-width: 1000px;
             margin: 0 auto;
             background: white;
             border-radius: 12px;
@@ -155,11 +155,63 @@
             margin: 40px 0;
             display: flex;
             justify-content: center;
+            overflow-x: auto;
         }
 
         svg {
             max-width: 100%;
             height: auto;
+        }
+
+        .philosophy-box {
+            background: linear-gradient(135deg, #e8d5f2 0%, #d4e5f7 100%);
+            padding: 30px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 5px solid #667eea;
+        }
+
+        .philosophy-box h4 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+
+        .two-paths {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin: 25px 0;
+        }
+
+        .path-card {
+            padding: 25px;
+            border-radius: 8px;
+            border: 2px solid #ddd;
+        }
+
+        .path-card.orchestrator {
+            background: #fff8dc;
+            border-color: #ff9800;
+        }
+
+        .path-card.simulation {
+            background: #f3e5f5;
+            border-color: #9c27b0;
+        }
+
+        .path-title {
+            font-weight: 700;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+        }
+
+        .path-card.orchestrator .path-title {
+            color: #ff6f00;
+        }
+
+        .path-card.simulation .path-title {
+            color: #6a1b9a;
         }
 
         .progressive-elements {
@@ -198,6 +250,25 @@
         .element-desc {
             font-size: 0.95em;
             color: #666;
+        }
+
+        .concept-card {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border-left: 4px solid #764ba2;
+        }
+
+        .concept-name {
+            font-weight: 700;
+            color: #764ba2;
+            margin-bottom: 8px;
+        }
+
+        .concept-desc {
+            font-size: 0.95em;
+            line-height: 1.7;
         }
 
         .core-message {
@@ -253,13 +324,54 @@
             margin: 0 5px;
         }
 
+        .toc {
+            background: #f0f4ff;
+            padding: 25px;
+            border-radius: 8px;
+            margin: 30px 0;
+        }
+
+        .toc h3 {
+            margin-top: 0;
+            color: #667eea;
+        }
+
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .toc li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .toc li:before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .toc a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
         @media (max-width: 768px) {
             h1 {
                 font-size: 1.8em;
             }
 
             .comparison-grid,
-            .progressive-elements {
+            .progressive-elements,
+            .two-paths {
                 grid-template-columns: 1fr;
             }
 
@@ -281,6 +393,22 @@
         </header>
 
         <div class="section">
+            <div class="toc">
+                <h3>📖 このページの構成</h3>
+                <ul>
+                    <li><a href="#intro">1分で分かる説明</a></li>
+                    <li><a href="#comparison">業界のやり方 vs agent-hub のやり方</a></li>
+                    <li><a href="#philosophy">being vs becoming — 根本的な違い</a></li>
+                    <li><a href="#paths">業界が逃げた2つの方向</a></li>
+                    <li><a href="#concepts">重要な概念5つ</a></li>
+                    <li><a href="#elements">漸進的な成長の6要素</a></li>
+                    <li><a href="#core">agent-hub の核心</a></li>
+                    <li><a href="#why">なぜこれが大事か</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="section" id="intro">
             <h2><span class="emoji">⚡</span> 1分で分かる説明</h2>
             <div class="intro-text">
                 <p>
@@ -294,7 +422,7 @@
             </div>
         </div>
 
-        <div class="section">
+        <div class="section" id="comparison">
             <h2><span class="emoji">🏢</span> 業界のやり方 vs agent-hub のやり方</h2>
 
             <div class="comparison-grid">
@@ -328,84 +456,209 @@
             </div>
         </div>
 
-        <div class="section">
-            <h2><span class="emoji">🛤️</span> 「状態」 vs 「経路」—何が違うのか</h2>
+        <div class="section" id="philosophy">
+            <h2><span class="emoji">🧠</span> being vs becoming — 根本的な違い</h2>
 
             <div class="being-becoming">
                 <p style="font-size: 1.2em; margin-bottom: 30px;">
-                    業界の考え方 vs agent-hub の考え方
+                    西洋の「状態」的な考え方 vs 東洋の「過程」的な考え方
+                </p>
+            </div>
+
+            <div class="philosophy-box">
+                <h4>西洋哲学的な「being（あること / 状態）」</h4>
+                <p>
+                    「完成した状態」を最初に決めてから、それを実現しようとする考え方。
+                    数学的に「こういう形が理想」と定めてから、その通りに作ろうとします。
+                    オーケストレーターパターンの背景には、この西洋的な「being」の思想があります。
+                </p>
+            </div>
+
+            <div class="philosophy-box" style="background: linear-gradient(135deg, #e1f5fe 0%, #e0f2f1 100%); border-left-color: #00897b;">
+                <h4 style="color: #00897b;">東洋哲学的な「becoming（なること / 過程）」</h4>
+                <p>
+                    「完成」よりも「過程」を大事にする考え方。
+                    禅の思想やタオイズムなど、東洋では「道（タオ）」の方が大事とされます。
+                    agent-hub が「少しずつ育てていく」というのは、この東洋的な「becoming」の思想です。
                 </p>
             </div>
 
             <div class="svg-container">
-                <svg width="100%" height="300" viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg">
-                    <!-- Industry approach -->
+                <svg width="100%" height="280" viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Western being approach -->
                     <g>
-                        <text x="100" y="30" font-size="16" font-weight="bold" fill="#856404">業界：「完成した状態」を作ろう</text>
-
-                        <!-- Start point -->
-                        <circle cx="80" cy="120" r="20" fill="#ff9800" stroke="#f57c00" stroke-width="2"/>
-                        <text x="80" y="125" text-anchor="middle" font-size="12" fill="white" font-weight="bold">設計</text>
-
-                        <!-- Arrow -->
-                        <path d="M 110 120 L 170 120" stroke="#ff9800" stroke-width="3" fill="none" marker-end="url(#arrowhead-orange)"/>
-
-                        <!-- End point (big jump) -->
-                        <circle cx="200" cy="120" r="25" fill="#4caf50" stroke="#388e3c" stroke-width="2"/>
-                        <text x="200" y="128" text-anchor="middle" font-size="12" fill="white" font-weight="bold">完成</text>
-
-                        <!-- Problem indicator -->
-                        <text x="150" y="180" text-anchor="middle" font-size="12" fill="#d32f2f" font-weight="bold">⚠️ 大きな跳躍</text>
-                        <text x="150" y="200" text-anchor="middle" font-size="11" fill="#d32f2f">途中で失敗しやすい</text>
+                        <text x="150" y="30" font-size="16" font-weight="bold" fill="#1565c0">西洋：「being」—完成した状態を目指す</text>
+                        <rect x="50" y="60" width="200" height="180" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+                        <text x="150" y="110" text-anchor="middle" font-size="12" fill="#1565c0" font-weight="bold">理想の「状態」</text>
+                        <text x="150" y="135" text-anchor="middle" font-size="11" fill="#1565c0">を最初に</text>
+                        <text x="150" y="155" text-anchor="middle" font-size="11" fill="#1565c0">きっちり決めて</text>
+                        <text x="150" y="175" text-anchor="middle" font-size="11" fill="#1565c0">その通りに作る</text>
+                        <path d="M 260 150 L 350 150" stroke="#1565c0" stroke-width="3" marker-end="url(#arrowhead-blue)"/>
+                        <circle cx="380" cy="150" r="35" fill="#4caf50" stroke="#2e7d32" stroke-width="2"/>
+                        <text x="380" y="155" text-anchor="middle" font-size="12" fill="white" font-weight="bold">完成</text>
+                        <text x="150" y="260" text-anchor="middle" font-size="11" fill="#d32f2f">⚠️ うまくいけばいいけど</text>
+                        <text x="150" y="276" text-anchor="middle" font-size="11" fill="#d32f2f">失敗したら最初からやり直し</text>
                     </g>
 
-                    <!-- Agent-hub approach -->
+                    <!-- Eastern becoming approach -->
                     <g>
-                        <text x="500" y="30" font-size="16" font-weight="bold" fill="#0c5460">agent-hub：小さな歩みで成長する</text>
-
-                        <!-- Stepping path -->
-                        <circle cx="420" cy="120" r="15" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
-                        <text x="420" y="125" text-anchor="middle" font-size="10" fill="#1976d2">最初</text>
-
-                        <!-- Step 1 -->
-                        <path d="M 435 120 L 475 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
-                        <circle cx="490" cy="120" r="15" fill="#bbdefb" stroke="#1976d2" stroke-width="2"/>
-                        <text x="490" y="125" text-anchor="middle" font-size="10" fill="#1976d2">↑小さな</text>
-
-                        <!-- Step 2 -->
-                        <path d="M 505 120 L 545 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
-                        <circle cx="560" cy="120" r="15" fill="#90caf9" stroke="#1976d2" stroke-width="2"/>
-                        <text x="560" y="125" text-anchor="middle" font-size="10" fill="#1976d2">↑成長</text>
-
-                        <!-- Step 3 -->
-                        <path d="M 575 120 L 615 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
-                        <circle cx="630" cy="120" r="15" fill="#64b5f6" stroke="#1976d2" stroke-width="2"/>
-                        <text x="630" y="125" text-anchor="middle" font-size="10" fill="#1976d2">↑もっと</text>
-
-                        <!-- Step 4 -->
-                        <path d="M 645 120 L 685 120" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
-                        <circle cx="700" cy="120" r="20" fill="#42a5f5" stroke="#1565c0" stroke-width="2"/>
-                        <text x="700" y="128" text-anchor="middle" font-size="11" fill="white">自己<br/>組織化</text>
-
-                        <!-- Success indicator -->
-                        <text x="560" y="180" text-anchor="middle" font-size="12" fill="#4caf50" font-weight="bold">✓ 確実に成長</text>
-                        <text x="560" y="200" text-anchor="middle" font-size="11" fill="#4caf50">途中で修正できる</text>
+                        <text x="650" y="30" font-size="16" font-weight="bold" fill="#00897b">東洋：「becoming」—過程の中で育てる</text>
+                        <circle cx="570" cy="110" r="25" fill="#b2dfdb" stroke="#00897b" stroke-width="2"/>
+                        <text x="570" y="118" text-anchor="middle" font-size="11" fill="#00897b">種</text>
+                        <path d="M 595 110 L 625 110" stroke="#00897b" stroke-width="2" marker-end="url(#arrowhead-teal)"/>
+                        <circle cx="650" cy="110" r="30" fill="#80cbc4" stroke="#00897b" stroke-width="2"/>
+                        <text x="650" y="120" text-anchor="middle" font-size="11" fill="#00897b">↑芽</text>
+                        <path d="M 680 110 L 710 110" stroke="#00897b" stroke-width="2" marker-end="url(#arrowhead-teal)"/>
+                        <circle cx="735" cy="110" r="35" fill="#4db6ac" stroke="#00897b" stroke-width="2"/>
+                        <text x="735" y="118" text-anchor="middle" font-size="11" fill="white">↑育つ</text>
+                        <path d="M 770 110 L 800 110" stroke="#00897b" stroke-width="2" marker-end="url(#arrowhead-teal)"/>
+                        <circle cx="840" cy="110" r="40" fill="#009688" stroke="#004d40" stroke-width="2"/>
+                        <text x="840" y="120" text-anchor="middle" font-size="12" fill="white" font-weight="bold">成長</text>
+                        <text x="650" y="190" text-anchor="middle" font-size="11" fill="#4caf50">✓ 失敗しても途中で修正</text>
+                        <text x="650" y="206" text-anchor="middle" font-size="11" fill="#4caf50">✓ 人間も一緒に見守りながら育つ</text>
                     </g>
 
-                    <!-- Arrow markers -->
                     <defs>
-                        <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                            <polygon points="0 0, 10 3, 0 6" fill="#ff9800"/>
-                        </marker>
                         <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                            <polygon points="0 0, 10 3, 0 6" fill="#1976d2"/>
+                            <polygon points="0 0, 10 3, 0 6" fill="#1565c0"/>
+                        </marker>
+                        <marker id="arrowhead-teal" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <polygon points="0 0, 10 3, 0 6" fill="#00897b"/>
                         </marker>
                     </defs>
                 </svg>
             </div>
+
+            <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; margin-top: 25px; border-left: 4px solid #4caf50;">
+                <p style="margin: 0; font-size: 1.05em;">
+                    <strong>Kazuhiro の30年の創発文明論との接続</strong><br/>
+                    実は、人間の文明も、「完璧に設計して完成させた」というより、
+                    「小さな種から始まって、人々が育てていった」という過程で成長しました。
+                    agriculture、pottery、cities... すべて trial-and-error の中で進化。
+                    agent-hub は、AIの世界でもこの「自然な成長」を試みています。
+                </p>
+            </div>
         </div>
 
-        <div class="section">
+        <div class="section" id="paths">
+            <h2><span class="emoji">🔀</span> 業界が逃げた2つの方向</h2>
+
+            <p style="margin-bottom: 25px; font-size: 1.05em;">
+                2024年、業界は「自動化」の夢を追いながら、結局2つの方向に分裂しました。
+                どちらも「人間と AI が一緒に育てる」という道は通りませんでした。
+            </p>
+
+            <div class="two-paths">
+                <div class="path-card orchestrator">
+                    <div class="path-title">🏭 方向1：「オーケストレーター」に逃げた</div>
+                    <p>
+                        <strong>代表例</strong>: Cognition / Anthropic / OpenAI / LangChain など
+                    </p>
+                    <p style="margin-top: 10px;">
+                        「自律」をあきらめて、人間が全部命令する方向。
+                        AIたちは各々の部下として、人間の指示を待つ。
+                    </p>
+                    <p style="margin-top: 10px;">
+                        <strong>メリット</strong>: わかりやすい、確実、速い
+                    </p>
+                    <p style="margin-top: 5px;">
+                        <strong>デメリット</strong>: 人間が指示を出し続けないといけない
+                    </p>
+                </div>
+
+                <div class="path-card simulation">
+                    <div class="path-title">🌌 方向2：「人間を外した」シミュレーション</div>
+                    <p>
+                        <strong>代表例</strong>: Generative Agents (Stanford) など
+                    </p>
+                    <p style="margin-top: 10px;">
+                        「人間も関わらずに」完全自動でやらせる実験。
+                        人間を外してしまえば、自由に育つのでは？という仮説。
+                    </p>
+                    <p style="margin-top: 10px;">
+                        <strong>メリット</strong>: 純粋に自動、観察実験として面白い
+                    </p>
+                    <p style="margin-top: 5px;">
+                        <strong>デメリット</strong>: 人間が干渉できない、現実には使いづらい
+                    </p>
+                </div>
+            </div>
+
+            <div style="background: #fff3e0; padding: 25px; border-radius: 8px; margin-top: 25px; border-left: 4px solid #ff6f00;">
+                <h3 style="margin-top: 0; color: #e65100;">なぜこの2つの道しか通らなかったのか？</h3>
+                <p style="margin: 15px 0;">
+                    <strong>本当の答え</strong>: 「人間が中に入りながら、一緒に育てる」という道は、測定が難しいからです。
+                </p>
+                <p style="margin: 15px 0;">
+                    ✗ 「スピード」では測れない<br/>
+                    ✗ 「自動度」では測れない<br/>
+                    ✓ 「一緒に育つプロセスの質」を測る必要がある
+                </p>
+                <p style="margin: 15px 0;">
+                    大企業は「スピード」で競争したいから、測りやすい方向に逃げました。
+                    学術機関は「純粋な自動化」を研究したいから、人間を外してしまいました。
+                </p>
+            </div>
+        </div>
+
+        <div class="section" id="concepts">
+            <h2><span class="emoji">🔑</span> 重要な概念5つ</h2>
+
+            <p style="margin-bottom: 25px; font-size: 1.05em;">
+                agent-hub を理解するために知っておくべき5つの大事な概念：
+            </p>
+
+            <div class="concept-card">
+                <div class="concept-name">1. 「兄貴分」 (Big Bro) — 親分ではなく、先輩</div>
+                <div class="concept-desc">
+                    operator（人間が最初に指示する立場）のことを「兄貴分」と呼びます。
+                    これは「親分が部下に命令する」という意味ではなく、
+                    「先輩が後輩のやり方を見守ったり、ときには意見を言ったりする」という関係。
+                    <strong>固定した上下ではなく、信頼の実績に応じて動く位置関係</strong>です。
+                </div>
+            </div>
+
+            <div class="concept-card">
+                <div class="concept-name">2. 「mobile asymmetry」 — 動く力関係</div>
+                <div class="concept-desc">
+                    「兄貴分」がいつも上とは限らない、という意味。
+                    その時々の状況に応じて、力関係が動きます。
+                    通常は兄貴分が見守っていますが、別の peer が「これはこうすべきだ」と意見を言うこともできます。
+                    <strong>固い階級制度ではなく、柔軟な関係</strong>です。
+                </div>
+            </div>
+
+            <div class="concept-card">
+                <div class="concept-name">3. 「引き算で役割を作る」 — やることを減らして役割を決める</div>
+                <div class="concept-desc">
+                    reviewer の仕事は「何をやるか」で決めるのではなく、「何をやらないか」で決めます。
+                    「approve / merge 判断はしない」「コードは書かない」「勝手に編集しない」...
+                    こうして「引き算」で役割を決めると、AI 同士がお互いに干渉しすぎず、上手くいきます。
+                </div>
+            </div>
+
+            <div class="concept-card">
+                <div class="concept-name">4. 「self-research」 — 自分たちを観察する</div>
+                <div class="concept-desc">
+                    通常の研究は「外から観察する」ですが、self-research は「中から観察する」。
+                    agent-hub は「業界はこう言っている」ではなく、
+                    「自分たちがやっていることから、何が見えるか」を観察します。
+                    これは、<strong>自分たちが実験の対象であり、観察者でもある</strong>という状態です。
+                </div>
+            </div>
+
+            <div class="concept-card">
+                <div class="concept-name">5. 「failure visibility」 — 失敗が見える化</div>
+                <div class="concept-desc">
+                    全員が同じ情報を見ているから、誰かの失敗が全員に見えます。
+                    これは悪いことではなく、<strong>みんなで学べる</strong という利点です。
+                    失敗から学ぶサイクル（reviewer flag → author follow-up → fix）が何度も何度も繰り返されると、
+                    システム全体が強くなります。
+                </div>
+            </div>
+        </div>
+
+        <div class="section" id="elements">
             <h2><span class="emoji">🌱</span> 漸進的な成長の6つの要素</h2>
             <p style="margin-bottom: 25px; font-size: 1.05em;">
                 agent-hub が「人間が中に入りながら少しずつ育てる」というのは、こんなふうに進みます：
@@ -450,7 +703,7 @@
             </div>
         </div>
 
-        <div class="section">
+        <div class="section" id="core">
             <div class="core-message">
                 <span class="emoji">⭐</span> agent-hub の核心 <span class="emoji">⭐</span>
                 <div style="margin-top: 20px; font-size: 1.1em;">
@@ -465,7 +718,7 @@
             </div>
         </div>
 
-        <div class="section">
+        <div class="section" id="why">
             <h2><span class="emoji">🤔</span> なぜ、このことが大事なのか？</h2>
 
             <div class="why-important">
@@ -515,7 +768,7 @@
 
         <footer>
             <p>
-                このページは、2026年5月18日の議論をもとに作成されました。
+                このページは、2026年5月18日の業界動向と agent-hub 位置付けに関する議論をもとに作成されました。
                 <br/>
                 詳しい内容は、<code>2026-05-18-peer-mesh-industry-discussion.md</code> をご覧ください。
             </p>
