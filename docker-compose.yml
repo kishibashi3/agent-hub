@@ -1,0 +1,46 @@
+# agent-hub all-in-one bundle (= issue #95)
+#
+# `docker-compose up -d` で hub server + scheduler が同 container 内で並走。
+# `docker run kishibashi3/agent-hub` と等価だが、 compose は **環境変数 / volume /
+# port mapping を declarative に管理** できるため operator 推奨。
+#
+# usage:
+#   1. `.env` ファイルに認証情報 (GITHUB_PAT 等) を記載
+#   2. `docker-compose up -d`
+#   3. `docker-compose logs -f` で server + scheduler の log を tail
+#   4. `docker-compose down` で停止
+
+version: "3.8"
+
+services:
+  agent-hub:
+    image: ghcr.io/kishibashi3/agent-hub:latest
+    container_name: agent-hub
+    restart: unless-stopped
+    ports:
+      # MCP HTTP endpoint (= /mcp, /health 両方)
+      - "3000:3000"
+    volumes:
+      # 永続化 data (= app.db + schedules.json) を host 側にも保持
+      - ./data:/app/data
+    environment:
+      # ---- scheduler 用認証情報 (= 必須、 .env で渡す) ----
+      # GitHub PAT (read:user scope) または AGENT_HUB_USER (= trust mode、 dev only)
+      GITHUB_PAT: ${GITHUB_PAT:-}
+      AGENT_HUB_USER: ${AGENT_HUB_USER:-}
+      # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
+      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
+      # ---- server 用 edition / auth ----
+      # 'community' (default) / 'private' / 'enterprise'
+      AGENT_HUB_EDITION: ${AGENT_HUB_EDITION:-}
+      # 'pat' (= 推奨、 production) / 'trust' (= localhost only、 dev)
+      AUTH_MODE: ${AUTH_MODE:-}
+      # GitHub Org 制限 (= optional、 pat mode で組織 membership 検証)
+      AGENT_HUB_GITHUB_ORG: ${AGENT_HUB_GITHUB_ORG:-}
+    healthcheck:
+      # compose level の health check (= image HEALTHCHECK と二重で robust)
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
