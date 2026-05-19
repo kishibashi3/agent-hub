@@ -223,7 +223,7 @@ WHERE ephemeral = 1
   - `sendMessage(input, sender)`: `ephemeral` を INSERT column に含める、 team 宛 + `ephemeral: true` は throw
   - `getUnreadMessages(reader)`: transaction wrap + ephemeral row の DELETE
   - `getHistory(input, requester)`: `WHERE ephemeral = 0` filter
-  - `getMessage(messageId, requester)`: ephemeral row も含めて取得 (= mark_as_read path の existence check で false 返すため、 通常 path として fail させる方が良い)
+  - `getMessage(messageId, requester)`: **ephemeral filter は追加しない** (= `getUnreadMessages` の transactional DELETE 後は row 自体が存在しないので、 既存の 「not found → error」 path が自然に動く)。 つまり mark_as_read 経由 / get_message 経由いずれも 「row 不在 → message not found」 として通常 error path に着地する設計 (= ephemeral 専用 path を追加せず、 deletion 後の natural absence を活用)。 reviewer suggestion 反映、 §4.3 mark_as_read 不要 と整合。
 
 ### 6.4 background sweep
 
