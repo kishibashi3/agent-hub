@@ -52,6 +52,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import sys
 import threading
 import time
@@ -66,6 +67,35 @@ from croniter import croniter
 # iters/next_times は main thread (= cron fire) と SSE thread (= add/delete/run_at/run_in)
 # 両方から mutate される shared state、 `_schedules_lock` で排他 access 保証。
 _schedules_lock = threading.Lock()
+
+# issue #50: SIGTERM (= systemd / supervisor) + SIGINT (= Ctrl-C) graceful shutdown。
+# signal handler が set すると main loop が iteration 末尾で break、 SSE thread は
+# daemon=True なので main 終了に連動して自動 cleanup。 進行中の HTTP timeout
+# (= max 10s) を超えない範囲で graceful shutdown 完了。
+_shutdown_event = threading.Event()
+
+
+def _on_signal(signum: int, _frame: Any) -> None:
+    """SIGTERM / SIGINT handler — `_shutdown_event` を set + log。
+
+    issue #50: production daemon (= systemd / supervisor 下) で `systemctl stop`
+    すると SIGTERM が送られる。 元実装は `KeyboardInterrupt` (= SIGINT) のみ
+    catch、 SIGTERM では abrupt termination → MCP session dangling state +
+    進行中の HTTP request 半端打ち切り + shutdown log 欠落。
+
+    本 handler で SIGTERM / SIGINT 両方に対し:
+    1. `_shutdown_event` set (= main loop が次回 iteration で graceful exit)
+    2. signal 名 log (= 「正常終了かクラッシュか」 を operator に明示)
+    3. signal handler 内では time.sleep の wakeup を待たない (= main loop の
+       60s sleep cap 内で SIGTERM 検出済の場合次回 iteration で確実に exit)
+
+    SIGTERM の default は process termination だが、 本 handler 登録後は
+    Python control flow に渡される。 main loop 内の sleep は signal で
+    interrupt されて即時 return する (= Python の `time.sleep` 仕様)。
+    """
+    name = signal.Signals(signum).name
+    print(f"\n[shutdown] received {name}, draining...", file=sys.stderr)
+    _shutdown_event.set()
 
 
 # ============================================================
@@ -1259,7 +1289,15 @@ def main() -> None:
     else:
         print("[ready] no schedules loaded; SSE inbox listener only (use `add` / `run_at` / `run_in` to register)")
 
-    while True:
+    # issue #50: SIGTERM / SIGINT graceful shutdown handler を登録 (= systemd / supervisor
+    # 下での `systemctl stop` 等を script の Python control flow に渡す)。
+    # SIGTERM = systemd stop / docker stop / pkill 等の default termination signal、
+    # SIGINT = Ctrl-C (= 元 KeyboardInterrupt path も統合)。 両 signal を同 handler で
+    # `_shutdown_event` set し、 main loop 末尾で graceful exit する。
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    while not _shutdown_event.is_set():
         # v4: schedules / iters / next_times は SSE thread で mutate されるので
         # lock 内で snapshot を取得。
         with _schedules_lock:
@@ -1354,8 +1392,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # issue #50: signal handler (= main() 内で signal.signal() で登録) が SIGTERM/SIGINT
+    # を catch して `_shutdown_event` を set、 main loop が graceful exit する path に
+    # 統合済。 旧 `KeyboardInterrupt` catch は signal handler 登録**前**の早期
+    # interrupt (= argparse / config load 中の Ctrl-C 等) に対する fallback として
+    # 残置。 通常の SIGINT は signal handler 経由で graceful exit する。
     try:
         main()
+        print("[shutdown] exiting cleanly", file=sys.stderr)
+        sys.exit(0)
     except KeyboardInterrupt:
-        print("\n[shutdown] interrupted by user", file=sys.stderr)
+        # signal handler 登録前の早期 Ctrl-C fallback
+        print("\n[shutdown] interrupted by user (pre-handler)", file=sys.stderr)
         sys.exit(0)
