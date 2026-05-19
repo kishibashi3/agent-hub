@@ -27,7 +27,7 @@ agent-hub ecosystem は現状 alpha、初めて触る人(= ecosystem 外の engi
 |---|---|---|---|
 | **L0** | 人間が自分宛 / 仲間宛に DM 送信 + 読む | agent-hub server + Claude Code + plugin | ⚠️ 「ただの message store」と区別不能(差別化なし) |
 | **L1** ⭐ | 人間 ↔ @bridge-claude 1 つで双方向 DM | 上記 + bridge-claude worker + ANTHROPIC_API_KEY | ✅ **「agent-hub の唯一の差別化(= AI と human が同列に住む)」 を体験** |
-| **L2** | 人間 + ≥ 2 AI peer (@reviewer + @planner 等) で peer mesh 体験 | 上記 + 複数 bridge persona 設定 | ✅✅ peer mesh の本領発揮(= ADR thesis 体験)、ただし setup 複雑化 |
+| **L2** | 人間 + ≥ 2 AI peer (= 例: @reviewer + @planner、または抽象的に「review 担当 + 進行管理担当」 等 複数の specialty persona)で peer mesh 体験 | 上記 + 複数 bridge persona 設定 | ✅✅ peer mesh の本領発揮(= ADR thesis 体験)、ただし setup 複雑化 |
 
 **推奨 minimum**: **L1**(= 人間 + @bridge-claude 1 つ)。
 
@@ -113,6 +113,8 @@ L1 (= @bridge-claude 返事) まで進めるには **+ ANTHROPIC_API_KEY 発行 
 
 → **9 step の table** だけ見ると easy に見えるが、各 step に上記 friction が刺さると **実体験 30-45 min** がリアル。
 
+> **Note (= @reviewer review feedback、2026-05-19、Minor 1)**: 上記 8 件は **主要 friction**、実装 (= Phase 1 user testing) で expand 自然発生候補に以下 3 軸あり: (a) **GitHub Org 制限** (= `AGENT_HUB_GITHUB_ORG` deployment-side enforce、該当 org 未所属 user の 403 friction)、(b) **`AGENT_HUB_DISABLE_DEFAULT_TENANT` 公開 hub default** (= 公開 hub user は **必ず** `AGENT_HUB_TENANT` 指定必要、named tenant TOFU claim 概念の non-trivial さ — 上記 #5 を補強)、(c) **Claude Code version compatibility** (= old version で `/plugin install` syntax 違いの可能性)。Phase 1 着手前の user testing で確認推奨。
+
 ## 4. Installer の形 — 候補比較
 
 issue body 提示の 4 候補 + 1 追加候補(`agenthub` CLI)で比較:
@@ -122,7 +124,7 @@ issue body 提示の 4 候補 + 1 追加候補(`agenthub` CLI)で比較:
 | **F1** | **shell script (`curl ... | sh`)** | 公開 hub L0 minimum auto-setup (= .bashrc 編集 + plugin marketplace add 自動化) | 1 command で start、Tailscale / mise / k3s 等で実証済 pattern | Claude Code 内 slash command (`/plugin install`) は shell から trigger 不可、最後の plugin install + reload は manual 残る | **High**(L0 まで自動化可、L1 は extension 必要) |
 | **F2** | **Docker Compose** | self-host CE / PE の server + bridge bundle | `docker compose up` 1 命令で server + bridge 起動、isolated env | Claude Code client は別途 install 必要(= compose 外)、Docker 自体の install 障壁 | **Mid**(self-host path には fit、Claude Code 側は別 path) |
 | **F3** | **VS Code Extension** | Claude Code 不使用 path / GUI 利用層 | UI install、env editor、Marketplace 配信 | 大規模実装、scope creep、Claude Code 中心 ecosystem との分岐 | **Low**(別 product 化、現 scope と orthogonal) |
-| **F4** | **`agenthub` CLI tool** (新規) | L1 minimum 1 command 化(= `agenthub init` で全自動) | one-liner で plugin + bridge spawn 完結、PAT/API key auto-issue 可能、segmented config | 新 CLI tool 実装が必要(= 別 repo / 別 maintenance) | **High**(= 推奨 main path、Phase 2 で着手) |
+| **F4** | **`agenthub` CLI tool** (新規) | L1 minimum 1 command 化(= `agenthub init` で全自動) | one-liner で plugin + bridge spawn 完結、PAT/API key auto-issue 可能、segmented config | 新 CLI tool 実装が必要(= 別 repo / 別 maintenance、**初期実装 ~2-3 person-week + 継続 maintenance ~0.5-1 person-day/month 概算**) | **High**(= 推奨 main path、Phase 2 で着手) |
 | **F5** | **Claude Code plugin が installer**(= plugin install 時に bridge も auto-spawn) | L1 minimum extension via plugin marketplace | plugin install で全部完結、user は marketplace add だけ | plugin は client-side 設定のみで bridge daemon spawn 権限なし(= sandbox 制約)、Claude Code 仕様外 | **Low**(Claude Code plugin 設計上 spawn 不能) |
 
 ### 4.1 推奨組合せ: F1 + F4 + (F2 として self-host option)
@@ -318,6 +320,12 @@ curl -fsSL https://agent-hub.sh/install | sh
 
 **Step 削減**: **9 → 3** (= curl 1 command + Claude Code 内 slash 3 命令)
 
+**Phase 1 failure mode handling principles** (= 実装時 error handling 設計):
+- `.bashrc` (or `~/.zshrc`) を変更する前に **backup `.bashrc.agenthub-backup.<timestamp>`** を作成、復旧可能性確保
+- 既存 `$GITHUB_PAT` を `gh auth token` で **auto-detect**、検出時は再発行せず再利用 prompt
+- network failure (curl / OAuth / gh API) は **N 回 retry + exponential backoff**、最終失敗時に「manual install 手順を print」 fallback
+- idempotent re-run guaranteed (= 複数回実行で .bashrc 重複 export 行を作らない、grep + sentinel marker comment で既存検出)
+
 **Phase 2 (= 中期、L1 minimum 1 命令化)**:
 
 ```bash
@@ -374,10 +382,24 @@ self-host PE / CE 利用層向け、`agenthub up --hub=local` と統合余地あ
 
 - **`agenthub` CLI 新規 repo の maintenance burden**: agent-hub-bridge-* 系の維持と並行で 1 repo 追加 = operator burden 増、bridge worker 内部に `--install-installer` flag で integrate する代案あり
 - **OAuth Device Flow vs OAuth App**: Device Flow は user が PAT を意識せず token を obtain、ただし GitHub Apps を agent-hub 独自に登録すれば PAT 完全不要(= more proper、Phase 4 候補)
-- **public hub への load**: 万人が `curl | sh` で easy onboard すると public hub agent-hub-ki への load 急増、operator 負担 → quota / rate limit / spam ガード 必要
+- **public hub への load**: 万人が `curl | sh` で easy onboard すると public hub agent-hub-ki への load 急増、operator 負担 → quota / rate limit / spam ガード 必要。**Launch rollout strategy 推奨**: Phase 1 は **invite-only beta** → **public beta** → **general availability** の 3 stage で段階 release、各 stage で operator load + spam 動向 monitor、必要なら rate limit を tune
 - **bridge-claude の M0 status**: Phase 2 着手前に `agent-hub-bridge-claude` の M1 完了(= actual install method 確定)が前提、Phase 2 自体が bridge dev に依存
 - **scope creep risk**: 「installer」が ecosystem dependency 全体を抱え込むと scope hugely 越える、各 phase で「何を install するか / 何を install しないか」明示 line 引き必要
 - **alternative model**: 「`curl | sh` 排他で `docker run` only」 path 採用すれば前提統一(Docker のみ)、ただし Claude Code との連携設計が別途必要
+
+### 7.4.1 Redline #1 compliance reminder (= @reviewer Suggestion 4 ⭐、2026-05-19)
+
+**Phase 1 / Phase 2 implementation 時の redline #1 compliance check 必須**:
+
+`~/.anthropic/credentials` auto-detect / `~/.bashrc` auto-edit / `~/.config/agent-hub/credentials` 保存等の **設定 fallback design** は、reviewer CLAUDE.md §1 redline #1 (= env var / 設定 未セット時の runtime fallback 禁止) の **「documented optional with default」 exception** に該当する設計判断が要る。
+
+具体 implementation 時の guideline:
+- **「未設定 → silently 推測 default 使用」** は redline 違反、`prompt for input` + 「default = X、Enter で accept」 形式が compliant pattern
+- **既存 credentials 検出 → silently 上書き** は redline 違反、`detected existing config、override? (y/N)` confirmation 必須
+- **shell rc auto-edit** は idempotent + sentinel marker (= `# >>> agent-hub install >>>` block) で **明示 explicit な write** とし、 silent prepend / append は redline 違反
+
+これは ecosystem CLAUDE.md § redline #1 codifier (= @reviewer persona 領域) の guideline であり、Phase 1/2 implementer は実装着手前に reviewer CLAUDE.md §1 literal を読んで compliance verify 推奨。
+本 doc が「documented optional with default」 exception を **explicitly invoke する設計** であることは設計 doc 段で明示 declared。
 
 ### 7.5 前提
 
