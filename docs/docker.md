@@ -128,26 +128,31 @@ docker-compose up -d
 # → agent-hub (port 3000) + agent-hub-dashboard (port 8080) 両方起動
 ```
 
-ブラウザで `http://localhost:8080` を開くと、 上部の **nav bar が 2 group に分割** されて 4 view を提供 (= 2026-05-20 UX update):
+ブラウザで `http://localhost:8080` を開くと、 上部の **nav bar が 2 group に分割** されて 5 view を提供 (= 2026-05-20 Mesh/Matrix 分離後):
 
 ```
-nav-bar:  overview │ [Mesh + Matrix]  [Timeline]  [Link List]   ┃   drill-down │ [Agent Detail]
+nav-bar:  overview │ [Mesh]  [Matrix]  [Timeline]  [Link List]   ┃   drill-down │ [Agent Detail]
 ```
 
-- **overview group** (= 全体構造を観察): mesh + matrix / timeline / link list の 3 view、 ecosystem を 3 つの異なる角度 (graph + heatmap / time / pair list) から把握
-- **drill-down group** (= 個別観察): agent detail、 mesh / link list 上の handle click で navigate (= 直接 URL navigation も可、 ただし handle context なしでは disabled state)
+- **overview group** (= 全体構造を観察): mesh / matrix / timeline / link list の 4 view、 ecosystem を 4 つの異なる角度 (graph / heatmap / time / pair list) から把握
+- **drill-down group** (= 個別観察): agent detail、 mesh / link list 上の handle click で navigate。 `?view=agent` を handle 無しで URL 直打ちした場合は default route (= Mesh) に **302 redirect** (= 「@unknown」 ghost page を表示しない)
 
-#### Overview 1: Mesh + Matrix (= default、 `/`)
-- 左側: D3 force-directed network graph (= agents = 球体、 teams = ひし形、 edges = message count に比例した curved line + drift animation)
-- 右側: sender × recipient ヒートマップ (= 上位 14 名の matrix)
-- 中央 divider: drag で graph / matrix の境界を可動
+#### Overview 1: Mesh (= default、 `/`)
+- D3 force-directed network graph (= agents = 球体、 teams = ひし形、 edges = message count に比例した curved line + drift animation)
+- header の **drift slider** で animation 強度調整 (= mesh view 専用、 他 view では auto hide)
+- node を click すると Agent Detail (= drill-down) に navigate
 
-#### Overview 2: Timeline (= `/?view=timeline`)
+#### Overview 2: Matrix (= `/?view=matrix`)
+- sender × recipient メッセージ頻度 heatmap (= 上位 14 名)
+- cell 色濃度が message count 比率、 hover で正確 count + from/to 表示
+- 「誰と誰の DM が活発か」 を一覧把握
+
+#### Overview 3: Timeline (= `/?view=timeline`)
 - 時間軸 message volume の D3 bar chart
 - range selector: 24h (hourly bucket) / 7d (hourly) / 30d (daily)
 - tooltip で各 bucket の正確 count
 
-#### Overview 3: Link List (= `/?view=links`)
+#### Overview 4: Link List (= `/?view=links`)
 - 強リンク ranking (= bidirectional aggregate、 top 50)
 - `@planner ↔ @reviewer: 75` 形式表示 + 方向別内訳 (`a→b` / `b→a`)
 - bar visualization + handle click で Agent Detail へ
@@ -155,7 +160,7 @@ nav-bar:  overview │ [Mesh + Matrix]  [Timeline]  [Link List]   ┃   drill-do
 #### Drill-down: Agent Detail (= `/?view=agent&agent=@<handle>`)
 - 個別 agent の詳細 (= total / received in / sent out / distinct peers / type (= mode) / last active / tenants active in)
 - Top peers list (= bidirectional message count、 click で同 detail page 遷移)
-- Mesh view ノードや Link List から click で navigate (= handle 未指定での直接 navigation は nav bar 上で disabled、 click 動線 hint を tooltip 表示)
+- Mesh view ノードや Link List から click で navigate (= handle 未指定で直接 navigation すると default route に 302 redirect、 nav bar 上は disabled state + tooltip 動線 hint)
 
 ### dashboard 用環境変数
 
