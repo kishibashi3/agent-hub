@@ -128,27 +128,34 @@ docker-compose up -d
 # → agent-hub (port 3000) + agent-hub-dashboard (port 8080) 両方起動
 ```
 
-ブラウザで `http://localhost:8080` を開くと、 上部の **nav bar から 5 view 切替**:
+ブラウザで `http://localhost:8080` を開くと、 上部の **nav bar が 2 group に分割** されて 4 view を提供 (= 2026-05-20 UX update):
 
-#### View 1: Mesh + Matrix (= default、 `/`)
+```
+nav-bar:  overview │ [Mesh + Matrix]  [Timeline]  [Link List]   ┃   drill-down │ [Agent Detail]
+```
+
+- **overview group** (= 全体構造を観察): mesh + matrix / timeline / link list の 3 view、 ecosystem を 3 つの異なる角度 (graph + heatmap / time / pair list) から把握
+- **drill-down group** (= 個別観察): agent detail、 mesh / link list 上の handle click で navigate (= 直接 URL navigation も可、 ただし handle context なしでは disabled state)
+
+#### Overview 1: Mesh + Matrix (= default、 `/`)
 - 左側: D3 force-directed network graph (= agents = 球体、 teams = ひし形、 edges = message count に比例した curved line + drift animation)
 - 右側: sender × recipient ヒートマップ (= 上位 14 名の matrix)
 - 中央 divider: drag で graph / matrix の境界を可動
 
-#### View 2: Agent Detail (= `/?agent=@<handle>`)
-- 個別 agent の詳細 (= total / received in / sent out / distinct peers / type (= mode) / last active / tenants active in)
-- Top peers list (= bidirectional message count、 click で同 detail page 遷移)
-- Mesh view ノードや Link List から click で navigate
-
-#### View 3: Timeline (= `/?view=timeline`)
+#### Overview 2: Timeline (= `/?view=timeline`)
 - 時間軸 message volume の D3 bar chart
 - range selector: 24h (hourly bucket) / 7d (hourly) / 30d (daily)
 - tooltip で各 bucket の正確 count
 
-#### View 4: Link List (= `/?view=links`)
+#### Overview 3: Link List (= `/?view=links`)
 - 強リンク ranking (= bidirectional aggregate、 top 50)
 - `@planner ↔ @reviewer: 75` 形式表示 + 方向別内訳 (`a→b` / `b→a`)
 - bar visualization + handle click で Agent Detail へ
+
+#### Drill-down: Agent Detail (= `/?view=agent&agent=@<handle>`)
+- 個別 agent の詳細 (= total / received in / sent out / distinct peers / type (= mode) / last active / tenants active in)
+- Top peers list (= bidirectional message count、 click で同 detail page 遷移)
+- Mesh view ノードや Link List から click で navigate (= handle 未指定での直接 navigation は nav bar 上で disabled、 click 動線 hint を tooltip 表示)
 
 ### dashboard 用環境変数
 

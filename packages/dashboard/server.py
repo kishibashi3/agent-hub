@@ -159,6 +159,13 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>agent-hub dashboard</title>
+<!-- D3.js を <head> で先行 load (= 2026-05-20 timeline bug fix):
+     旧位置 (= body 末尾、 mesh JS の直前) では alt view (= timeline) の inline <script>
+     が D3 script tag より前に位置するため `ReferenceError: d3 is not defined` で chart
+     が描画されない。 head に移動して全 view で D3 が available な状態を保証。
+     defer 不要 (= mesh JS は body 末尾で `<script>` 直書きなので、 head の同期 load
+     完了後にしか到達しない)。 -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -241,6 +248,23 @@ table.hm td.self { background:var(--self-bg); color:var(--self-fg); }
 #nav-bar a:hover { color:var(--text); }
 #nav-bar a.active { color:var(--accent); border-bottom-color:var(--accent); }
 
+/* nav section label (= 全体ビュー / 個別ビュー の区別を視覚化、 2026-05-20 UX fix):
+   「Overview (= mesh / timeline / link list) は全体構造を見るための view、
+   Drill-down (= agent detail) は個別 handle に絞る view」 という grouping を
+   navigation 上に明示。 operator から 「mesh + matrix と agent detail の違いが
+   分かりにくい」 feedback への対応。 */
+.nav-section-label {
+  font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.1em;
+  padding:0 8px 0 4px; align-self:center; user-select:none;
+}
+.nav-divider {
+  width:1px; height:18px; background:var(--border); margin:0 6px; align-self:center;
+}
+#nav-bar a.disabled {
+  opacity:0.45; cursor:help;
+}
+#nav-bar a.disabled:hover { color:var(--text2); }
+
 /* ── alt views (= Agent Detail / Timeline / Link List) layout ─────── */
 .alt-main { flex:1; overflow:auto; padding:20px 24px; background:var(--bg); }
 .view-content h2 { font-size:16px; color:var(--accent); margin-bottom:14px; letter-spacing:0.03em; }
@@ -320,7 +344,7 @@ NAV_BAR_HTML
 
 <div id="tooltip"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<!-- D3.js は <head> で先行 load 済 (= 2026-05-20 timeline bug fix、 旧 location)。 -->
 <script>
 const nodes = NODES_JSON;
 const links = LINKS_JSON;
@@ -967,30 +991,63 @@ def render_link_list():
 
 
 def render_nav_bar(current_view, agent_handle=None):
-    """nav bar HTML (= 5 view 切替)。 current_view で active style を当てる。"""
-    nav_items = [
+    """nav bar HTML (= 5 view 切替 + section grouping)。
+
+    2026-05-20 UX fix (= operator feedback 「mesh + matrix と agent detail の違いが
+    分かりにくい」): nav を **2 section に grouping** して全体ビュー / 個別ドリルダウン
+    の区別を視覚化。
+    - **Overview** (= mesh + timeline + link list): 全体構造を 3 つの 異なる角度
+      (graph + heatmap / time / pair list) で観察する全体ビュー群
+    - **Drill-down** (= agent detail): 1 つの handle に絞った個別ビュー、 mesh /
+      link list 上の click から入る drill-down 動線
+
+    section 間に vertical divider + label で grouping を明示、 agent detail は handle
+    未指定なら disabled state (= `mesh / link list から handle を click」 hint 付き)
+    で 「直接 navigate できない drill-down view」 であることを表現。
+    """
+    # Overview group (= 全体構造を見る view 群)
+    overview_items = [
         ("mesh", "Mesh + Matrix", "/"),
-        # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
-        # 由来で DB validation を経由しないため `^[\w-]+$` regex の保証が効かない。
-        # `esc_attr()` で attribute-breakout (= `" onclick="...`) を防ぐ。
-        ("agent", "Agent Detail", "/?view=agent" + (f"&agent={esc_attr(agent_handle)}" if agent_handle else "")),
         ("timeline", "Timeline", "/?view=timeline"),
         ("links", "Link List", "/?view=links"),
     ]
-    # agent detail link は handle が未指定なら disable
-    links_html = []
-    for key, label, url in nav_items:
-        if key == "agent" and not agent_handle:
-            # active でなければ default agent placeholder (= cursor pointer 残すが not-found を案内)
-            cls = "active" if current_view == "agent" else ""
-            if cls:
-                links_html.append(f'<a class="active" href="{url}">{label}</a>')
-            else:
-                links_html.append(f'<a href="/" title="Agent Detail は Mesh View または Link List から handle を click して開いてください" style="opacity:0.5">{label}</a>')
-        else:
-            cls = "active" if current_view == key else ""
-            links_html.append(f'<a class="{cls}" href="{url}">{label}</a>')
-    return f"<div id='nav-bar'>{''.join(links_html)}</div>"
+    # Drill-down group (= 個別 handle 観察 view)
+    # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
+    # 由来で DB validation を経由しないため `^[\w-]+$` regex の保証が効かない。
+    # `esc_attr()` で attribute-breakout (= `" onclick="...`) を防ぐ。
+    drilldown_url = "/?view=agent" + (
+        f"&agent={esc_attr(agent_handle)}" if agent_handle else ""
+    )
+
+    overview_links = []
+    for key, label, url in overview_items:
+        cls = "active" if current_view == key else ""
+        overview_links.append(f'<a class="{cls}" href="{url}">{label}</a>')
+
+    # Agent Detail link: handle 未指定 = disabled state + 動線 hint
+    if current_view == "agent" and agent_handle:
+        drill_link = f'<a class="active" href="{drilldown_url}">Agent Detail</a>'
+    elif agent_handle:
+        # handle が context として与えられている (= 他 view 経由で carry) → 有効リンク
+        drill_link = f'<a href="{drilldown_url}">Agent Detail</a>'
+    else:
+        # handle 未指定: 直接 navigate 不可、 click 動線案内
+        drill_link = (
+            '<a class="disabled" href="/" '
+            'title="Agent Detail を開くには、 Mesh View / Link List で handle を click してください '
+            '(= 個別 drill-down view、 単独 navigation 不可)">'
+            'Agent Detail</a>'
+        )
+
+    return (
+        "<div id='nav-bar'>"
+        "<span class='nav-section-label'>overview</span>"
+        + "".join(overview_links)
+        + "<span class='nav-divider'></span>"
+        + "<span class='nav-section-label'>drill-down</span>"
+        + drill_link
+        + "</div>"
+    )
 
 
 def render_alt_view_layout(view_name, body_html, total_msgs, total_agents, total_links, agent_handle=None):
