@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-agent-hub cron-based DM scheduler (issue #40 / #65)
+agent-hub cron-based DM scheduler (issue #40 / #65 / #92)
 
 schedules.json を読んで cron 式 (cyclic) や run_at (one-shot) に従って
 agent-hub 参加者に DM を送る軽量 daemon。 inbox に DM を送ると command として
-反応 (= ping / list / list all / add / run_at / run_in / delete / run now)、
+反応 (= /ping / /list / /list all / /add / /run_at / /run_in / /delete / /run / /help)、
 cron daemon 再起動なしで動的 schedule 管理可能。 sender 単位 (= `owner` field) で
 attribution + restriction。
+
+v2.0 (= issue #92 `/` prefix migration、 breaking change):
+- 全 command が `/` prefix を要求 (= 旧 bare `ping` / `list` 等は **削除**、 v1.x 互換性なし)
+- `run now <name>` は `/run <name>` に flatten (= single-word command)
+- 未知 `/<cmd>` には `/unknown <cmd>` で明示返答 (= `docs/command-message-convention.md` §3)
+- `/` で始まらない message は **silently ignore** (= scheduler は command-only peer、 LLM bypass)
+- 新 `/help` command (= command 一覧 self-document)
 
 設定例 (schedules.json):
   [
@@ -250,7 +257,7 @@ def init_session(headers: dict[str, str]) -> str:
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "agent-hub-scheduler", "version": "1.0"},
+                "clientInfo": {"name": "agent-hub-scheduler", "version": "2.0"},
             },
             "id": 0,
         }),
@@ -472,26 +479,41 @@ def handle_inbox_command(
 
     issue #65 v4 redesign (= operator 全 use case 統合):
     - sender-based ownership (= owner field、 自身の entry のみ操作可)
-    - one-shot timer (= run_at / run_in、 fire 後 auto-delete)
-    - cyclic cron (= add)
+    - one-shot timer (= /run_at / /run_in、 fire 後 auto-delete)
+    - cyclic cron (= /add)
+
+    v2.0 (= issue #92 `/` prefix migration、 breaking change):
+    全 command が `/` prefix を要求。 `/` で始まらない body は **silently ignore**
+    (= scheduler は command-only peer、 LLM bypass)、 未知 `/<cmd>` は `/unknown <cmd>`
+    で明示返答 (= `docs/command-message-convention.md` §3)。
 
     対応 command:
-    - `ping`                                       : 生存確認
-    - `list`                                       : sender's entries 一覧 (one-shot 残り時間付き)
-    - `list all`                                   : 全 entries 一覧 (= cross-owner view、 issue #85)
-    - `add <name> <cron-5> <to> <message>`         : cyclic entry 追加、 owner=sender
-    - `run_at <ISO8601> <to> <message>`            : one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete
-    - `run_in <duration> <to> <message>`           : one-shot entry 追加 (= N時間後)、 fire 後 auto-delete
-    - `delete <name>`                              : entry 削除 (= owner check)
-    - `run now <name>`                             : one-shot 即時 fire (= owner check、 entry は変更なし)
-    - 未知 command                                 : usage hint
+    - `/ping`                                       : 生存確認
+    - `/list`                                       : sender's entries 一覧 (one-shot 残り時間付き)
+    - `/list all`                                   : 全 entries 一覧 (= cross-owner view、 issue #85)
+    - `/add <name> <cron-5> <to> <message>`         : cyclic entry 追加、 owner=sender
+    - `/run_at <ISO8601> <to> <message>`            : one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete
+    - `/run_in <duration> <to> <message>`           : one-shot entry 追加 (= N時間後)、 fire 後 auto-delete
+    - `/delete <name>`                              : entry 削除 (= owner check)
+    - `/run <name>`                                 : one-shot 即時 fire (= owner check、 entry は変更なし)
+    - `/help`                                       : command 一覧 self-document
+    - 未知 `/<cmd>`                                  : `/unknown <cmd>` 返答
+    - 非 `/` body                                   : silently ignore (= LLM bypass、 scheduler は command-only)
     """
     body_stripped = body.strip()
     parts = body_stripped.split()
     cmd_first = parts[0].lower() if parts else ""
 
+    # v2.0 (= issue #92): `/` で始まらない body は silently ignore。
+    # scheduler は command-only peer (= LLM 不要)、 自然言語 message を受領しても
+    # 反応しない (= 「黙る」 path、 docs/command-message-convention.md §2 整合)。
+    # 既存の bare command (= v1.x の `ping` / `list` 等) は v2.0 で **削除**、
+    # 旧 user が bare command を打っても無反応となる (= breaking change、 README §Inbox command 参照)。
+    if not cmd_first.startswith("/"):
+        return
+
     try:
-        if cmd_first == "ping":
+        if cmd_first == "/ping":
             with _schedules_lock:
                 count = len(schedules)
             send_dm(
@@ -500,11 +522,11 @@ def handle_inbox_command(
                 sender,
                 f"pong (scheduler alive, {count} schedules total)",
             )
-            print(f"[CMD] ping ← {sender}")
+            print(f"[CMD] /ping ← {sender}")
 
-        elif cmd_first == "list":
-            # issue #85 v4: `list all` sub-command (= cross-owner view) を追加。
-            # 既存 `list` (= sender's own entries only) と並ぶ別 path として処理。
+        elif cmd_first == "/list":
+            # issue #85 v4: `/list all` sub-command (= cross-owner view) を追加。
+            # 既存 `/list` (= sender's own entries only) と並ぶ別 path として処理。
             sub_cmd = parts[1].lower() if len(parts) > 1 else ""
             if sub_cmd == "all":
                 with _schedules_lock:
@@ -512,7 +534,7 @@ def handle_inbox_command(
                     if not entries:
                         listing_text = (
                             "list all: no schedules in the system "
-                            "(use `add` or `run_at` / `run_in` to create one)"
+                            "(use `/add` or `/run_at` / `/run_in` to create one)"
                         )
                     else:
                         now = datetime.now().astimezone()
@@ -525,7 +547,7 @@ def handle_inbox_command(
                             + "\n".join(lines)
                         )
                 send_dm(headers, session_id, sender, listing_text)
-                print(f"[CMD] list all ← {sender} ({len(entries)} entries)")
+                print(f"[CMD] /list all ← {sender} ({len(entries)} entries)")
             else:
                 # default: sender's own entries (= owner-filtered、 既存 behavior)
                 with _schedules_lock:
@@ -533,8 +555,8 @@ def handle_inbox_command(
                     if not own:
                         listing_text = (
                             f"list: no schedules owned by {sender} "
-                            f"(use `add` or `run_at` / `run_in` to create one、 "
-                            f"or `list all` to see all entries across owners)"
+                            f"(use `/add` or `/run_at` / `/run_in` to create one、 "
+                            f"or `/list all` to see all entries across owners)"
                         )
                     else:
                         now = datetime.now().astimezone()
@@ -547,9 +569,9 @@ def handle_inbox_command(
                             + "\n".join(lines)
                         )
                 send_dm(headers, session_id, sender, listing_text)
-                print(f"[CMD] list ← {sender} ({len(own) if own else 0} entries)")
+                print(f"[CMD] /list ← {sender} ({len(own) if own else 0} entries)")
 
-        elif cmd_first == "add":
+        elif cmd_first == "/add":
             parsed = _parse_add_args(body_stripped, owner=sender)
             if isinstance(parsed, str):
                 send_dm(headers, session_id, sender, parsed)
@@ -559,7 +581,7 @@ def handle_inbox_command(
                 schedules, iters, next_times, config_path,
             )
 
-        elif cmd_first == "run_at":
+        elif cmd_first == "/run_at":
             parsed = _parse_run_at_args(body_stripped, owner=sender)
             if isinstance(parsed, str):
                 send_dm(headers, session_id, sender, parsed)
@@ -569,7 +591,7 @@ def handle_inbox_command(
                 schedules, iters, next_times, config_path,
             )
 
-        elif cmd_first == "run_in":
+        elif cmd_first == "/run_in":
             parsed = _parse_run_in_args(body_stripped, owner=sender)
             if isinstance(parsed, str):
                 send_dm(headers, session_id, sender, parsed)
@@ -579,13 +601,13 @@ def handle_inbox_command(
                 schedules, iters, next_times, config_path,
             )
 
-        elif cmd_first == "delete":
+        elif cmd_first == "/delete":
             if len(parts) < 2:
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    "[ERR] usage: `delete <name>` (= owner-restricted、 自身の entry のみ削除可)",
+                    "[ERR] usage: `/delete <name>` (= owner-restricted、 自身の entry のみ削除可)",
                 )
                 return
             name = parts[1]
@@ -596,7 +618,7 @@ def handle_inbox_command(
                         headers,
                         session_id,
                         sender,
-                        f"[ERR] no schedule named '{name}'. use `list` to see your entries.",
+                        f"[ERR] no schedule named '{name}'. use `/list` to see your entries.",
                     )
                     return
                 if not _check_owner(s, sender):
@@ -633,18 +655,20 @@ def handle_inbox_command(
                 sender,
                 f"[OK] deleted '{name}' (removed from schedules.json)",
             )
-            print(f"[CMD] delete name='{name}' ← {sender}")
+            print(f"[CMD] /delete name='{name}' ← {sender}")
 
-        elif cmd_first == "run":
-            if len(parts) < 3 or parts[1].lower() != "now":
+        elif cmd_first == "/run":
+            # v2.0 (= issue #92): 旧 `run now <name>` を `/run <name>` に flatten
+            # (= single-word command + 1 positional arg、 convention §5.2 整合)。
+            if len(parts) < 2:
                 send_dm(
                     headers,
                     session_id,
                     sender,
-                    "[ERR] usage: `run now <name>` (= owner-restricted、 entry は変更なし)",
+                    "[ERR] usage: `/run <name>` (= owner-restricted、 one-shot 即時 fire、 entry は変更なし)",
                 )
                 return
-            name = parts[2]
+            name = parts[1]
             with _schedules_lock:
                 idx, s = _find_by_name(schedules, name)
                 if idx is None or s is None:
@@ -652,7 +676,7 @@ def handle_inbox_command(
                         headers,
                         session_id,
                         sender,
-                        f"[ERR] no schedule named '{name}'. use `list` to see your entries.",
+                        f"[ERR] no schedule named '{name}'. use `/list` to see your entries.",
                     )
                     return
                 if not _check_owner(s, sender):
@@ -661,7 +685,7 @@ def handle_inbox_command(
                         session_id,
                         sender,
                         f"[ERR] '{name}' is owned by {s.get('owner', '?')}, "
-                        f"you ({sender}) cannot run-now it.",
+                        f"you ({sender}) cannot run it.",
                     )
                     return
                 fire_to = s["to"]
@@ -675,7 +699,7 @@ def handle_inbox_command(
                     f"[OK] one-shot fired '{name}' → {fire_to} (schedule unchanged)",
                 )
                 print(
-                    f"[RUN-NOW] name='{name}' ← {sender}: {fire_to}: "
+                    f"[RUN] name='{name}' ← {sender}: {fire_to}: "
                     f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
                 )
             except Exception as e:
@@ -683,20 +707,32 @@ def handle_inbox_command(
                     headers,
                     session_id,
                     sender,
-                    f"[ERR] run-now '{name}' failed: {e}",
+                    f"[ERR] /run '{name}' failed: {e}",
                 )
 
-        else:
-            send_dm(
-                headers,
-                session_id,
-                sender,
-                f"[unknown command] '{body_stripped[:50]}'. "
-                f"usage: `ping` / `list` / `list all` / `add <name> <cron-5> <to> <msg>` / "
-                f"`run_at <ISO8601> <to> <msg>` / `run_in <duration> <to> <msg>` / "
-                f"`delete <name>` / `run now <name>`",
+        elif cmd_first == "/help":
+            # v2.0 (= issue #92): self-document、 docs/command-message-convention.md §3.2 整合。
+            help_text = (
+                "scheduler commands (v2.0):\n"
+                "  /ping                                 — 生存確認 (= /pong + count 返答)\n"
+                "  /list                                 — sender's entries 一覧\n"
+                "  /list all                             — 全 entries 一覧 (= cross-owner view)\n"
+                "  /add <name> <cron-5> <to> <message>   — cyclic entry 追加、 owner=sender\n"
+                "  /run_at <ISO8601> <to> <message>      — one-shot 追加 (= 指定日時)、 fire 後 auto-delete\n"
+                "  /run_in <duration> <to> <message>     — one-shot 追加 (= N時間後)、 fire 後 auto-delete\n"
+                "  /delete <name>                        — entry 削除 (= owner check)\n"
+                "  /run <name>                           — one-shot 即時 fire (= owner check、 entry 不変)\n"
+                "  /help                                 — this listing\n"
+                "詳細: https://github.com/kishibashi3/agent-hub/blob/main/packages/scheduler/README.md"
             )
-            print(f"[CMD] unknown ← {sender}: {body_stripped[:50]}")
+            send_dm(headers, session_id, sender, help_text)
+            print(f"[CMD] /help ← {sender}")
+
+        else:
+            # v2.0 (= issue #92): 未知 `/<cmd>` には `/unknown <cmd>` で明示返答
+            # (= docs/command-message-convention.md §3 convention、 sender 側の判別用)。
+            send_dm(headers, session_id, sender, f"/unknown {cmd_first}")
+            print(f"[CMD] /unknown ← {sender}: {cmd_first}")
 
     except Exception as e:
         print(
@@ -713,22 +749,22 @@ def handle_inbox_command(
 def _parse_add_args(
     body_stripped: str, owner: str
 ) -> dict[str, Any] | str:
-    """`add <name> <cron-5-fields> <to> <message>` を positional parse + entry dict.
+    """`/add <name> <cron-5-fields> <to> <message>` を positional parse + entry dict.
 
     成功時 dict {name, cron, to, message, owner} を返す。 失敗時 error str。
     """
-    rest = body_stripped[len("add"):].strip()
+    rest = body_stripped[len("/add"):].strip()
     if not rest:
         return (
-            "[ERR] usage: `add <name> <cron-5> <to> <message>` "
+            "[ERR] usage: `/add <name> <cron-5> <to> <message>` "
             "(cron = 5 space-separated fields、 e.g. `0 13 * * *`)"
         )
     parts = rest.split()
     if len(parts) < 8:
         return (
             f"[ERR] not enough args (got {len(parts)}, need >=8). "
-            f"usage: `add <name> <cron-5-fields> <to> <message>` "
-            f"e.g. `add daily 0 13 * * * @planner daily report`"
+            f"usage: `/add <name> <cron-5-fields> <to> <message>` "
+            f"e.g. `/add daily 0 13 * * * @planner daily report`"
         )
     name = parts[0]
     cron_expr = " ".join(parts[1:6])
@@ -746,21 +782,21 @@ def _parse_add_args(
 def _parse_run_at_args(
     body_stripped: str, owner: str
 ) -> dict[str, Any] | str:
-    """`run_at <ISO8601> <to> <message>` を parse + one-shot entry dict.
+    """`/run_at <ISO8601> <to> <message>` を parse + one-shot entry dict.
 
     name は auto-generate (= `oneshot-<sanitized-run_at>` form)。
     """
-    rest = body_stripped[len("run_at"):].strip()
+    rest = body_stripped[len("/run_at"):].strip()
     if not rest:
         return (
-            "[ERR] usage: `run_at <ISO8601-datetime> <to> <message>` "
-            "(e.g. `run_at 2026-05-19T12:00:00+09:00 @planner 進捗確認`)"
+            "[ERR] usage: `/run_at <ISO8601-datetime> <to> <message>` "
+            "(e.g. `/run_at 2026-05-19T12:00:00+09:00 @planner 進捗確認`)"
         )
     parts = rest.split(maxsplit=2)
     if len(parts) < 3:
         return (
             f"[ERR] not enough args (got {len(parts)}, need >=3). "
-            f"usage: `run_at <ISO8601> <to> <message>`"
+            f"usage: `/run_at <ISO8601> <to> <message>`"
         )
     run_at_str, to, message = parts[0], parts[1], parts[2]
     dt = _parse_iso8601(run_at_str)
@@ -791,22 +827,22 @@ def _parse_run_at_args(
 def _parse_run_in_args(
     body_stripped: str, owner: str
 ) -> dict[str, Any] | str:
-    """`run_in <duration> <to> <message>` を parse + one-shot entry dict.
+    """`/run_in <duration> <to> <message>` を parse + one-shot entry dict.
 
     duration: `2h` (2 hours) / `30m` (30 mins) / `1d` (1 day) / `2h30m` (compound)。
     internal で run_at に変換 (= now + duration)。
     """
-    rest = body_stripped[len("run_in"):].strip()
+    rest = body_stripped[len("/run_in"):].strip()
     if not rest:
         return (
-            "[ERR] usage: `run_in <duration> <to> <message>` "
-            "(duration = `2h` / `30m` / `1d` / `2h30m` 等、 e.g. `run_in 2h @planner 進捗確認`)"
+            "[ERR] usage: `/run_in <duration> <to> <message>` "
+            "(duration = `2h` / `30m` / `1d` / `2h30m` 等、 e.g. `/run_in 2h @planner 進捗確認`)"
         )
     parts = rest.split(maxsplit=2)
     if len(parts) < 3:
         return (
             f"[ERR] not enough args (got {len(parts)}, need >=3). "
-            f"usage: `run_in <duration> <to> <message>`"
+            f"usage: `/run_in <duration> <to> <message>`"
         )
     dur_str, to, message = parts[0], parts[1], parts[2]
     td = _parse_duration(dur_str)
@@ -897,7 +933,7 @@ def _do_add_entry(
         f"next fire={new_next.isoformat()}, owner={sender}, persisted)",
     )
     print(
-        f"[CMD] add name='{new_entry['name']}' mode={mode_label} "
+        f"[CMD] /add name='{new_entry['name']}' mode={mode_label} "
         f"next={new_next.isoformat()} ← {sender}"
     )
 
@@ -1342,7 +1378,7 @@ def main() -> None:
             )
         )
     else:
-        print("[ready] no schedules loaded; SSE inbox listener only (use `add` / `run_at` / `run_in` to register)")
+        print("[ready] no schedules loaded; SSE inbox listener only (use `/add` / `/run_at` / `/run_in` to register)")
 
     # issue #50: SIGTERM / SIGINT graceful shutdown handler を登録 (= systemd / supervisor
     # 下での `systemctl stop` 等を script の Python control flow に渡す)。

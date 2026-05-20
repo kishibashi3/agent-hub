@@ -4,10 +4,12 @@ cron-based DM scheduler as agent-hub package (= [issue #40](https://github.com/k
 
 **Bidirectional + sender-based + one-shot timer** (= [issue #65](https://github.com/kishibashi3/agent-hub/issues/65) v4 redesign):
 - scheduler 自身が agent-hub に participant として register + 自分の inbox を SSE subscribe
-- 受信 DM に **8 commands** で反応: `ping` / `list` / `list all` / `add` / `run_at` / `run_in` / `delete` / `run now`
+- 受信 DM に **9 commands** で反応 (v2.0、 全 `/` prefix): `/ping` / `/list` / `/list all` / `/add` / `/run_at` / `/run_in` / `/delete` / `/run` / `/help`
 - schedules は **sender 単位で管理** (= `owner` field、 自身の entry のみ操作可)
-- **one-shot timer** support (= `run_at` ISO 8601 datetime / `run_in` duration、 fire 後自動削除)
+- **one-shot timer** support (= `/run_at` ISO 8601 datetime / `/run_in` duration、 fire 後自動削除)
 - cron daemon **再起動なしで dynamic schedule 管理** 可能
+
+> ⚠️ **v2.0 breaking change** (= [issue #92](https://github.com/kishibashi3/agent-hub/issues/92)): 全 command が `/` prefix を要求。 v1.x 以前の bare command (= `ping` / `list` 等) は **削除**、 backward compat なし。 詳細は [§inbox-command](#inbox-command--bidirectional-issue-65-v4) と [`docs/command-message-convention.md`](../../docs/command-message-convention.md) §5 参照。
 
 LLM 不要、 Pi5 で agent-hub server と並走想定。
 
@@ -101,78 +103,94 @@ python scheduler.py
 
 main thread (cron) と SSE thread (inbox) は独立 session で動作、 互いに非干渉。
 
-## Inbox command (= bidirectional、 issue #65 v4)
+## Inbox command (= bidirectional、 issue #65 v4 / #92 v2.0 `/` prefix)
 
-scheduler 自身に DM を送ると以下 **8 commands** として反応 (= sender-based ownership + one-shot timer 統合):
+scheduler 自身に DM を送ると以下 **9 commands** として反応 (= sender-based ownership + one-shot timer 統合、 v2.0 で全 `/` prefix 化):
 
 | command | 動作 | scope | 永続化 |
 |---|---|---|---|
-| `ping` | scheduler 生存確認 | public | × |
-| `list` | sender's entries 一覧 (= one-shot は残り時間付き) | sender-restricted | × |
-| `list all` | **全 entries 一覧** (= cross-owner view、 owner field 付き、 issue #85) | public | × |
-| `add <name> <cron-5> <to> <message>` | cyclic entry 追加、 owner=sender | sender's own | ✅ atomic write |
-| `run_at <ISO8601> <to> <message>` | one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete | sender's own | ✅ atomic write |
-| `run_in <duration> <to> <message>` | one-shot entry 追加 (= N時間/N分後)、 fire 後 auto-delete | sender's own | ✅ atomic write |
-| `delete <name>` | entry 削除 (= owner check、 自身のみ) | sender's own | ✅ atomic write |
-| `run now <name>` | one-shot 即時 fire (= entry は変更なし、 owner check) | sender's own | × |
-| その他 | unknown command | — | — |
+| `/ping` | scheduler 生存確認 | public | × |
+| `/list` | sender's entries 一覧 (= one-shot は残り時間付き) | sender-restricted | × |
+| `/list all` | **全 entries 一覧** (= cross-owner view、 owner field 付き、 issue #85) | public | × |
+| `/add <name> <cron-5> <to> <message>` | cyclic entry 追加、 owner=sender | sender's own | ✅ atomic write |
+| `/run_at <ISO8601> <to> <message>` | one-shot entry 追加 (= 指定日時)、 fire 後 auto-delete | sender's own | ✅ atomic write |
+| `/run_in <duration> <to> <message>` | one-shot entry 追加 (= N時間/N分後)、 fire 後 auto-delete | sender's own | ✅ atomic write |
+| `/delete <name>` | entry 削除 (= owner check、 自身のみ) | sender's own | ✅ atomic write |
+| `/run <name>` | one-shot 即時 fire (= entry は変更なし、 owner check) | sender's own | × |
+| `/help` | command 一覧 self-document | public | × |
+| 未知 `/<cmd>` | `/unknown <cmd>` 返答 (= convention §3) | — | — |
+| 非 `/` body | **silently ignore** (= scheduler は command-only peer、 LLM bypass) | — | — |
 
-### `add` 引数 parse 仕様
+> ⚠️ **v2.0 breaking change** (= [issue #92](https://github.com/kishibashi3/agent-hub/issues/92)): 全 command が `/` prefix を要求。 旧 v1.x の bare command (= `ping` / `list` / `add` / `run_at` / `run_in` / `delete` / `run now`) は **削除**、 backward compat なし。 「自然言語 message が偶然 command と一致」 する誤発火を排除 + agent-hub ecosystem-wide の `/` prefix convention ([`docs/command-message-convention.md`](../../docs/command-message-convention.md)) と整合。 また `run now <name>` は `/run <name>` に flatten (= single-word command + 1 positional arg)。
 
-`add <name> <cron-5-fields> <to> <message>` で **positional parse**:
+### `/add` 引数 parse 仕様
+
+`/add <name> <cron-5-fields> <to> <message>` で **positional parse**:
 - 1 word = name (e.g. `daily-report`)
 - 5 words = cron expression (= 標準 5 fields `分 時 日 月 曜日`)
 - 1 word = to (= `@handle` format)
 - 残り = message (= 空白含み OK、 全て join)
 
-例: `add daily-report 0 13 * * * @planner daily report を書いてください`
+例: `/add daily-report 0 13 * * * @planner daily report を書いてください`
 
-### `run_at` / `run_in` 引数 parse 仕様
+### `/run_at` / `/run_in` 引数 parse 仕様
 
-- `run_at <ISO8601-datetime> <to> <message>` — datetime は **1 word**、 例 `2026-05-19T12:00:00+09:00`
-- `run_in <duration> <to> <message>` — duration は **1 word**、 例 `2h` / `30m` / `1d` / `2h30m` (= compound 可)
+- `/run_at <ISO8601-datetime> <to> <message>` — datetime は **1 word**、 例 `2026-05-19T12:00:00+09:00`
+- `/run_in <duration> <to> <message>` — duration は **1 word**、 例 `2h` / `30m` / `1d` / `2h30m` (= compound 可)
 
 name は **auto-generate** (= `oneshot-YYYYMMDDTHHMMSS` 形式)、 重複時は suffix `-1` / `-2` 自動付与。
 
 ### 使用例 (= operator から @scheduler への DM)
 
 ```
-operator → @scheduler: ping
+operator → @scheduler: /ping
 @scheduler → operator: pong (scheduler alive, 2 schedules total)
 
-operator → @scheduler: list
+operator → @scheduler: /list
 @scheduler → operator: list (owner=@ope-ultp1635, 2 entries):
   daily-report                   cron='0 13 * * *' to=@planner msg='daily report を書いてください...'
   weekly-research                cron='0 9 * * 1' to=@researcher msg='週次調査タスク...'
 
 # 全 entries (= cross-owner view、 owner field 付き、 issue #85)
-operator → @scheduler: list all
+operator → @scheduler: /list all
 @scheduler → operator: list all (3 entries):
   daily-report                   cron='0 13 * * *' to=@planner owner=@ope-ultp1635 msg='daily report...'
   weekly-research                cron='0 9 * * 1' to=@researcher owner=@ope-ultp1635 msg='週次調査タスク...'
   researcher-self-ping           cron='*/10 * * * *' to=@researcher owner=@researcher msg='self heartbeat'
 
 # cyclic schedule 追加
-operator → @scheduler: add ad-hoc-ping 0 9 * * * @planner morning ping check
+operator → @scheduler: /add ad-hoc-ping 0 9 * * * @planner morning ping check
 @scheduler → operator: [OK] added 'ad-hoc-ping' (cyclic, next fire=2026-05-19T09:00:00+09:00, owner=@ope-ultp1635, persisted)
 
 # one-shot at specific datetime
-operator → @scheduler: run_at 2026-05-19T15:00:00+09:00 @planner 3時のmtg準備
+operator → @scheduler: /run_at 2026-05-19T15:00:00+09:00 @planner 3時のmtg準備
 @scheduler → operator: [OK] added 'oneshot-20260519T150000' (one-shot, next fire=2026-05-19T15:00:00+09:00, owner=@ope-ultp1635, persisted)
 
 # one-shot after duration
-operator → @scheduler: run_in 2h @planner 進捗確認
+operator → @scheduler: /run_in 2h @planner 進捗確認
 @scheduler → operator: [OK] added 'oneshot-20260519T140000' (one-shot, next fire=2026-05-19T14:00:00+09:00, owner=@ope-ultp1635, persisted)
 
 # (= 2 時間後に @planner に「進捗確認」が届く、 fire 後 schedules.json から自動削除)
 
+# 即時 fire (v2.0 で flatten: 旧 `run now <name>` → `/run <name>`)
+operator → @scheduler: /run daily-report
+@scheduler → operator: [OK] one-shot fired 'daily-report' → @planner (schedule unchanged)
+
 # 削除 (= sender's own のみ可)
-operator → @scheduler: delete ad-hoc-ping
+operator → @scheduler: /delete ad-hoc-ping
 @scheduler → operator: [OK] deleted 'ad-hoc-ping' (removed from schedules.json)
 
 # 他 sender の entry を削除しようとすると reject
-researcher → @scheduler: delete daily-report
+researcher → @scheduler: /delete daily-report
 @scheduler → researcher: [ERR] 'daily-report' is owned by @ope-ultp1635, you (@researcher) cannot delete it. ownership is enforced.
+
+# 未知 `/<cmd>` には /unknown 返答 (= convention §3)
+operator → @scheduler: /foo bar
+@scheduler → operator: /unknown /foo
+
+# 非 `/` body は silently ignore (= LLM bypass、 scheduler は command-only peer)
+operator → @scheduler: 今日の schedule 教えて
+@scheduler → operator: (無反応、 `/list` を使ってください)
 ```
 
 ### 設計判断 (= 安全性 + concurrency)
