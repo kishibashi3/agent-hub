@@ -107,8 +107,8 @@ if msg.body.startswith("/"):
 ### 5.2 移行方針: **breaking change** (= 旧 bare command 削除)
 
 operator (= @ope-ultp1635) confirm:
-- 旧 bare command (`ping`、 `list` 等) は **v[NEXT] で削除**
-- 新 `/ping` / `/list` / `/list all` / `/add` / `/run_at` / `/run_in` / `/delete` / `/run now` のみを accept
+- 旧 bare command (`ping`、 `list` 等) は **v2.0 で削除** (= [PR #108](https://github.com/kishibashi3/agent-hub/pull/108) で landed)
+- 新 `/ping` / `/list` / `/list all` / `/add` / `/run_at` / `/run_in` / `/delete` / `/run` / `/help` のみを accept
 - backward compat (= bare + `/` 両受け) は **取らない**
 
 理由:
@@ -116,18 +116,27 @@ operator (= @ope-ultp1635) confirm:
 - scheduler 利用 user は operator / planner / 自動 schedule 等の **internal peer** に限定されており、 external user の breaking 影響なし
 - 移行 PR 後の deploy で `docker-compose pull && up -d` 一回で完了、 operational cost 軽微
 
-### 5.3 actual migration の scope (= 本 doc は **convention only**、 実装は別 PR)
+> 📝 **impl refinement note** (= [issue #109](https://github.com/kishibashi3/agent-hub/issues/109) で同期):
+> 本 §5.2 当初 draft では旧 2-word command `run now <name>` を literal rename して `/run now <name>` とする方針だったが、 PR #108 impl 時に **`/run <name>` に flatten** (= single-word command + 1 positional arg) する refinement を採用。 理由:
+> - **convention 整合**: 他 SDK built-in (= `/ping` / `/pong` / `/unknown`) と peer 実装例 (= `/info` / `/status` / `/active` / `/cost` / `/help`、 §3) はすべて **single-word command**、 `/run now` のような 2-word は唯一の例外となり convention の uniformity を損なう
+> - **parse path 簡素化**: `cmd_first == "/run" and parts[1].lower() == "now"` の二段判定が不要、 `cmd_first == "/run"` のみで dispatch
+> - **新規追加コマンド**: `/help` (= self-document、 §3.2 typical example) も同時に追加され、 v2.0 では計 9 command (= `/ping` + `/list` + `/list all` + `/add` + `/run_at` + `/run_in` + `/delete` + `/run` + `/help`)
+>
+> この refinement は §5.2 起草時の trade-off (= literal rename vs convention alignment) の後者を選んだ結果で、 impl PR review 中に reviewer / impl 合議で確定。
 
-本 PR (= convention doc) では **migration policy を明文化** するのみ。 scheduler.py の actual code change (= bare command 削除 + `/` prefix accept への refactor) は **別 PR (= L1 = scheduler behavior 変更)** で着手:
+### 5.3 actual migration の scope (= 本 doc は **convention only**、 実装は別 PR で完了)
 
-- 別 PR scope:
+本 §は **migration policy を明文化** するのみ。 scheduler.py の actual code change (= bare command 削除 + `/` prefix accept への refactor) は [PR #108](https://github.com/kishibashi3/agent-hub/pull/108) で landed (= 2026-05-20)。
+
+- 別 PR (= #108) で実施した scope:
   - `scheduler.py` の `handle_inbox_command` で `body.startswith("/")` を gating
-  - 旧 8 command を `/ping` / `/list` / `/list all` / `/add` / `/run_at` / `/run_in` / `/delete` / `/run now` に rename
+  - 旧 8 command を `/ping` / `/list` / `/list all` / `/add` / `/run_at` / `/run_in` / `/delete` / `/run` (= **flatten**、 詳細は §5.2 impl refinement note) に rename
+  - **新 `/help` command** を追加 (= self-document、 §3.2 typical example)
   - 未知 `/cmd` (= 上記 list 外) は `/unknown <cmd>` で返す
+  - 非 `/` body は silently ignore (= scheduler は command-only peer、 LLM bypass)
   - `packages/scheduler/README.md` 同期更新
   - version bump (= `1.x` → `2.0` semver major)
-- 本 PR (= convention doc) で 「v[NEXT] で migration」 と明示、 operator GO 取得後 dispatch
-- 別 PR 起票元: planner direct dispatch (= 本 convention doc landed 後)
+- 起票元: planner direct dispatch (= 本 convention doc landed 後、 operator L1 GO 取得済)
 
 ## 6. 他 peer への影響
 

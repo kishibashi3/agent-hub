@@ -659,7 +659,10 @@ def handle_inbox_command(
 
         elif cmd_first == "/run":
             # v2.0 (= issue #92): 旧 `run now <name>` を `/run <name>` に flatten
-            # (= single-word command + 1 positional arg、 convention §5.2 整合)。
+            # (= single-word command + 1 positional arg)。 convention doc §5.2 起草時の
+            # literal rename 案 (= `/run now`) から impl PR #108 で flatten refinement に
+            # 確定 (= issue #109 で convention doc も同期)。 single-word に統一する理由は
+            # docs/command-message-convention.md §5.2 impl refinement note 参照。
             if len(parts) < 2:
                 send_dm(
                     headers,
