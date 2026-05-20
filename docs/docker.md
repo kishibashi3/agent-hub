@@ -115,9 +115,9 @@ run now <name> → 即時 fire
 
 container 再作成しても data が消えないように、 **必ず volume mount してください**。
 
-## dashboard sidecar (= 2026-05-20 admin feature request)
+## dashboard sidecar (= 2026-05-20 admin feature request + issue #103 expansion)
 
-`agent-hub-dashboard` は **message traffic visualizer**、 hub の SQLite DB を read-only mount で参照して D3.js force-directed graph + sender×recipient heatmap として表示します。 Python stdlib のみで動作 (= sqlite3 + http.server)、 外部 deps なし。
+`agent-hub-dashboard` は **process monitor for peer mesh** (= top/ps/netstat 相当の runtime observability surface、 issue #103 framing)。 hub の SQLite DB を read-only mount で参照し、 **5 MVP views** を提供。 Python stdlib のみで動作 (= sqlite3 + http.server)、 外部 deps なし。
 
 ### 起動方法
 
@@ -128,12 +128,27 @@ docker-compose up -d
 # → agent-hub (port 3000) + agent-hub-dashboard (port 8080) 両方起動
 ```
 
-ブラウザで `http://localhost:8080` を開くと:
+ブラウザで `http://localhost:8080` を開くと、 上部の **nav bar から 5 view 切替**:
 
-- 上部: total messages / agents / active links 統計 + dark/light theme toggle + drift speed slider
-- 左側: force-directed network graph (= agents = 球体、 teams = ひし形、 edges = message count に比例した curved line)
+#### View 1: Mesh + Matrix (= default、 `/`)
+- 左側: D3 force-directed network graph (= agents = 球体、 teams = ひし形、 edges = message count に比例した curved line + drift animation)
 - 右側: sender × recipient ヒートマップ (= 上位 14 名の matrix)
 - 中央 divider: drag で graph / matrix の境界を可動
+
+#### View 2: Agent Detail (= `/?agent=@<handle>`)
+- 個別 agent の詳細 (= total / received in / sent out / distinct peers / type (= mode) / last active / tenants active in)
+- Top peers list (= bidirectional message count、 click で同 detail page 遷移)
+- Mesh view ノードや Link List から click で navigate
+
+#### View 3: Timeline (= `/?view=timeline`)
+- 時間軸 message volume の D3 bar chart
+- range selector: 24h (hourly bucket) / 7d (hourly) / 30d (daily)
+- tooltip で各 bucket の正確 count
+
+#### View 4: Link List (= `/?view=links`)
+- 強リンク ranking (= bidirectional aggregate、 top 50)
+- `@planner ↔ @reviewer: 75` 形式表示 + 方向別内訳 (`a→b` / `b→a`)
+- bar visualization + handle click で Agent Detail へ
 
 ### dashboard 用環境変数
 
