@@ -561,6 +561,166 @@ export function inboxUriFor(name: string): string {
   return `inbox://${stripped}`;
 }
 
+// ============================================================
+// MCP session auto-reconnect (= issue #68、 PR #100 設計 doc 実装)
+// ============================================================
+
+/**
+ * Feature flag: `MCP_AUTO_REISSUE_DISABLED` env が set されていれば auto-reissue 無効化、
+ * 旧 path (= 400 Bad Request) に倒す (= rollback safety、 PR #100 reviewer Suggestion (a))。
+ *
+ * 「unset = 新 behavior (= reissue)」 が default、 「set = 旧 behavior (= 400)」 が opt-out。
+ * 値の中身は問わない (= binary signal、 redline #1 整合)。
+ *
+ * production rollback path:
+ *   `docker run -e MCP_AUTO_REISSUE_DISABLED=1 ...` で即時 disable。
+ *
+ * future PR 候補 (= prometheus counter / reissue 頻度監視) は本 PR scope 外、 comment defer。
+ */
+export function isAutoReissueDisabled(): boolean {
+  return process.env.MCP_AUTO_REISSUE_DISABLED !== undefined &&
+    process.env.MCP_AUTO_REISSUE_DISABLED !== '';
+}
+
+/**
+ * Dummy Express Response (= reissuance 時の synthetic initialize 用、 PR #100 設計 doc §3.3)。
+ *
+ * MCP SDK の `transport.handleRequest(req, res, body)` で body=initialize を実行する際、
+ * 通常 res に response が書き出される。 reissuance では 「session を作る」 のが目的で、
+ * 「response を返す」 のは目的ではない (= real res は元 request の処理に使う)。
+ *
+ * このため res の write / writeHead / end / setHeader 等を **silently absorb** する
+ * 最小 stub を提供。 internal 状態は `headersSent: false` 固定 (= SDK が再書き込みを
+ * 試みるかも) で statelessness 維持。
+ *
+ * §7.1 reviewer Minor 反映: **「dummy response が real response stream を汚染しない」**
+ * 性質を test で verify (= ghost_session_warn の `vi.spyOn` pattern と同様、
+ * spy で dummy への write 数を観察 + real res への write が独立であること確認)。
+ */
+function createDummyResponse(): Response {
+  const dummy = {
+    headersSent: false,
+    statusCode: 200,
+    locals: {},
+    setHeader: (_name: string, _value: unknown) => dummy,
+    getHeader: (_name: string) => undefined,
+    removeHeader: (_name: string) => dummy,
+    writeHead: (_status?: number, _headers?: unknown) => dummy,
+    write: (_chunk?: unknown, _encoding?: unknown, _cb?: unknown) => true,
+    end: (_chunk?: unknown, _encoding?: unknown, _cb?: unknown) => dummy,
+    status: (code: number) => {
+      dummy.statusCode = code;
+      return dummy;
+    },
+    json: (_body: unknown) => dummy,
+    send: (_body: unknown) => dummy,
+    sendStatus: (code: number) => {
+      dummy.statusCode = code;
+      return dummy;
+    },
+    type: (_contentType: string) => dummy,
+    on: (_event: string, _cb: unknown) => dummy,
+    once: (_event: string, _cb: unknown) => dummy,
+    emit: (_event: string, ..._args: unknown[]) => true,
+    removeListener: (_event: string, _cb: unknown) => dummy,
+    off: (_event: string, _cb: unknown) => dummy,
+    flushHeaders: () => dummy,
+    cork: () => dummy,
+    uncork: () => dummy,
+  };
+  return dummy as unknown as Response;
+}
+
+/**
+ * Stale session ID + valid auth + non-initialize request を受けて、
+ * **新 session を auto-create + 元 request を新 session で process** する (= issue #68 core)。
+ *
+ * 設計 doc PR #100 §3.2-§3.3 に基づく 3-step flow:
+ *   1. 新 transport / server を構築 (= 既存 initialize path と同等の構造)
+ *   2. synthetic `initialize` + `notifications/initialized` を **dummy res** に送信
+ *      (= SDK の MCP プロトコル整合性を満たし、 transport を ready 状態に)
+ *   3. 元 request body を **real res** に送信 (= client に新 mcp-session-id header + 結果)
+ *
+ * client は response header `mcp-session-id` から新 session ID を取得、 以降は通常
+ * dispatch path に乗る (= 1 request だけ reissuance path、 後続は既存 path)。
+ *
+ * security: auth context (= userId / githubLogin / tenantDomain) は **request 時** の値を
+ * 使用。 旧 session の owner は無関係 (= §5.1 PAT 変更検出、 §5.2 tenant 変更検出 と整合)。
+ */
+async function reissueSessionAndDispatch(
+  req: Request,
+  res: Response,
+  ctx: {
+    staleSessionId: string;
+    userId: string;
+    githubLogin: string;
+    tenantDomain: string;
+  }
+): Promise<void> {
+  const { staleSessionId, userId, githubLogin, tenantDomain } = ctx;
+  console.log(
+    `[MCP] session ${staleSessionId} unknown (= server restart?), reissuing for ` +
+      `userId=${userId} tenant=${tenantDomain}`
+  );
+
+  // Step 1: 新 transport + server (= 既存 initialize path と同等構造)
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    eventStore: notificationEventStore,
+    onsessioninitialized: (newSid) => {
+      sessions.set(newSid, {
+        transport,
+        server,
+        userId,
+        githubLogin,
+        tenantDomain,
+        subscribedUris: new Set(),
+      });
+      console.log(
+        `[MCP] session reissued: ${newSid} (replaces stale ${staleSessionId}) ` +
+          `userId=${userId} tenant=${tenantDomain}`
+      );
+    },
+  });
+
+  transport.onclose = () => {
+    const sid = transport.sessionId;
+    if (sid && sessions.has(sid)) {
+      sessions.delete(sid);
+      console.log(`[MCP] session closed: ${sid} (was reissued from ${staleSessionId})`);
+    }
+  };
+
+  const server = createMcpServer();
+  await server.connect(transport as Parameters<typeof server.connect>[0]);
+
+  // Step 2: synthetic initialize + notifications/initialized (= dummy res、 SDK プロトコル整合性)
+  const dummyRes = createDummyResponse();
+  const syntheticInit = {
+    jsonrpc: '2.0' as const,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'agent-hub-reissue', version: '1.0' },
+    },
+    id: 'reissue-init-' + staleSessionId.slice(0, 8),
+  };
+  await transport.handleRequest(req, dummyRes, syntheticInit);
+
+  const syntheticInitialized = {
+    jsonrpc: '2.0' as const,
+    method: 'notifications/initialized',
+  };
+  await transport.handleRequest(req, dummyRes, syntheticInitialized);
+
+  // Step 3: 元 request を新 transport (= 新 session) で process、 real res に response
+  // future PR 候補 (= prometheus counter):
+  //   ここで reissue 回数 metric を increment する余地 (= PR #100 Suggestion (b) defer)。
+  //   `reissue_counter.inc({tenant: tenantDomain})` 等で per-tenant 監視可能。
+  await transport.handleRequest(req, res, req.body);
+}
+
 /**
  * notification dispatch に必要な session の最小 shape。
  * テストで実 Session を組み立てずに filter ロジックだけ検証するため。
@@ -917,7 +1077,10 @@ export class MCPServer {
     // POST /mcp: リクエスト受信エンドポイント
     // - mcp-session-id ヘッダーがあれば既存 session に dispatch
     // - 無くて initialize なら新規 session 作成
-    // - それ以外は 400
+    // - **issue #68 (= PR #100 設計 doc)**: session ID set + 不在 + non-initialize + 認証 valid
+    //   なら **server-side stateless session reissuance** で透過復帰 (= server restart 後の
+    //   Claude Code session 維持)。 旧 path (= 400) は feature flag で opt-out 可能。
+    // - 上記いずれにも該当しないなら 400
     this.app.post('/mcp', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       // authenticateUser middleware が必ずセットしている契約。型安全のため明示確認。
@@ -934,6 +1097,31 @@ export class MCPServer {
       try {
         if (sessionId && sessions.has(sessionId)) {
           await sessions.get(sessionId)!.transport.handleRequest(req, res, req.body);
+          return;
+        }
+
+        // ★ issue #68 reissuance path: stale session ID + non-initialize + auth valid
+        // (= server restart 後の client request を透過処理)。
+        // 4 条件 (= 設計 doc §3.1):
+        //   1. sessionId が設定済 (= client が session を持っている主張)
+        //   2. sessions.has(sessionId) が false (= server 側に該当 session なし、 = stale)
+        //   3. body が initialize でない (= 通常 tool call / resources/subscribe 等)
+        //   4. authenticateUser middleware が auth pass 済 (= 上の req.userId 確認)
+        // §3.4 edge case 「不在 session + initialize 同時」 は除外 (= 旧 400 path で対応、
+        //   client の状態異常を fail-fast)、 idempotent fallback 性は 「不在 session = 再 reissue」
+        //   で natural 担保 (= DELETE 後の next request は再度 reissuance path に着地)。
+        if (
+          sessionId &&
+          !sessions.has(sessionId) &&
+          !isInitializeRequest(req.body) &&
+          !isAutoReissueDisabled()
+        ) {
+          await reissueSessionAndDispatch(req, res, {
+            staleSessionId: sessionId,
+            userId,
+            githubLogin,
+            tenantDomain,
+          });
           return;
         }
 
