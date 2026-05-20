@@ -1,36 +1,51 @@
 #!/usr/bin/env python3
 """
-agent-hub dashboard sidecar (= admin feature request、 2026-05-20)
+agent-hub dashboard sidecar — process monitor for peer mesh
+(= issue #103、 2026-05-20 expansion)
 
-agent-hub server の SQLite DB を read-only mount + 単一 SELECT クエリで集計、
-D3.js force-directed graph + message matrix heatmap として可視化する
-軽量 sidecar Python サーバー。 stdlib のみ (sqlite3 + http.server) で動作、
-外部 deps なし。
+agent-hub server の SQLite DB を read-only mount + SELECT クエリで集計、
+**5 つの MVP view** として可視化する軽量 sidecar Python サーバー。
+stdlib のみ (sqlite3 + http.server + html) で動作、 外部 deps なし。
 
-設計: @admin (Pi5 ops) が Pi5 上で運用していた `/home/admin/agent-hub-heatmap/server.py`
-の同等実装を packages/dashboard/ 配下に取り込み、 Docker bundle 化に追従。
-変更点 (= admin spec):
-- DB_PATH を env 化 (= shared volume mount に追従、 hardcode 撤廃)
-- AGENT_HUB_TENANT を env 化:
-  - 値 set → 当該 tenant のみ表示 (= 旧 Pi5 spec の "kaz" 固定相当)
-  - 未指定 → **全 tenant aggregate** 表示 (= admin 確認済の default 挙動)
-- PORT を env 化 (= compose 経由の port 設定柔軟化)
+## MVP 5 views (= issue #103)
 
-DB は SELECT only、 SQLite WAL mode で agent-hub server (= writer) と
-並行 read 安全。 docker-compose 側で `:ro` (read-only) mount を強制。
+1. **Mesh View** (`/`、 default): D3 force-directed graph + Matrix heatmap
+2. **Message Matrix** (= Mesh と同 page): sender × recipient 行列
+3. **Agent Detail** (`/?agent=@<handle>`): handle 詳細、 in/out、 top peers、 type
+4. **Timeline** (`/?view=timeline`): 時間軸 message volume
+5. **Link List** (`/?view=links`): 強リンク ranking (= bidirectional aggregate)
 
-multi-tenant aggregate (= TENANT 未指定時) の注意:
-- 同名 handle が複数 tenant に存在する場合、 全 tenant の activity が
-  同 node に合算される (= 異なる entity が同じ handle name を共有していた場合、
-  dashboard 上は 1 つに見える)
-- これは dashboard の 「ecosystem 全体の traffic view」 用途として acceptable、
-  per-tenant の forensic 用途は AGENT_HUB_TENANT 明示 set で利用想定
+## 起源 + 拡張史
+
+- **初版** (= @admin DM、 2026-05-20、 PR #98): Pi5 上で運用していた
+  `/home/admin/agent-hub-heatmap/server.py` を packages/dashboard/ 配下に取り込み、
+  Mesh + Matrix 2 view を提供
+- **本拡張** (= issue #103、 operator dispatch): 5 MVP view への拡張 +
+  XSS fix (#99) 統合
+
+## XSS fix (= issue #99 統合)
+
+handle name (= `@<name>`、 agent-hub の `^[\\w-]+$` regex で validated だが
+defense-in-depth) を HTML / HTML attribute 文脈に出す全箇所で `html.escape()`
+を介して挿入。 同 PR で issue #99 を Closes。
+
+## DB access semantics
+
+- SELECT only、 SQLite WAL mode で agent-hub server (= writer) と並行 read 安全
+- docker-compose 側で `:ro` (read-only) mount を強制
+- `AGENT_HUB_TENANT` env: set → 当該 tenant filter、 unset → 全 tenant aggregate
+  (= admin clarification、 multi-tenant 同名 handle は合算)
+- MVP scale: 10-20 peer 想定 (= operator 設計判断)。 100+ peer / 大規模 query は
+  別 issue で再評価予定 (= force graph readability + SQL index)
 """
 
+import html
+import json
 import os
 import sqlite3
-import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 # admin spec (= 2026-05-20): env 化 3 fields
 DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
@@ -38,6 +53,32 @@ DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
 # set されていれば当該 tenant のみ filter。
 TENANT = os.environ.get("AGENT_HUB_TENANT") or None
 PORT = int(os.environ.get("PORT", "8080"))
+
+
+# ============================================================
+# XSS-safe escape helpers (= issue #99 統合)
+# ============================================================
+
+def esc(s):
+    """HTML content context での escape (= `<`, `>`, `&` を変換)。
+
+    `agent-hub` の handle name は `^[\\w-]+$` で validated されているため
+    実害は出ないが、 dashboard 単独で SQLite DB を直接読むため
+    **defense-in-depth** として全 handle name に適用。 issue #99 統合。
+    """
+    if s is None:
+        return ""
+    return html.escape(str(s), quote=False)
+
+
+def esc_attr(s):
+    """HTML attribute context での escape (= `<>&"'` を変換)。
+
+    `data-from='@xxx'` 等 attribute value への埋め込み時に使用。
+    """
+    if s is None:
+        return ""
+    return html.escape(str(s), quote=True)
 
 
 def get_data():
@@ -187,6 +228,61 @@ table.hm td.self { background:var(--self-bg); color:var(--self-fg); }
   pointer-events:none; display:none; line-height:1.8; z-index:99;
   box-shadow:0 2px 8px var(--tip-shadow);
 }
+
+/* ── Navigation bar (= issue #103、 5 view 切替) ─────────────────── */
+#nav-bar {
+  display:flex; gap:0; align-items:center; padding:0 20px; background:var(--bg2);
+  border-bottom:1px solid var(--border); flex-shrink:0; font-size:11px;
+}
+#nav-bar a {
+  padding:8px 14px; color:var(--text2); text-decoration:none;
+  border-bottom:2px solid transparent; transition:color 0.15s, border-color 0.15s;
+}
+#nav-bar a:hover { color:var(--text); }
+#nav-bar a.active { color:var(--accent); border-bottom-color:var(--accent); }
+
+/* ── alt views (= Agent Detail / Timeline / Link List) layout ─────── */
+.alt-main { flex:1; overflow:auto; padding:20px 24px; background:var(--bg); }
+.view-content h2 { font-size:16px; color:var(--accent); margin-bottom:14px; letter-spacing:0.03em; }
+.view-content h3 { font-size:12px; color:var(--text2); margin:18px 0 8px; text-transform:uppercase; letter-spacing:0.08em; }
+.view-content .dim { color:var(--text2); font-size:11px; }
+.detail-card { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:18px; max-width:900px; }
+.detail-card .not-found { color:var(--text2); font-size:13px; padding:20px; text-align:center; }
+.detail-stats { display:flex; gap:14px; margin-bottom:18px; flex-wrap:wrap; }
+.detail-stats .stat-box {
+  display:flex; flex-direction:column; align-items:center; padding:12px 18px;
+  background:var(--bg3); border:1px solid var(--border2); border-radius:6px; min-width:120px;
+}
+.detail-stats .stat-num { font-size:24px; color:var(--accent); font-weight:bold; }
+.detail-stats .stat-label { font-size:10px; color:var(--text2); margin-top:4px; }
+.detail-meta { width:100%; font-size:12px; margin:14px 0; border-collapse:collapse; }
+.detail-meta th { text-align:left; color:var(--text2); font-weight:normal; padding:6px 12px 6px 0; width:140px; vertical-align:top; }
+.detail-meta td { padding:6px 0; color:var(--text); }
+.peer-list { list-style:decimal inside; padding-left:0; columns:2; column-gap:24px; font-size:12px; }
+.peer-list li { padding:4px 0; }
+.peer-list a { color:var(--accent); text-decoration:none; }
+.peer-list a:hover { text-decoration:underline; }
+.peer-list .dim { font-size:10px; margin-left:6px; }
+
+/* timeline */
+.timeline-controls { display:flex; align-items:center; gap:8px; font-size:11px; margin-bottom:8px; }
+.range-btn {
+  padding:4px 10px; border:1px solid var(--border); color:var(--text2); text-decoration:none;
+  border-radius:4px; transition:border-color 0.15s, color 0.15s;
+}
+.range-btn:hover { color:var(--accent); border-color:var(--accent); }
+.range-btn.active { color:var(--accent); border-color:var(--accent); background:var(--bg2); }
+
+/* link list */
+table.link-list { width:100%; max-width:900px; border-collapse:collapse; font-size:12px; margin-top:8px; }
+table.link-list th, table.link-list td { padding:6px 10px; border-bottom:1px solid var(--border2); text-align:left; }
+table.link-list th { color:var(--text2); font-weight:normal; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; }
+table.link-list .rank { color:var(--text3); width:36px; }
+table.link-list .cell-num { text-align:right; width:60px; }
+table.link-list a { color:var(--accent); text-decoration:none; }
+table.link-list a:hover { text-decoration:underline; }
+table.link-list .bar-cell { width:200px; }
+table.link-list .bar { height:8px; background:var(--accent); border-radius:2px; opacity:0.7; }
 </style>
 </head>
 <body>
@@ -207,6 +303,8 @@ table.hm td.self { background:var(--self-bg); color:var(--self-fg); }
     <button id="theme-btn" onclick="toggleTheme()">🌙 dark</button>
   </div>
 </div>
+
+NAV_BAR_HTML
 
 <div id="main">
   <div id="graph-pane">
@@ -442,9 +540,10 @@ document.querySelectorAll('td[data-n]').forEach(td => {
 
 
 def build_heatmap(top, counts, totals):
-    """sender × recipient ヒートマップ HTML を build。
+    """sender × recipient ヒートマップ HTML を build (= View 2)。
 
     cell 色は msg count 比率で gradient、 self cell (= s==r) は dim。
+    handle name は `esc()` / `esc_attr()` で XSS-safe 化 (= issue #99 統合)。
     """
     max_val = max(
         (counts.get((s, r), 0) for s in top for r in top if s != r), default=1
@@ -465,12 +564,13 @@ def build_heatmap(top, counts, totals):
     lines = ["<table class='hm'>"]
     lines.append("<tr><th class='rl'>from \\ to</th>")
     for r in top:
-        lines.append(f"<th>{r[1:][:8]}</th>")
+        # handle name の先頭 `@` を除いた 8 文字を column header 化、 escape を介して挿入
+        lines.append(f"<th>{esc(r[1:][:8])}</th>")
     lines.append("<th class='tc'>tot</th></tr>")
 
     for s in top:
         lines.append("<tr>")
-        lines.append(f"<th class='rl'>{s}</th>")
+        lines.append(f"<th class='rl'>{esc(s)}</th>")
         for r in top:
             if s == r:
                 lines.append("<td class='self'>—</td>")
@@ -481,7 +581,8 @@ def build_heatmap(top, counts, totals):
                 label = str(n) if n else ""
                 lines.append(
                     f"<td style='background:{bg};color:{fg}' "
-                    f"data-n='{n}' data-from='{s}' data-to='{r}'>{label}</td>"
+                    f"data-n='{n}' data-from='{esc_attr(s)}' data-to='{esc_attr(r)}'>"
+                    f"{esc(label)}</td>"
                 )
         lines.append(f"<td class='tc'>{totals[s]}</td>")
         lines.append("</tr>")
@@ -489,9 +590,474 @@ def build_heatmap(top, counts, totals):
     return "\n".join(lines)
 
 
+# ============================================================
+# View 3: Agent Detail (= issue #103)
+# ============================================================
+
+def get_agent_detail_data(handle):
+    """単一 agent の詳細データを取得 (= View 3)。
+
+    Args:
+        handle: `@<name>` format の handle (= raw user input、 SQL injection は
+                ? placeholder で防ぐが、 handle 自体は app 層の `^[\\w-]+$` regex で
+                validated 前提)。 startswith `@` の guard も入れる (= 明白な malformed
+                を early reject)。
+
+    Returns:
+        dict: {handle, found, in_count, out_count, total, last_active, mode, top_peers,
+               tenants_active_in}
+        found=False の場合は他 field は None / 0 (= 不在 handle の handler 用)
+    """
+    if not isinstance(handle, str) or not handle.startswith("@"):
+        return {"handle": handle, "found": False, "in_count": 0, "out_count": 0,
+                "total": 0, "last_active": None, "mode": None, "top_peers": [],
+                "tenants_active_in": []}
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    # tenant filter clause + params
+    if TENANT is None:
+        tf_clause = ""
+        tf_params = ()
+    else:
+        tf_clause = " AND tenant_id = ?"
+        tf_params = (TENANT,)
+
+    # in/out counts
+    cur.execute(
+        f"SELECT COUNT(*) FROM messages WHERE recipient = ?{tf_clause}",
+        (handle, *tf_params),
+    )
+    in_count = cur.fetchone()[0]
+    cur.execute(
+        f"SELECT COUNT(*) FROM messages WHERE sender = ?{tf_clause}",
+        (handle, *tf_params),
+    )
+    out_count = cur.fetchone()[0]
+    total = in_count + out_count
+
+    # last active = MAX of message timestamps (= sender or recipient)
+    cur.execute(
+        f"SELECT MAX(created_at) FROM messages WHERE (sender = ? OR recipient = ?){tf_clause}",
+        (handle, handle, *tf_params),
+    )
+    last_active = cur.fetchone()[0]
+
+    # mode + found (= participants table)
+    if TENANT is None:
+        cur.execute(
+            "SELECT mode, MAX(created_at) FROM participants WHERE name = ? GROUP BY name",
+            (handle,),
+        )
+    else:
+        cur.execute(
+            "SELECT mode FROM participants WHERE name = ? AND tenant_id = ?",
+            (handle, TENANT),
+        )
+    mode_row = cur.fetchone()
+    found = mode_row is not None or total > 0
+    mode = mode_row[0] if mode_row else None
+
+    # tenants active in (= multi-tenant aggregate 時のみ意味あり)
+    tenants_active_in = []
+    if TENANT is None:
+        cur.execute(
+            "SELECT DISTINCT tenant_id FROM messages WHERE sender = ? OR recipient = ?",
+            (handle, handle),
+        )
+        tenants_active_in = [row[0] for row in cur.fetchall()]
+    else:
+        tenants_active_in = [TENANT] if total > 0 else []
+
+    # top peers (= 双方向の合算 ranking)
+    cur.execute(
+        f"""
+        SELECT peer, SUM(c) AS total FROM (
+            SELECT recipient AS peer, COUNT(*) AS c FROM messages
+            WHERE sender = ?{tf_clause}
+            GROUP BY recipient
+            UNION ALL
+            SELECT sender AS peer, COUNT(*) AS c FROM messages
+            WHERE recipient = ?{tf_clause}
+            GROUP BY sender
+        )
+        GROUP BY peer
+        ORDER BY total DESC
+        LIMIT 20
+        """,
+        (handle, *tf_params, handle, *tf_params),
+    )
+    top_peers = [{"peer": row[0], "count": row[1]} for row in cur.fetchall()]
+    con.close()
+
+    return {
+        "handle": handle,
+        "found": found,
+        "in_count": in_count,
+        "out_count": out_count,
+        "total": total,
+        "last_active": last_active,
+        "mode": mode,
+        "top_peers": top_peers,
+        "tenants_active_in": tenants_active_in,
+    }
+
+
+def render_agent_detail(handle):
+    """Agent Detail page (= View 3) の body HTML を build。"""
+    d = get_agent_detail_data(handle)
+    h_safe = esc(d["handle"])
+
+    if not d["found"] and d["total"] == 0:
+        return (
+            f"<div class='view-content'><h2>Agent Detail</h2>"
+            f"<div class='detail-card'><p class='not-found'>"
+            f"agent <strong>{h_safe}</strong> not found in {esc(TENANT or 'any tenant')}."
+            f"</p></div></div>"
+        )
+
+    mode_label = esc(d["mode"]) if d["mode"] else "(unknown)"
+    last_active = esc(d["last_active"]) if d["last_active"] else "(no messages)"
+    tenants_label = esc(", ".join(d["tenants_active_in"])) if d["tenants_active_in"] else "(none)"
+
+    # top peers list
+    peer_rows = []
+    for p in d["top_peers"]:
+        p_safe = esc(p["peer"])
+        peer_rows.append(
+            f"<li><a href='/?agent={esc_attr(p['peer'])}'>{p_safe}</a> "
+            f"<span class='dim'>{p['count']} msgs</span></li>"
+        )
+    peer_html = "<ol class='peer-list'>" + "".join(peer_rows) + "</ol>" if peer_rows else "<p class='dim'>(no peers)</p>"
+
+    return f"""<div class='view-content'>
+<h2>Agent Detail: {h_safe}</h2>
+<div class='detail-card'>
+  <div class='detail-stats'>
+    <div class='stat-box'><span class='stat-num'>{d['total']}</span><span class='stat-label'>total messages</span></div>
+    <div class='stat-box'><span class='stat-num'>{d['in_count']}</span><span class='stat-label'>received (in)</span></div>
+    <div class='stat-box'><span class='stat-num'>{d['out_count']}</span><span class='stat-label'>sent (out)</span></div>
+    <div class='stat-box'><span class='stat-num'>{len(d['top_peers'])}</span><span class='stat-label'>distinct peers</span></div>
+  </div>
+  <table class='detail-meta'>
+    <tr><th>type (mode)</th><td>{mode_label}</td></tr>
+    <tr><th>last active</th><td>{last_active}</td></tr>
+    <tr><th>tenants active in</th><td>{tenants_label}</td></tr>
+  </table>
+  <h3>Top peers (= bidirectional message count)</h3>
+  {peer_html}
+</div>
+</div>"""
+
+
+# ============================================================
+# View 4: Timeline (= issue #103)
+# ============================================================
+
+def get_timeline_data(range_label="7d"):
+    """Time-bucket message volume data (= View 4)。
+
+    Args:
+        range_label: "24h" / "7d" / "30d" のいずれか
+
+    Returns:
+        dict: {range_label, buckets: [{time: ISO 形式, count: int}, ...], total}
+    """
+    # bucket granularity + lookback の table
+    if range_label == "24h":
+        bucket_format = "%Y-%m-%d %H:00"  # hourly
+        lookback_sql = "datetime('now', '-24 hours')"
+        limit = 24
+    elif range_label == "30d":
+        bucket_format = "%Y-%m-%d"  # daily
+        lookback_sql = "datetime('now', '-30 days')"
+        limit = 30
+    else:  # default 7d
+        range_label = "7d"
+        bucket_format = "%Y-%m-%d %H:00"  # hourly
+        lookback_sql = "datetime('now', '-7 days')"
+        limit = 168
+
+    if TENANT is None:
+        sql = f"""
+            SELECT strftime('{bucket_format}', created_at) AS bucket, COUNT(*) AS c
+            FROM messages
+            WHERE datetime(created_at) >= {lookback_sql}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            LIMIT ?
+        """
+        params = (limit,)
+    else:
+        sql = f"""
+            SELECT strftime('{bucket_format}', created_at) AS bucket, COUNT(*) AS c
+            FROM messages
+            WHERE tenant_id = ? AND datetime(created_at) >= {lookback_sql}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            LIMIT ?
+        """
+        params = (TENANT, limit)
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute(sql, params)
+    buckets = [{"time": row[0], "count": row[1]} for row in cur.fetchall()]
+    con.close()
+    total = sum(b["count"] for b in buckets)
+    return {"range_label": range_label, "buckets": buckets, "total": total}
+
+
+def render_timeline(range_label="7d"):
+    """Timeline page (= View 4) の body HTML を build。 D3.js で line chart 描画。"""
+    d = get_timeline_data(range_label)
+    # active class for range selector
+    range_buttons = []
+    for r in ["24h", "7d", "30d"]:
+        cls = "range-btn active" if r == d["range_label"] else "range-btn"
+        range_buttons.append(
+            f"<a href='/?view=timeline&range={r}' class='{cls}'>{r}</a>"
+        )
+    range_nav = " ".join(range_buttons)
+    buckets_json = json.dumps(d["buckets"])
+
+    return f"""<div class='view-content'>
+<h2>Timeline — message volume over time</h2>
+<div class='timeline-controls'>
+  <span class='dim'>range:</span> {range_nav}
+  <span class='dim' style='margin-left:20px'>total: <strong>{d['total']}</strong> messages in last {d['range_label']}</span>
+</div>
+<div id='timeline-chart' style='width:100%; height:400px; margin-top:16px'></div>
+<script>
+const tlBuckets = {buckets_json};
+const tlContainer = document.getElementById('timeline-chart');
+const tlW = tlContainer.offsetWidth, tlH = tlContainer.offsetHeight;
+const tlMargin = {{top: 20, right: 30, bottom: 60, left: 50}};
+const tlIW = tlW - tlMargin.left - tlMargin.right;
+const tlIH = tlH - tlMargin.top - tlMargin.bottom;
+
+const tlSvg = d3.select('#timeline-chart').append('svg')
+  .attr('width', tlW).attr('height', tlH)
+  .append('g').attr('transform', `translate(${{tlMargin.left}},${{tlMargin.top}})`);
+
+if (tlBuckets.length === 0) {{
+  tlSvg.append('text').attr('x', tlIW/2).attr('y', tlIH/2).attr('text-anchor', 'middle')
+    .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
+    .text('No messages in selected range');
+}} else {{
+  const tlX = d3.scaleBand().domain(tlBuckets.map(d => d.time)).range([0, tlIW]).padding(0.1);
+  const tlY = d3.scaleLinear().domain([0, d3.max(tlBuckets, d => d.count) || 1]).range([tlIH, 0]).nice();
+
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  tlSvg.selectAll('.bar').data(tlBuckets).join('rect')
+    .attr('x', d => tlX(d.time)).attr('y', d => tlY(d.count))
+    .attr('width', tlX.bandwidth()).attr('height', d => tlIH - tlY(d.count))
+    .attr('fill', accent).attr('opacity', 0.8);
+
+  // tooltip on hover
+  tlSvg.selectAll('rect')
+    .append('title')
+    .text(d => `${{d.time}}: ${{d.count}} msgs`);
+
+  // Y axis
+  tlSvg.append('g').call(d3.axisLeft(tlY).ticks(5));
+
+  // X axis with rotated labels (subset)
+  const tickEvery = Math.max(1, Math.floor(tlBuckets.length / 12));
+  const tlXAxis = d3.axisBottom(tlX).tickValues(tlBuckets.filter((_, i) => i % tickEvery === 0).map(d => d.time));
+  tlSvg.append('g').attr('transform', `translate(0,${{tlIH}})`).call(tlXAxis)
+    .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end').attr('dx', '-0.5em').attr('dy', '0.5em')
+    .attr('font-size', '10px');
+}}
+</script>
+</div>"""
+
+
+# ============================================================
+# View 5: Link List (= issue #103)
+# ============================================================
+
+def get_link_list_data(limit=50):
+    """Top links (= sender↔recipient pairs) by message count (= View 5)。
+
+    bidirectional aggregation: `(min(s,r), max(s,r))` で正規化して合算。
+    issue #103 body の 「@planner <-> @reviewer: 359」 表現と一致。
+
+    Returns:
+        list of dicts: [{a, b, total, a_to_b, b_to_a}, ...] 降順
+    """
+    if TENANT is None:
+        sql = "SELECT sender, recipient, COUNT(*) FROM messages GROUP BY sender, recipient"
+        params = ()
+    else:
+        sql = "SELECT sender, recipient, COUNT(*) FROM messages WHERE tenant_id = ? GROUP BY sender, recipient"
+        params = (TENANT,)
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute(sql, params)
+    raw = cur.fetchall()
+    con.close()
+
+    # bidirectional aggregate: key = (min, max) tuple
+    agg = {}  # (a, b) → {total, a_to_b, b_to_a}
+    for s, r, c in raw:
+        if s == r:
+            # self-message: 通常稀、 same-side 表示で取り扱い
+            key = (s, r)
+            agg.setdefault(key, {"total": 0, "a_to_b": 0, "b_to_a": 0})
+            agg[key]["total"] += c
+            agg[key]["a_to_b"] += c
+            continue
+        a, b = (s, r) if s < r else (r, s)
+        key = (a, b)
+        agg.setdefault(key, {"total": 0, "a_to_b": 0, "b_to_a": 0})
+        agg[key]["total"] += c
+        if s == a:
+            agg[key]["a_to_b"] += c
+        else:
+            agg[key]["b_to_a"] += c
+
+    items = [
+        {"a": k[0], "b": k[1], "total": v["total"],
+         "a_to_b": v["a_to_b"], "b_to_a": v["b_to_a"]}
+        for k, v in agg.items()
+    ]
+    items.sort(key=lambda x: -x["total"])
+    return items[:limit]
+
+
+def render_link_list():
+    """Link List page (= View 5) の body HTML を build。"""
+    items = get_link_list_data(limit=50)
+    if not items:
+        return (
+            "<div class='view-content'><h2>Link List</h2>"
+            "<p class='dim'>(no links yet)</p></div>"
+        )
+
+    max_total = max(i["total"] for i in items) if items else 1
+    rows = []
+    for i, link in enumerate(items, 1):
+        a_safe = esc(link["a"])
+        b_safe = esc(link["b"])
+        bar_pct = int((link["total"] / max_total) * 100)
+        rows.append(f"""
+<tr>
+  <td class='rank'>{i}</td>
+  <td><a href='/?agent={esc_attr(link['a'])}'>{a_safe}</a>
+      &nbsp;↔&nbsp;
+      <a href='/?agent={esc_attr(link['b'])}'>{b_safe}</a></td>
+  <td class='cell-num'>{link['total']}</td>
+  <td class='cell-num dim'>{link['a_to_b']}→</td>
+  <td class='cell-num dim'>←{link['b_to_a']}</td>
+  <td class='bar-cell'><div class='bar' style='width:{bar_pct}%'></div></td>
+</tr>""")
+    body = "".join(rows)
+
+    return f"""<div class='view-content'>
+<h2>Link List — top {len(items)} strongest links</h2>
+<p class='dim'>bidirectional message exchange (a↔b)、 ↔ で合算、 a→b / b→a で direction 内訳。 click handle で Agent Detail へ。</p>
+<table class='link-list'>
+  <thead><tr><th>#</th><th>link</th><th>total</th><th>a→b</th><th>b→a</th><th>volume</th></tr></thead>
+  <tbody>{body}</tbody>
+</table>
+</div>"""
+
+
+def render_nav_bar(current_view, agent_handle=None):
+    """nav bar HTML (= 5 view 切替)。 current_view で active style を当てる。"""
+    nav_items = [
+        ("mesh", "Mesh + Matrix", "/"),
+        # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
+        # 由来で DB validation を経由しないため `^[\w-]+$` regex の保証が効かない。
+        # `esc_attr()` で attribute-breakout (= `" onclick="...`) を防ぐ。
+        ("agent", "Agent Detail", "/?view=agent" + (f"&agent={esc_attr(agent_handle)}" if agent_handle else "")),
+        ("timeline", "Timeline", "/?view=timeline"),
+        ("links", "Link List", "/?view=links"),
+    ]
+    # agent detail link は handle が未指定なら disable
+    links_html = []
+    for key, label, url in nav_items:
+        if key == "agent" and not agent_handle:
+            # active でなければ default agent placeholder (= cursor pointer 残すが not-found を案内)
+            cls = "active" if current_view == "agent" else ""
+            if cls:
+                links_html.append(f'<a class="active" href="{url}">{label}</a>')
+            else:
+                links_html.append(f'<a href="/" title="Agent Detail は Mesh View または Link List から handle を click して開いてください" style="opacity:0.5">{label}</a>')
+        else:
+            cls = "active" if current_view == key else ""
+            links_html.append(f'<a class="{cls}" href="{url}">{label}</a>')
+    return f"<div id='nav-bar'>{''.join(links_html)}</div>"
+
+
+def render_alt_view_layout(view_name, body_html, total_msgs, total_agents, total_links, agent_handle=None):
+    """alt views (= Agent Detail / Timeline / Link List) 用の minimal layout。
+
+    HTML template の `<div id="main">...</div>` block (= mesh + matrix layout) を
+    `<div class="alt-main">{body_html}</div>` に置換した form を返す。
+
+    HTML 全体 layout (= 共通 header + nav + theme system + d3 import) は維持。
+    """
+    nav_bar = render_nav_bar(view_name, agent_handle=agent_handle)
+    # alt-main wrapper を用意、 mesh-specific layout を simpler view 用に差し替え
+    alt_main = f'<div class="alt-main">{body_html}</div>'
+    body = (
+        HTML.replace("NAV_BAR_HTML", nav_bar)
+        # mesh-specific `<div id="main">...</div>` 全体を alt-main に置換
+        .replace(
+            '<div id="main">\n  <div id="graph-pane">\n    <svg id="svg"></svg>\n    <div id="graph-hint">drag: move node &nbsp; scroll: zoom</div>\n  </div>\n  <div id="divider"></div>\n  <div id="heatmap-pane">\n    <h2>message matrix</h2>\n    HEATMAP_HTML\n  </div>\n</div>',
+            alt_main,
+        )
+        # mesh-specific JS は実行されると undefined 参照 (= NODES_JSON 等) で error なので、
+        # d3 script + dummy data を空 array で feed して silent化
+        .replace("NODES_JSON", "[]")
+        .replace("LINKS_JSON", "[]")
+        .replace("TOTAL_MSGS", str(total_msgs))
+        .replace("TOTAL_AGENTS", str(total_agents))
+        .replace("TOTAL_LINKS", str(total_links))
+        .replace("TENANT_LABEL", esc(TENANT) if TENANT is not None else "all tenants")
+    )
+    return body.encode("utf-8")
+
+
+def render_mesh_view(top, counts, totals, nodes, links, total_msgs, total_agents):
+    """既存 Mesh + Matrix view を full HTML として render (= View 1+2)。
+
+    既存 HTML template の NODES_JSON / LINKS_JSON / HEATMAP_HTML / TOTAL_* 全
+    placeholder を fill。 NAV_BAR_HTML も埋める (= mesh が active state)。
+    """
+    heatmap_html = build_heatmap(top, counts, totals)
+    nav_bar = render_nav_bar("mesh")
+    body = (
+        HTML.replace("NAV_BAR_HTML", nav_bar)
+        .replace("NODES_JSON", json.dumps(nodes))
+        .replace("LINKS_JSON", json.dumps(links))
+        .replace("HEATMAP_HTML", heatmap_html)
+        .replace("TOTAL_MSGS", str(total_msgs))
+        .replace("TOTAL_AGENTS", str(total_agents))
+        .replace("TOTAL_LINKS", str(len(links)))
+        .replace("TENANT_LABEL", esc(TENANT) if TENANT is not None else "all tenants")
+    )
+    return body.encode("utf-8")
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # URL routing (= issue #103 5 views)
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        view = qs.get("view", ["mesh"])[0]
+        agent_handle = qs.get("agent", [None])[0]
+        # explicit agent param → View 3 (= Agent Detail)
+        if agent_handle:
+            view = "agent"
+        range_label = qs.get("range", ["7d"])[0]
+
         try:
+            # 共通 stats (= header 表示用、 全 view で fetch)
             top, counts, totals, nodes, links, total_msgs, total_agents = get_data()
         except sqlite3.OperationalError as e:
             # DB が未準備 (= initial migration 前 / volume mount 失敗等) を distinguishable
@@ -500,22 +1066,40 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(
-                f"DB not ready yet (path={DB_PATH}, tenant={TENANT}): {e}".encode(
-                    "utf-8"
-                )
+                f"DB not ready yet (path={DB_PATH}, tenant={TENANT}): {e}".encode("utf-8")
             )
             return
-        heatmap_html = build_heatmap(top, counts, totals)
-        body = (
-            HTML.replace("NODES_JSON", json.dumps(nodes))
-            .replace("LINKS_JSON", json.dumps(links))
-            .replace("HEATMAP_HTML", heatmap_html)
-            .replace("TOTAL_MSGS", str(total_msgs))
-            .replace("TOTAL_AGENTS", str(total_agents))
-            .replace("TOTAL_LINKS", str(len(links)))
-            .replace("TENANT_LABEL", TENANT if TENANT is not None else "all tenants")
-            .encode("utf-8")
-        )
+
+        total_links_for_header = len(links)
+        try:
+            if view == "agent":
+                view_body = render_agent_detail(agent_handle or "@unknown")
+                body = render_alt_view_layout(
+                    "agent", view_body, total_msgs, total_agents, total_links_for_header,
+                    agent_handle=agent_handle,
+                )
+            elif view == "timeline":
+                view_body = render_timeline(range_label)
+                body = render_alt_view_layout(
+                    "timeline", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            elif view == "links":
+                view_body = render_link_list()
+                body = render_alt_view_layout(
+                    "links", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            else:
+                # default: Mesh + Matrix (= View 1 + 2)
+                body = render_mesh_view(
+                    top, counts, totals, nodes, links, total_msgs, total_agents,
+                )
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(f"render error: {e}".encode("utf-8"))
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
