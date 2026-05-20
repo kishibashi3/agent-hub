@@ -958,6 +958,13 @@ export type LastActiveLookup = (tenantDomain: string, userId: string) => string 
  * - Pre-filter 後の candidates を `userId` で group、 各 group から 1 session 選択:
  *   - **primary order**: `last_active_at DESC` (= 最も最近 productive activity あった session)
  *   - **tie-breaker**: `createdAt DESC` (= 同 last_active_at なら最新 created session)
+ *
+ * > **実装上の注意**: `lastActiveLookup(tenantDomain, userId)` は `participants` テーブルの
+ * > per-user 単一値を返す。そのため同一 user の group 内では全 session で `last_active_at`
+ * > が同値となり `la !== lb` は常に `false` → **実効的には `createdAt DESC` のみが
+ * > discriminator として機能する**。将来 per-session `last_active_at` が導入された場合は
+ * > primary order が有効になる設計だが、現実装では tie-breaker が実体。
+ *
  * - 同 user の N sessions から 1 session のみ採用 → 「1 user = 1 active subscriber per uri」
  *   structural invariant を強制 (= issue #114 root cause `notifyResourceUpdated` の
  *   per-user fanout 蓄積を構造的に排除)
@@ -1006,7 +1013,7 @@ export function selectNotificationTargets<S extends NotifiableSession>(
       // tie-breaker: createdAt DESC
       return b.createdAt - a.createdAt;
     });
-    targets.push(arr[0]!.sid);
+    targets.push(arr[0]!.sid);  // arr は上の push で必ず 1 要素以上存在 → non-null safe
   }
   return targets;
 }

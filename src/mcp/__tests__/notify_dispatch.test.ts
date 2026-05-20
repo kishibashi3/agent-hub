@@ -233,7 +233,7 @@ describe('selectNotificationTargets dedup (issue #114: per-user single-subscribe
     expect(targets.sort()).toEqual(['sid-alice-2', 'sid-bob-1']);
   });
 
-  it('last_active_at DESC が primary order (createdAt より優先)', () => {
+  it('last_active_at は per-user 単一値 → group 内同値 → createdAt DESC が実効 discriminator', () => {
     const sessions: Array<[string, NotifiableSession]> = [
       ['sid-old-but-active', mkSession('kaz', ['inbox://@bridge'], '@bridge', 1000)],
       ['sid-new-but-idle', mkSession('kaz', ['inbox://@bridge'], '@bridge', 9999)],
