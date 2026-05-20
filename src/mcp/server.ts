@@ -71,6 +71,12 @@ interface Session {
   githubLogin: string;     // PAT で検証された GitHub login。trust モードでは userId と同じ
   tenantDomain: string;    // X-Tenant-Id (未指定なら 'default')。session 中は固定
   subscribedUris: Set<string>;
+  // issue #114 (= notify dedup): 同 (tenant, userId, uri) の複数 session が存在する場合、
+  // 最 recent 1 session のみに push する dedup の **tie-breaker** に使用。
+  // session 作成時に Date.now() で固定、 以降不変。 last_active_at (= participants table)
+  // 同値時の secondary order として使う (= 「同一 user の中で最も最近 created な session」 を
+  // 「現用 instance」 と推定)。
+  createdAt: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -845,6 +851,7 @@ async function reissueSessionAndDispatch(
         githubLogin,
         tenantDomain,
         subscribedUris: new Set(),
+        createdAt: Date.now(),
       });
       console.log(
         `[MCP] session reissued: ${newSid} (replaces stale ${staleSessionId}) ` +
@@ -894,11 +901,44 @@ async function reissueSessionAndDispatch(
 /**
  * notification dispatch に必要な session の最小 shape。
  * テストで実 Session を組み立てずに filter ロジックだけ検証するため。
+ *
+ * issue #114 (= notify dedup): `userId` + `createdAt` を含めて、 同 (tenant, userId,
+ * uri) で複数 subscribers が存在する場合の dedup tie-breaker に使えるようにする。
  */
 export interface NotifiableSession {
   tenantDomain: string;
+  userId: string;
   subscribedUris: Set<string>;
+  createdAt: number;
 }
+
+/**
+ * issue #114 fix の rollback path (= `MCP_NOTIFY_DEDUP_DISABLED` 環境変数)。
+ *
+ * **binary semantic**: set されていれば true (= 旧 「全 subscribers fanout」 path に倒す)、
+ * unset / empty なら false (= 新 dedup 動作、 default)。 値の文字列 (`0`/`false` 等) は
+ * 解釈しない (= PR #105 `MCP_AUTO_REISSUE_DISABLED` と同 convention、 「set されたら
+ * disable」 が rule)。
+ *
+ * deploy 後 production で異常 detect した operator が **環境変数 1 つで旧 behavior に
+ * 即時 revert** できる safety mechanism。 revert 時は server restart で旧 fanout
+ * (= 全 subscribers に push) に倒れる、 dedup invariant は disabled。
+ */
+export function isNotifyDedupDisabled(): boolean {
+  return process.env.MCP_NOTIFY_DEDUP_DISABLED !== undefined &&
+    process.env.MCP_NOTIFY_DEDUP_DISABLED !== '';
+}
+
+/**
+ * dedup の selection criteria 用 callback。 同 (tenantDomain, userId) participant の
+ * **`last_active_at` ISO timestamp** を返す (= participants table から lookup)。
+ * 該当 row が存在しない / `last_active_at` が null の場合は `null` を返す。
+ *
+ * ISO 8601 timestamp は **lexicographic order = chronological order** が保証される
+ * format (= 「2026-05-20T14:00:00.000」 < 「2026-05-20T14:30:00.000」 が string 比較で
+ * 成り立つ) ので、 string 比較で sort 可能。
+ */
+export type LastActiveLookup = (tenantDomain: string, userId: string) => string | null;
 
 /**
  * `(uri, tenantDomain)` 条件で notification を飛ばすべき session id を選び出す純粋関数。
@@ -908,22 +948,72 @@ export interface NotifiableSession {
  * (issue #7)。subscribe 時の session.tenantDomain と送信元 tenant を突き合わせる
  * ことで、データ本体だけでなく「存在の side-channel」も tenant 境界に閉じ込める。
  *
+ * Pre-filter (= 既存 logic):
  * - sid === except は除外（送信者本人の重複通知抑制用）
  * - session.tenantDomain が一致しなければ除外（tenant leak ガード）
  * - subscribedUris に uri が無ければ除外（そもそも subscribe していない）
+ *
+ * Dedup (= 新規 logic、 issue #114 fix):
+ * - `options.lastActiveLookup` provided AND `isNotifyDedupDisabled()` false の場合のみ適用
+ * - Pre-filter 後の candidates を `userId` で group、 各 group から 1 session 選択:
+ *   - **primary order**: `last_active_at DESC` (= 最も最近 productive activity あった session)
+ *   - **tie-breaker**: `createdAt DESC` (= 同 last_active_at なら最新 created session)
+ *
+ * > **実装上の注意**: `lastActiveLookup(tenantDomain, userId)` は `participants` テーブルの
+ * > per-user 単一値を返す。そのため同一 user の group 内では全 session で `last_active_at`
+ * > が同値となり `la !== lb` は常に `false` → **実効的には `createdAt DESC` のみが
+ * > discriminator として機能する**。将来 per-session `last_active_at` が導入された場合は
+ * > primary order が有効になる設計だが、現実装では tie-breaker が実体。
+ *
+ * - 同 user の N sessions から 1 session のみ採用 → 「1 user = 1 active subscriber per uri」
+ *   structural invariant を強制 (= issue #114 root cause `notifyResourceUpdated` の
+ *   per-user fanout 蓄積を構造的に排除)
+ *
+ * 詳細 design rationale + 観測 evidence: `docs/...` / issue #114。
  */
 export function selectNotificationTargets<S extends NotifiableSession>(
   sessionEntries: Iterable<readonly [string, S]>,
   uri: string,
   tenantDomain: string,
-  except?: string
+  except?: string,
+  options?: { lastActiveLookup?: LastActiveLookup }
 ): string[] {
-  const targets: string[] = [];
+  // Pre-filter (= 既存 tenant + URI + except gate)
+  const candidates: Array<[string, S]> = [];
   for (const [sid, session] of sessionEntries) {
     if (sid === except) continue;
     if (session.tenantDomain !== tenantDomain) continue;
     if (!session.subscribedUris.has(uri)) continue;
-    targets.push(sid);
+    candidates.push([sid, session]);
+  }
+
+  // Dedup gate (= issue #114 fix、 lastActiveLookup 未提供 or 環境変数 disable で skip)
+  if (!options?.lastActiveLookup || isNotifyDedupDisabled()) {
+    return candidates.map(([sid]) => sid);
+  }
+
+  // Dedup: userId で group、 各 group から 1 session 選択 (= last_active_at DESC、
+  // tie-breaker createdAt DESC)
+  const byUser = new Map<string, Array<{ sid: string; lastActive: string | null; createdAt: number }>>();
+  for (const [sid, session] of candidates) {
+    const lastActive = options.lastActiveLookup(tenantDomain, session.userId);
+    const arr = byUser.get(session.userId) ?? [];
+    arr.push({ sid, lastActive, createdAt: session.createdAt });
+    byUser.set(session.userId, arr);
+  }
+
+  const targets: string[] = [];
+  for (const arr of byUser.values()) {
+    arr.sort((a, b) => {
+      // last_active_at: null は 「最古」 扱い (= 「productive activity 未観測」 session は
+      // 「より recently active な session」 に dedup 負ける、 直感的整合)。
+      const la = a.lastActive ?? '';
+      const lb = b.lastActive ?? '';
+      if (la !== lb) return lb.localeCompare(la);  // DESC (= most recent first)
+      // tie-breaker: createdAt DESC
+      return b.createdAt - a.createdAt;
+    });
+    targets.push(arr[0]!.sid);  // arr は上の push で必ず 1 要素以上存在 → non-null safe
   }
   return targets;
 }
@@ -978,13 +1068,34 @@ export function isParticipantOnline<S extends PresenceSession>(
  * - tenant 跨ぎは抑止する (issue #7): tenantDomain が一致する session のみ対象
  * - 例外送信元 (except) があれば除外（送信者本人への通知を抑制したい場合）
  * - notification の発火は best-effort、エラーが出ても他 session の通知は止めない
+ *
+ * **issue #114 fix**: 同 (tenant, userId, uri) で複数 sessions が subscribe している
+ * 場合、 **最 recent 1 session のみ** に push する dedup を適用 (= production で観測
+ * された 31x fanout を構造的に解消)。 dedup criteria は participants.last_active_at
+ * DESC + session.createdAt DESC tie-breaker。 `MCP_NOTIFY_DEDUP_DISABLED` 環境変数で
+ * 旧 「全 subscribers fanout」 path に rollback 可能。
  */
 export function notifyResourceUpdated(
   uri: string,
   tenantDomain: string,
   except?: string
 ): void {
-  const targets = selectNotificationTargets(sessions, uri, tenantDomain, except);
+  // issue #114 fix: last_active_at lookup を closure で wire-in (= per-call DB hit
+  // 許容、 best-effort notification context で N session iteration の constant 倍 cost)。
+  // 異常時 (= DB エラー等) は null 返却で 「未活動扱い」 にして fail-safe degradation。
+  const lastActiveLookup: LastActiveLookup = (td, userId) => {
+    try {
+      const participant = scopeToTenant(getDatabase(), td).getParticipantByName(userId);
+      return participant?.last_active_at ?? null;
+    } catch (err) {
+      console.error(`[MCP] lastActiveLookup failed for ${userId}@${td}:`, err);
+      return null;
+    }
+  };
+
+  const targets = selectNotificationTargets(sessions, uri, tenantDomain, except, {
+    lastActiveLookup,
+  });
   for (const sid of targets) {
     const session = sessions.get(sid);
     if (!session) continue;
@@ -1315,6 +1426,7 @@ export class MCPServer {
                 githubLogin,
                 tenantDomain,
                 subscribedUris: new Set(),
+                createdAt: Date.now(),
               });
               console.log(
                 `[MCP] session opened: ${sid} userId=${userId} githubLogin=${githubLogin} tenant=${tenantDomain}`
