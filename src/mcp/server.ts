@@ -562,6 +562,176 @@ export function inboxUriFor(name: string): string {
 }
 
 // ============================================================
+// Active ping-based presence (= issue #91)
+// ============================================================
+
+/**
+ * Active ping presence loop constants。
+ *
+ * spec (= issue #91):
+ * - 30 秒ごとに全 session に ping
+ * - 5 秒以内 pong なし → timeout
+ * - timeout → retry 2 回 (= 計 3 attempts) → 全 fail なら disconnect
+ *
+ * 数字は protocol level の MCP ping (= SDK 内蔵)、 round-trip latency を見ているので
+ * 5 秒 timeout は通常応答 << 1 秒に対して充分 conservative。
+ */
+const PING_INTERVAL_MS = 30_000;
+const PING_TIMEOUT_MS = 5_000;
+const PING_MAX_RETRIES = 2;
+
+/**
+ * Feature flag: `MCP_PING_LOOP_DISABLED` env が set されていれば active ping loop 無効化
+ * (= rollback safety + 既存 SSE-only presence に倒す)。
+ *
+ * 「unset = 新 behavior (= active ping)」 が default、 「set = 旧 behavior (= subscribe-only)」 が opt-out。
+ * 値の中身は問わない (= binary signal、 redline #1 整合)。 `MCP_AUTO_REISSUE_DISABLED` (= #68) と
+ * 同 pattern。
+ */
+export function isPingLoopDisabled(): boolean {
+  return process.env.MCP_PING_LOOP_DISABLED !== undefined &&
+    process.env.MCP_PING_LOOP_DISABLED !== '';
+}
+
+/**
+ * Session の MCP ping を timeout 付きで実行し、 pong 受信したら true、 timeout / error なら false。
+ *
+ * MCP SDK `server.ping()` は protocol-level ping (= spec.modelcontextprotocol.io の Ping utility)、
+ * 標準的な client (= SDK M4 CommandRouter 経由 bridge / Claude Code 内蔵 client / scheduler) は
+ * 自動応答する。 「inbox listener がバグで応答不能」 等の zombie state (= issue #91 motivation)
+ * を MCP-level で detect。
+ */
+async function pingSessionWithTimeout(
+  session: Session,
+  timeoutMs: number = PING_TIMEOUT_MS
+): Promise<boolean> {
+  try {
+    await Promise.race([
+      session.server.ping(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('ping timeout')), timeoutMs)
+      ),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Single session に対して retry 付き ping (= issue #91 spec の retry M 回)。
+ *
+ * 全 attempt fail なら false (= session を disconnect すべき signal)、
+ * いずれか 1 回でも success なら true。
+ */
+async function pingSessionWithRetry(session: Session): Promise<boolean> {
+  for (let attempt = 0; attempt <= PING_MAX_RETRIES; attempt++) {
+    const alive = await pingSessionWithTimeout(session);
+    if (alive) return true;
+  }
+  return false;
+}
+
+/**
+ * Active ping loop の cleanup handle (= 「停止 function」)。 future test 用 / graceful
+ * shutdown 用に exposed。
+ */
+let activePingLoopInterval: NodeJS.Timeout | null = null;
+
+/**
+ * 全 session を一回り ping する (= 1 cycle)。 各 session を並列に処理 (= Promise.allSettled)、
+ * 1 つの slow session が他を block しない。 timeout の retry 後も応答なければ session を
+ * disconnect (= sessions.delete + transport.close)。
+ *
+ * 「**SSE は alive だが応答不能**」 zombie state (= issue #91 motivation: scheduler 2026-05-19
+ * UTF-8 デコードバグの実例) を server-side で自動 cleanup。
+ *
+ * `is_online` (= `selectNotificationTargets` で session 存在 check) は本 cleanup により
+ * 自動的に false に倒れる (= 別途 is_online flag を持つ必要なし)。
+ */
+export async function runOneActivePingCycle(): Promise<{
+  total: number;
+  alive: number;
+  disconnected: number;
+}> {
+  // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
+  const snapshot: Array<[string, Session]> = Array.from(sessions.entries());
+  const results = await Promise.allSettled(
+    snapshot.map(async ([sid, session]) => {
+      const alive = await pingSessionWithRetry(session);
+      return { sid, session, alive };
+    })
+  );
+
+  let aliveCount = 0;
+  let disconnectedCount = 0;
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    const { sid, session, alive } = r.value;
+    if (alive) {
+      aliveCount++;
+      continue;
+    }
+    // Disconnect: session が `sessions` から消えれば is_online は自動 false に。
+    // transport.close() で SSE GET 側の long-lived connection も切断 (= bridge の reconnect loop が trigger される)。
+    console.log(
+      `[MCP] ping failed for session ${sid} (= ${session.userId}@${session.tenantDomain}) ` +
+        `after ${PING_MAX_RETRIES + 1} attempts, disconnecting`
+    );
+    try {
+      await session.transport.close();
+    } catch (err) {
+      console.error(`[MCP] transport.close failed for sid=${sid} (non-fatal):`, err);
+    }
+    // transport.onclose も sessions.delete を呼ぶが、 race 回避で明示削除
+    if (sessions.has(sid)) {
+      sessions.delete(sid);
+    }
+    disconnectedCount++;
+  }
+  return { total: snapshot.length, alive: aliveCount, disconnected: disconnectedCount };
+}
+
+/**
+ * Active ping loop を起動 (= MCPServer.start() で呼ぶ)。
+ *
+ * 既に起動中なら no-op。 stop function を返すので、 test 等で停止できる。
+ * feature flag `MCP_PING_LOOP_DISABLED` が set されていれば起動 skip。
+ */
+export function startActivePingLoop(): () => void {
+  if (activePingLoopInterval) {
+    return () => stopActivePingLoop();
+  }
+  if (isPingLoopDisabled()) {
+    console.log('[MCP] active ping loop disabled (= MCP_PING_LOOP_DISABLED env set)');
+    return () => {};
+  }
+  console.log(
+    `[MCP] active ping loop starting (= ${PING_INTERVAL_MS / 1000}s interval、 ` +
+      `${PING_TIMEOUT_MS / 1000}s timeout、 ${PING_MAX_RETRIES} retries、 issue #91)`
+  );
+  activePingLoopInterval = setInterval(() => {
+    void runOneActivePingCycle().then((stats) => {
+      if (stats.disconnected > 0) {
+        console.log(
+          `[MCP] ping cycle: total=${stats.total} alive=${stats.alive} disconnected=${stats.disconnected}`
+        );
+      }
+    });
+  }, PING_INTERVAL_MS);
+  return () => stopActivePingLoop();
+}
+
+/** Active ping loop を停止 (= graceful shutdown 用)。 */
+export function stopActivePingLoop(): void {
+  if (activePingLoopInterval) {
+    clearInterval(activePingLoopInterval);
+    activePingLoopInterval = null;
+    console.log('[MCP] active ping loop stopped');
+  }
+}
+
+// ============================================================
 // MCP session auto-reconnect (= issue #68、 PR #100 設計 doc 実装)
 // ============================================================
 
@@ -1252,6 +1422,10 @@ export class MCPServer {
   async start(): Promise<void> {
     activeEditionConfig = resolveEdition(process.env);
     await this.initDatabase();
+
+    // Active ping loop 起動 (= issue #91、 server restart 後の即 cycle 開始)。
+    // feature flag MCP_PING_LOOP_DISABLED が set されていれば skip (= rollback path)。
+    startActivePingLoop();
 
     return new Promise((resolve) => {
       this.app.listen(this.port, '0.0.0.0', () => {
