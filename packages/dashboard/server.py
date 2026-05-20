@@ -265,6 +265,21 @@ table.hm td.self { background:var(--self-bg); color:var(--self-fg); }
 }
 #nav-bar a.disabled:hover { color:var(--text2); }
 
+/* ── view-specific body styling (= mesh / matrix 分離後の per-view 制御) ───
+   2026-05-20 Mesh/Matrix 分離 (= operator follow-up dispatch、 PR #111 後継):
+   合体 view が廃止され、 mesh / matrix は独立 view となった。 header の `drift`
+   slider は force-graph に対する制御で、 matrix-only / alt views では意味がない
+   ため hide。 dark class が toggleTheme で追加されても干渉しないよう
+   `body:not(.view-mesh)` selector で view 軸のみ filter。 */
+body:not(.view-mesh) #header label { display:none; }
+
+/* matrix-only layout (= full-width heatmap、 旧 #heatmap-pane の sidebar 制約 解除) */
+#main.matrix-only-layout { display:block; padding:20px 24px; overflow:auto; background:var(--bg); }
+#main.matrix-only-layout #heatmap-pane { width:auto; max-width:100%; overflow:visible; padding:0; }
+
+/* mesh-only layout (= heatmap-pane と divider 削除、 graph-pane が full width) */
+#main.mesh-only-layout #graph-pane { flex:1; width:100%; }
+
 /* ── alt views (= Agent Detail / Timeline / Link List) layout ─────── */
 .alt-main { flex:1; overflow:auto; padding:20px 24px; background:var(--bg); }
 .view-content h2 { font-size:16px; color:var(--accent); margin-bottom:14px; letter-spacing:0.03em; }
@@ -309,7 +324,7 @@ table.link-list .bar-cell { width:200px; }
 table.link-list .bar { height:8px; background:var(--accent); border-radius:2px; opacity:0.7; }
 </style>
 </head>
-<body>
+<body class="BODY_CLASS">
 
 <div id="header">
   <h1>agent-hub</h1>
@@ -519,10 +534,15 @@ svg.on('mousedown', () => { drifting = false; })
 svg.call(d3.zoom().scaleExtent([0.3, 4])
   .on('zoom', e => g.attr('transform', e.transform)));
 
-// resizable divider
+// resizable divider (= mesh+matrix combined view 専用、 mesh-only / matrix-only / alt
+// view では #divider と #heatmap-pane が存在しないので early return で no-op 化)。
+// 2026-05-20 Mesh/Matrix 分離 (= operator follow-up dispatch、 PR #111 後継): 共通 HTML
+// template + mesh JS bottom block を全 view 共通で配信するため、 element 不在時の
+// null-guard が必要。
 (function() {
   const div = document.getElementById('divider');
   const hm  = document.getElementById('heatmap-pane');
+  if (!div || !hm) return;  // mesh+matrix combined view 以外では divider drag 無効
   let dragging = false, startX = 0, startW = 0;
   div.addEventListener('mousedown', e => {
     dragging = true; startX = e.clientX; startW = hm.offsetWidth;
@@ -991,23 +1011,33 @@ def render_link_list():
 
 
 def render_nav_bar(current_view, agent_handle=None):
-    """nav bar HTML (= 5 view 切替 + section grouping)。
+    """nav bar HTML (= 全 view 切替 + section grouping)。
 
     2026-05-20 UX fix (= operator feedback 「mesh + matrix と agent detail の違いが
     分かりにくい」): nav を **2 section に grouping** して全体ビュー / 個別ドリルダウン
     の区別を視覚化。
-    - **Overview** (= mesh + timeline + link list): 全体構造を 3 つの 異なる角度
-      (graph + heatmap / time / pair list) で観察する全体ビュー群
+
+    2026-05-20 Mesh/Matrix 分離 (= operator follow-up dispatch、 旧 PR #111 直後):
+    旧 「Mesh + Matrix」 合体 link を 「Mesh」 + 「Matrix」 の **2 独立 link** に分離。
+    overview group は 4 link (= Mesh + Matrix + Timeline + Link List) に拡張。
+
+    - **Overview** (= mesh + matrix + timeline + link list): 全体構造を 4 つの異なる
+      角度 (graph / heatmap / time / pair list) で観察する全体ビュー群
     - **Drill-down** (= agent detail): 1 つの handle に絞った個別ビュー、 mesh /
       link list 上の click から入る drill-down 動線
 
     section 間に vertical divider + label で grouping を明示、 agent detail は handle
-    未指定なら disabled state (= `mesh / link list から handle を click」 hint 付き)
+    未指定なら disabled state (= 「Mesh / Link List から handle を click」 hint 付き)
     で 「直接 navigate できない drill-down view」 であることを表現。
+
+    Suggestion 3 (= PR #111 reviewer): `nav-divider` に `role="separator"` +
+    `aria-orientation="vertical"` を付与 (= screen reader 等 a11y tool に 「ここで
+    視覚的 section break が起きている」 を伝える ARIA semantic)。
     """
-    # Overview group (= 全体構造を見る view 群)
+    # Overview group (= 全体構造を見る view 群、 4 link)
     overview_items = [
-        ("mesh", "Mesh + Matrix", "/"),
+        ("mesh", "Mesh", "/"),
+        ("matrix", "Matrix", "/?view=matrix"),
         ("timeline", "Timeline", "/?view=timeline"),
         ("links", "Link List", "/?view=links"),
     ]
@@ -1043,33 +1073,53 @@ def render_nav_bar(current_view, agent_handle=None):
         "<div id='nav-bar'>"
         "<span class='nav-section-label'>overview</span>"
         + "".join(overview_links)
-        + "<span class='nav-divider'></span>"
+        + "<span class='nav-divider' role='separator' aria-orientation='vertical'></span>"
         + "<span class='nav-section-label'>drill-down</span>"
         + drill_link
         + "</div>"
     )
 
 
-def render_alt_view_layout(view_name, body_html, total_msgs, total_agents, total_links, agent_handle=None):
-    """alt views (= Agent Detail / Timeline / Link List) 用の minimal layout。
+# HTML template から旧 「Mesh + Matrix 合体 main div」 (= graph-pane + divider +
+# heatmap-pane) を identify するための定数 (= replace target、 全 render 関数で共有)。
+# 旧 PR #111 までは default route で配信されていた layout、 2026-05-20 mesh/matrix
+# 分離以降は **どの view でも使われない** (= 各 render 関数が view 固有 layout に置換)。
+_MAIN_DIV_TEMPLATE = (
+    '<div id="main">\n'
+    '  <div id="graph-pane">\n'
+    '    <svg id="svg"></svg>\n'
+    '    <div id="graph-hint">drag: move node &nbsp; scroll: zoom</div>\n'
+    '  </div>\n'
+    '  <div id="divider"></div>\n'
+    '  <div id="heatmap-pane">\n'
+    '    <h2>message matrix</h2>\n'
+    '    HEATMAP_HTML\n'
+    '  </div>\n'
+    '</div>'
+)
 
-    HTML template の `<div id="main">...</div>` block (= mesh + matrix layout) を
+
+def render_alt_view_layout(view_name, body_html, total_msgs, total_agents, total_links, agent_handle=None):
+    """alt views (= Agent Detail / Timeline / Link List / Matrix) 用の minimal layout。
+
+    HTML template の `<div id="main">...</div>` block を
     `<div class="alt-main">{body_html}</div>` に置換した form を返す。
 
     HTML 全体 layout (= 共通 header + nav + theme system + d3 import) は維持。
+
+    2026-05-20 Mesh/Matrix 分離 (= operator follow-up): matrix-only も本 helper を
+    使う pattern として add (= body_html に heatmap table を埋める)。
     """
     nav_bar = render_nav_bar(view_name, agent_handle=agent_handle)
     # alt-main wrapper を用意、 mesh-specific layout を simpler view 用に差し替え
     alt_main = f'<div class="alt-main">{body_html}</div>'
     body = (
-        HTML.replace("NAV_BAR_HTML", nav_bar)
-        # mesh-specific `<div id="main">...</div>` 全体を alt-main に置換
-        .replace(
-            '<div id="main">\n  <div id="graph-pane">\n    <svg id="svg"></svg>\n    <div id="graph-hint">drag: move node &nbsp; scroll: zoom</div>\n  </div>\n  <div id="divider"></div>\n  <div id="heatmap-pane">\n    <h2>message matrix</h2>\n    HEATMAP_HTML\n  </div>\n</div>',
-            alt_main,
-        )
+        HTML.replace("BODY_CLASS", f"view-{view_name}")
+        .replace("NAV_BAR_HTML", nav_bar)
+        # mesh-specific main div 全体を alt-main に置換
+        .replace(_MAIN_DIV_TEMPLATE, alt_main)
         # mesh-specific JS は実行されると undefined 参照 (= NODES_JSON 等) で error なので、
-        # d3 script + dummy data を空 array で feed して silent化
+        # dummy data を空 array で feed して silent化 (= divider drag は null-guard で no-op)
         .replace("NODES_JSON", "[]")
         .replace("LINKS_JSON", "[]")
         .replace("TOTAL_MSGS", str(total_msgs))
@@ -1080,38 +1130,90 @@ def render_alt_view_layout(view_name, body_html, total_msgs, total_agents, total
     return body.encode("utf-8")
 
 
-def render_mesh_view(top, counts, totals, nodes, links, total_msgs, total_agents):
-    """既存 Mesh + Matrix view を full HTML として render (= View 1+2)。
+def render_mesh_only(nodes, links, total_msgs, total_agents, total_links):
+    """Mesh-only view (= D3 force-directed graph 単独、 heatmap pane なし)。
 
-    既存 HTML template の NODES_JSON / LINKS_JSON / HEATMAP_HTML / TOTAL_* 全
-    placeholder を fill。 NAV_BAR_HTML も埋める (= mesh が active state)。
+    2026-05-20 Mesh/Matrix 分離 (= operator follow-up): 旧 `render_mesh_view`
+    (= mesh + matrix 合体) を分割した片割れ。 graph-pane を main div の全幅に占有させ、
+    heatmap pane + divider は削除。 既存 D3 force-graph JS (= body 末尾 inline script)
+    は real NODES/LINKS data を受けて normal に動作。
+
+    drift slider (= header 内) は本 view でのみ effective、 他 view では CSS で hide
+    (= `body:not(.view-mesh) #header label`)。
     """
-    heatmap_html = build_heatmap(top, counts, totals)
     nav_bar = render_nav_bar("mesh")
+    # main div 内容を mesh-only 専用に置換 (= graph-pane full width、 no heatmap)
+    mesh_main = (
+        '<div id="main" class="mesh-only-layout">\n'
+        '  <div id="graph-pane">\n'
+        '    <svg id="svg"></svg>\n'
+        '    <div id="graph-hint">drag: move node &nbsp; scroll: zoom</div>\n'
+        '  </div>\n'
+        '</div>'
+    )
     body = (
-        HTML.replace("NAV_BAR_HTML", nav_bar)
+        HTML.replace("BODY_CLASS", "view-mesh")
+        .replace("NAV_BAR_HTML", nav_bar)
+        .replace(_MAIN_DIV_TEMPLATE, mesh_main)
         .replace("NODES_JSON", json.dumps(nodes))
         .replace("LINKS_JSON", json.dumps(links))
-        .replace("HEATMAP_HTML", heatmap_html)
         .replace("TOTAL_MSGS", str(total_msgs))
         .replace("TOTAL_AGENTS", str(total_agents))
-        .replace("TOTAL_LINKS", str(len(links)))
+        .replace("TOTAL_LINKS", str(total_links))
         .replace("TENANT_LABEL", esc(TENANT) if TENANT is not None else "all tenants")
     )
     return body.encode("utf-8")
 
 
+def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_links):
+    """Matrix-only view (= sender × recipient heatmap 単独、 force-graph なし)。
+
+    2026-05-20 Mesh/Matrix 分離 (= operator follow-up): heatmap pane を main div の
+    全幅に占有させ、 graph-pane は削除。 既存 mesh JS は empty NODES/LINKS で no-op
+    (= `render_alt_view_layout` 経由で silent化)。
+
+    `build_heatmap` の出力をそのまま埋め、 outer に `<h2>` heading + view-content
+    wrapper (= 他 alt view と同 styling) を添える。
+    """
+    heatmap_html = build_heatmap(top, counts, totals)
+    body_html = (
+        '<div class="view-content">\n'
+        '<h2>Matrix — sender × recipient message frequency</h2>\n'
+        '<div class="dim" style="font-size:11px;margin-bottom:12px">'
+        '上位 14 名の handle 間 message 数 (= 色濃度 = 比率、 hover で正確 count)。'
+        '</div>\n'
+        + heatmap_html + '\n'
+        '</div>'
+    )
+    return render_alt_view_layout(
+        "matrix", body_html, total_msgs, total_agents, total_links,
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # URL routing (= issue #103 5 views)
+        # URL routing (= 5 view: mesh / matrix / timeline / links / agent)
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
         view = qs.get("view", ["mesh"])[0]
         agent_handle = qs.get("agent", [None])[0]
-        # explicit agent param → View 3 (= Agent Detail)
+        # explicit agent param → Agent Detail drill-down
         if agent_handle:
             view = "agent"
         range_label = qs.get("range", ["7d"])[0]
+
+        # Minor 1 fix (= PR #111 reviewer 指摘、 巻き取り): `?view=agent` を直接踏まれた
+        # 場合 (= URL bar から手動 navigate)、 agent_handle が無いと
+        # `render_agent_detail("@unknown")` が呼ばれて 「@unknown」 page が描画されて
+        # しまう (= 旧 behavior、 nav state は disabled だが content は present、 state
+        # inconsistency)。 本来 agent detail は drill-down view で 「mesh / link list
+        # から handle を click」 が正しい動線、 直接 navigation は **不正な state** なので
+        # default route (= Mesh) に redirect する。
+        if view == "agent" and not agent_handle:
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
 
         try:
             # 共通 stats (= header 表示用、 全 view で fetch)
@@ -1130,10 +1232,15 @@ class Handler(BaseHTTPRequestHandler):
         total_links_for_header = len(links)
         try:
             if view == "agent":
-                view_body = render_agent_detail(agent_handle or "@unknown")
+                view_body = render_agent_detail(agent_handle)
                 body = render_alt_view_layout(
                     "agent", view_body, total_msgs, total_agents, total_links_for_header,
                     agent_handle=agent_handle,
+                )
+            elif view == "matrix":
+                # 2026-05-20 Mesh/Matrix 分離 (= operator follow-up)
+                body = render_matrix_only(
+                    top, counts, totals, total_msgs, total_agents, total_links_for_header,
                 )
             elif view == "timeline":
                 view_body = render_timeline(range_label)
@@ -1146,9 +1253,12 @@ class Handler(BaseHTTPRequestHandler):
                     "links", view_body, total_msgs, total_agents, total_links_for_header,
                 )
             else:
-                # default: Mesh + Matrix (= View 1 + 2)
-                body = render_mesh_view(
-                    top, counts, totals, nodes, links, total_msgs, total_agents,
+                # default (= `/` or `?view=mesh`): Mesh-only (= force-graph 単独)
+                # operator DM `21df3744` の question (a) で default = Mesh と recommend、
+                # 黙示同意 (= 既存 user の muscle memory + 「mesh = ecosystem first view」
+                # が dashboard 全体の最も intuitive entry) として確定。
+                body = render_mesh_only(
+                    nodes, links, total_msgs, total_agents, total_links_for_header,
                 )
         except Exception as e:
             self.send_response(500)
