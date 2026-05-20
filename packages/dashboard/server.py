@@ -970,7 +970,10 @@ def render_nav_bar(current_view, agent_handle=None):
     """nav bar HTML (= 5 view 切替)。 current_view で active style を当てる。"""
     nav_items = [
         ("mesh", "Mesh + Matrix", "/"),
-        ("agent", "Agent Detail", "/?view=agent" + (f"&agent={agent_handle}" if agent_handle else "")),
+        # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
+        # 由来で DB validation を経由しないため `^[\w-]+$` regex の保証が効かない。
+        # `esc_attr()` で attribute-breakout (= `" onclick="...`) を防ぐ。
+        ("agent", "Agent Detail", "/?view=agent" + (f"&agent={esc_attr(agent_handle)}" if agent_handle else "")),
         ("timeline", "Timeline", "/?view=timeline"),
         ("links", "Link List", "/?view=links"),
     ]
