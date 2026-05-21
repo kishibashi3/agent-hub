@@ -7,7 +7,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // データベースファイルのパス
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/app.db');
+// DB_PATH 未設定時は WARN を出して `__dirname` 相対の default path を使用する。
+// Docker 環境では `DB_PATH=/data/app.db` を明示することを推奨。
+// fail-fast は不要 (dev 環境では default で動くべき)。
+const DB_PATH_FROM_ENV = process.env.DB_PATH;
+if (!DB_PATH_FROM_ENV) {
+  const defaultPath = path.join(__dirname, '../../data/app.db');
+  console.warn(
+    `[DB] DB_PATH is not set, using default path: ${defaultPath}. ` +
+      'Set DB_PATH to an explicit absolute path (e.g. DB_PATH=/data/app.db) ' +
+      'to avoid unexpected DB location, especially in Docker environments.'
+  );
+}
+const DB_PATH = DB_PATH_FROM_ENV || path.join(__dirname, '../../data/app.db');
 
 // データベースインスタンス（シングルトン）
 let db: Database.Database | null = null;
