@@ -18,10 +18,8 @@
  *   - 「PE では @admin が無い」「PE では named tenant が無い」等の振る舞いを 1 箇所で導出
  *   - test で env を mock しやすい (関数引数で env を受ける)
  *
- * Backward compat: `AGENT_HUB_EDITION` 未指定 → `community` をデフォルト採用
- * (= secure by default、AUTH_MODE=trust の暗黙運用を抑止)。LAN dev で trust
- * mode を使いたかった既存利用者は `AGENT_HUB_EDITION=private` を明示する
- * (= v1 では `AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1` opt-in で延命可能、v2 で打ち切り)。
+ * `AGENT_HUB_EDITION` は必須。未指定 or 空文字 → `EditionConfigError` で起動失敗 (issue #55 fix)。
+ * LAN dev で trust mode を使いたい場合は `AGENT_HUB_EDITION=private` を明示する。
  */
 
 export type Edition = 'community' | 'private';
@@ -64,7 +62,7 @@ export class EditionConfigError extends Error {
  * env (= `process.env` 互換 dictionary) から edition 設定を解決する。
  *
  * 解決規則 (v2 設計反映):
- *   1. `AGENT_HUB_EDITION` を読む。未指定 → `community` をデフォルト採用
+ *   1. `AGENT_HUB_EDITION` を読む。未指定 or 空文字 → `EditionConfigError` (= 起動失敗)
  *   2. value validation: 'community' | 'private' 以外 → `EditionConfigError`
  *   3. `AUTH_MODE` 値 validation: 'trust' | 'pat' 以外 → `EditionConfigError`
  *   4. edition + AUTH_MODE 整合性 check:
@@ -81,7 +79,14 @@ export class EditionConfigError extends Error {
 export function resolveEdition(
   env: NodeJS.ProcessEnv | Record<string, string | undefined>
 ): EditionConfig {
-  const editionRaw = env.AGENT_HUB_EDITION?.trim().toLowerCase() ?? 'community';
+  const editionRaw = env.AGENT_HUB_EDITION?.trim().toLowerCase();
+  if (!editionRaw) {
+    // issue #55 fix (redline #1): env 未設定時の silent community fallback を廃止。
+    // PE 環境で AGENT_HUB_EDITION 設定漏れが PAT 必須 CE として silent start するリスクを排除する。
+    throw new EditionConfigError(
+      "AGENT_HUB_EDITION が未設定です。'community' か 'private' を指定してください。"
+    );
+  }
   if (editionRaw !== 'community' && editionRaw !== 'private') {
     throw new EditionConfigError(
       `AGENT_HUB_EDITION='${editionRaw}' は未知の値です。'community' か 'private' を指定してください。`
