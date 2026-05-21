@@ -212,22 +212,22 @@ export function _setEditionConfigForTest(config: EditionConfig | null): void {
 }
 
 /**
- * `notifications/resources/updated` を event store の replay 対象から除外する
- * rollback path (= `MCP_RESOURCE_NOTIFY_REPLAY_DISABLED` 環境変数)。
+ * `notifications/resources/updated` replay フィルタ (= issue #117 fix) の
+ * rollback path (= `MCP_RESOURCE_NOTIFY_FILTER_DISABLED` 環境変数)。
  *
  * **binary semantic** (= PR #105 / #116 と同 convention):
  * - unset / empty (default, new behavior): resource update 通知は replay しない
- *   (= issue #117 fix 有効)
- * - set: 旧動作に戻す (= 全 event を replay)
+ *   (= issue #117 fix 有効、replay フィルタ ON)
+ * - set: 旧動作に戻す (= 全 event を replay、フィルタ OFF)
  *
  * `notifications/resources/updated` は「新着あり」hint に過ぎず、replay しても
  * client が ack 前の同一メッセージを再処理するだけ (= double dispatch)。
  * 実 message は `get_unread()` で取れるため hint の再送は不要。
  * SDK safety-net poll (30s) が取りこぼしをカバーする。
  */
-export function isResourceNotifyReplayDisabled(): boolean {
-  return process.env.MCP_RESOURCE_NOTIFY_REPLAY_DISABLED !== undefined &&
-    process.env.MCP_RESOURCE_NOTIFY_REPLAY_DISABLED !== '';
+export function isResourceNotifyFilterDisabled(): boolean {
+  return process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED !== undefined &&
+    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED !== '';
 }
 
 /**
@@ -239,7 +239,7 @@ export function isResourceNotifyReplayDisabled(): boolean {
  * - 永続化なし (= server restart で全消失、それで OK な前提)
  * - `notifications/resources/updated` は replay フィルタで除外 (= issue #117 fix)
  */
-const notificationEventStore = isResourceNotifyReplayDisabled()
+const notificationEventStore = isResourceNotifyFilterDisabled()
   ? new BoundedInMemoryEventStore()
   : new BoundedInMemoryEventStore({
       replayFilter: (msg) =>
@@ -1019,9 +1019,21 @@ export function selectNotificationTargets<S extends NotifiableSession>(
 
   // Dedup: userId で group、 各 group から 1 session 選択 (= last_active_at DESC、
   // tie-breaker createdAt DESC)
+  //
+  // lastActiveLookup は per-user 単一値 (= participants.last_active_at) なので
+  // 同一 userId への重複呼び出しは pure な無駄 round-trip。Map で memoize して
+  // O(N sessions) → O(N distinct users) の DB アクセスに抑える。
+  const lastActiveCache = new Map<string, string | null>();
+  const cachedLookup = (userId: string): string | null => {
+    if (!lastActiveCache.has(userId)) {
+      lastActiveCache.set(userId, options.lastActiveLookup!(tenantDomain, userId));
+    }
+    return lastActiveCache.get(userId)!;
+  };
+
   const byUser = new Map<string, Array<{ sid: string; lastActive: string | null; createdAt: number }>>();
   for (const [sid, session] of candidates) {
-    const lastActive = options.lastActiveLookup(tenantDomain, session.userId);
+    const lastActive = cachedLookup(session.userId);
     const arr = byUser.get(session.userId) ?? [];
     arr.push({ sid, lastActive, createdAt: session.createdAt });
     byUser.set(session.userId, arr);

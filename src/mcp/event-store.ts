@@ -49,6 +49,10 @@ export interface BoundedInMemoryEventStoreOptions {
    * クライアントが ack 前の同一メッセージを再処理するだけ (= double dispatch)。
    * 実際の message は get_unread() で取得できるため、hint の再送は不要。
    * safety-net poll (SDK 30s) が取りこぼしをカバーする。
+   *
+   * **Contract**: filter は純粋・同期・例外なしで実装すること。
+   * 現実装は filter の throw を想定していない (= try/catch なし)。
+   * 将来 filter が外部 I/O を伴う場合は非同期版の追加を検討する。
    */
   replayFilter?: (message: JSONRPCMessage) => boolean;
 }
