@@ -212,14 +212,39 @@ export function _setEditionConfigForTest(config: EditionConfig | null): void {
 }
 
 /**
+ * `notifications/resources/updated` を event store の replay 対象から除外する
+ * rollback path (= `MCP_RESOURCE_NOTIFY_REPLAY_DISABLED` 環境変数)。
+ *
+ * **binary semantic** (= PR #105 / #116 と同 convention):
+ * - unset / empty (default, new behavior): resource update 通知は replay しない
+ *   (= issue #117 fix 有効)
+ * - set: 旧動作に戻す (= 全 event を replay)
+ *
+ * `notifications/resources/updated` は「新着あり」hint に過ぎず、replay しても
+ * client が ack 前の同一メッセージを再処理するだけ (= double dispatch)。
+ * 実 message は `get_unread()` で取れるため hint の再送は不要。
+ * SDK safety-net poll (30s) が取りこぼしをカバーする。
+ */
+export function isResourceNotifyReplayDisabled(): boolean {
+  return process.env.MCP_RESOURCE_NOTIFY_REPLAY_DISABLED !== undefined &&
+    process.env.MCP_RESOURCE_NOTIFY_REPLAY_DISABLED !== '';
+}
+
+/**
  * SSE 通知 resumability 用の process-wide event store.
  * StreamableHTTPServerTransport の eventStore option に渡す。
  *
  * - GET 切断中の通知を保持 (= 再接続時 replay)
  * - bound: stream あたり 200 件 / TTL 10 分
  * - 永続化なし (= server restart で全消失、それで OK な前提)
+ * - `notifications/resources/updated` は replay フィルタで除外 (= issue #117 fix)
  */
-const notificationEventStore = new BoundedInMemoryEventStore();
+const notificationEventStore = isResourceNotifyReplayDisabled()
+  ? new BoundedInMemoryEventStore()
+  : new BoundedInMemoryEventStore({
+      replayFilter: (msg) =>
+        !('method' in msg && msg.method === 'notifications/resources/updated'),
+    });
 
 /**
  * 認証ミドルウェア

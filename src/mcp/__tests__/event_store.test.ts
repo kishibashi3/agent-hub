@@ -10,6 +10,15 @@ function msg(n: number): JSONRPCMessage {
   };
 }
 
+/** `notifications/resources/updated` 以外のメッセージ (= replayFilter テスト用) */
+function otherMsg(n: number): JSONRPCMessage {
+  return {
+    jsonrpc: '2.0',
+    method: 'notifications/tools/list_changed',
+    params: { seq: n },
+  };
+}
+
 describe('BoundedInMemoryEventStore', () => {
   describe('basic store/replay', () => {
     let store: BoundedInMemoryEventStore;
@@ -112,6 +121,62 @@ describe('BoundedInMemoryEventStore', () => {
       await store.storeEvent('s1', msg(3));
       // 古い 2 つは prune される
       expect(store.stats().totalEvents).toBe(1);
+    });
+  });
+
+  describe('replayFilter (issue #117)', () => {
+    /** `notifications/resources/updated` を replay しないフィルタ (= production 設定と同等) */
+    const noResourceNotifyFilter = (m: JSONRPCMessage): boolean =>
+      !('method' in m && m.method === 'notifications/resources/updated');
+
+    it('filter が false を返した event は replay されない', async () => {
+      const store = new BoundedInMemoryEventStore({ replayFilter: noResourceNotifyFilter });
+      const e1 = await store.storeEvent('s1', msg(1));   // resource updated → filter=false
+      await store.storeEvent('s1', otherMsg(2));          // other → filter=true
+      await store.storeEvent('s1', msg(3));               // resource updated → filter=false
+
+      const sent: string[] = [];
+      await store.replayEventsAfter(e1, {
+        send: async (_id, m) => { sent.push((m as { method: string }).method); },
+      });
+      // resource updated events are skipped; only otherMsg(2) replayed
+      expect(sent).toEqual(['notifications/tools/list_changed']);
+    });
+
+    it('filter なしなら全 event が replay される (旧動作)', async () => {
+      const store = new BoundedInMemoryEventStore(); // no filter
+      const e1 = await store.storeEvent('s1', msg(1));
+      await store.storeEvent('s1', otherMsg(2));
+      await store.storeEvent('s1', msg(3));
+
+      const sent: string[] = [];
+      await store.replayEventsAfter(e1, {
+        send: async (_id, m) => { sent.push((m as { method: string }).method); },
+      });
+      expect(sent).toEqual([
+        'notifications/tools/list_changed',
+        'notifications/resources/updated',
+      ]);
+    });
+
+    it('filter で除外した event も storeEvent / getStreamIdForEventId では引ける (ID 連続性)', async () => {
+      // event ID の連続性が崩れると Last-Event-ID ベースの resume が壊れる。
+      // filter は replay 時のみ影響し、store / index は通常通り動くことを確認。
+      const store = new BoundedInMemoryEventStore({ replayFilter: noResourceNotifyFilter });
+      const e1 = await store.storeEvent('s1', msg(1));
+      expect(await store.getStreamIdForEventId(e1)).toBe('s1');
+      expect(store.stats().totalEvents).toBe(1);
+    });
+
+    it('全 event が filter=false なら replay は空になる', async () => {
+      const store = new BoundedInMemoryEventStore({ replayFilter: noResourceNotifyFilter });
+      const e1 = await store.storeEvent('s1', msg(1));
+      await store.storeEvent('s1', msg(2));
+      await store.storeEvent('s1', msg(3));
+
+      const sent: JSONRPCMessage[] = [];
+      await store.replayEventsAfter(e1, { send: async (_id, m) => { sent.push(m); } });
+      expect(sent).toHaveLength(0);
     });
   });
 
