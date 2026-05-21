@@ -40,8 +40,9 @@ export const sendMessageTool = {
  * @param scope - テナントスコープ付き DB ハンドル
  * @param args - ツール引数（to, message）
  * @param userId - 送信者のユーザーID（X-User-Id ヘッダーから取得）
- * @param githubLogin - PAT 検証済み GitHub login (forensic audit 用、issue #21 Fix 1)。
- *   trust mode 由来 or 未設定の場合は null。messages.sender_github_login 列に書き込む。
+ * @param githubLogin - 認証済み GitHub login (forensic audit 用、issue #21 Fix 1)。
+ *   production server は PAT/trust 両 mode で non-null を渡す (trust mode: handle name = githubLogin)。
+ *   省略 or null の場合は NULL として記録される (= migration 前の既存 row との互換保持用)。
  * @returns MCP CallToolResult
  */
 export async function handleSendMessage(

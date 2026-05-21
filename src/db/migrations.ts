@@ -314,7 +314,7 @@ export function applyMigrations(db: Database.Database): void {
   }
 
   // v7 → v8: messages に sender_github_login 列を追加 (= PAT owner forensic audit、 issue #21 Fix 1)
-  // NULL 許容: trust mode 由来 or migration 前の既存 row は NULL のまま。
+  // NULL 許容: migration 前の既存 row のみ NULL。production server は PAT/trust 両 mode で non-null を書き込む。
   if (currentVersion < 8) {
     runMigration(db, {
       version: 8,

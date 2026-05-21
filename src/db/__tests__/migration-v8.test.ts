@@ -227,6 +227,7 @@ describe('sendMessage sender_github_login write (issue #21 Fix 1)', () => {
   });
 
   it('PAT mode: senderGithubLogin を渡すと messages.sender_github_login に記録される', () => {
+    // PAT mode: githubLogin = 検証済み GitHub login (PAT owner)
     const input: SendMessageInput = { to: 'bob', message: 'PAT mode message' };
     const msg = sendMessage(db, 'default', input, 'alice', 'kishibashi3');
 
@@ -237,8 +238,23 @@ describe('sendMessage sender_github_login write (issue #21 Fix 1)', () => {
     expect(row.sender_github_login).toBe('kishibashi3');
   });
 
-  it('trust mode: senderGithubLogin を渡さないと NULL になる', () => {
+  it('trust mode: senderGithubLogin = handle name (non-null) で記録される', () => {
+    // trust mode (server.ts L443): githubLogin = handleName.slice(1) = handle の @ 除去形
+    // → production server は trust mode でも non-null を書き込む
     const input: SendMessageInput = { to: 'bob', message: 'trust mode message' };
+    const msg = sendMessage(db, 'default', input, 'alice', 'alice'); // githubLogin = handle name
+
+    const row = db
+      .prepare('SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?')
+      .get('default', msg.id) as { sender_github_login: string | null };
+
+    expect(row.sender_github_login).toBe('alice');
+  });
+
+  it('senderGithubLogin 省略時は NULL になる (= 直接 API 呼び出し / migration 前 row 互換)', () => {
+    // 注: production server は PAT/trust 両 mode で non-null を渡すため、
+    // この NULL path は migration 前の既存 row と legacy direct-API 呼び出しのみ。
+    const input: SendMessageInput = { to: 'bob', message: 'no githubLogin provided' };
     const msg = sendMessage(db, 'default', input, 'alice');
 
     const row = db

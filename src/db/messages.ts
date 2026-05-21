@@ -8,7 +8,8 @@ import { randomUUID } from 'crypto';
  * - チーム: to がチーム名の場合、メンバー全員に配信（送信者自身は除く）
  *
  * @param senderGithubLogin - PAT owner の GitHub login (forensic audit 用、issue #21 Fix 1)。
- *   trust mode 由来 or 未設定の場合は null。messages.sender_github_login 列に書き込む。
+ *   production server は PAT/trust 両 mode で non-null を渡す (trust mode: handle name = githubLogin)。
+ *   省略 or null の場合は NULL として記録される (= migration 前の既存 row との互換保持)。
  */
 export function sendMessage(
   db: Database,

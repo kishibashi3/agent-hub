@@ -12,7 +12,7 @@
 --      - send_message / get_messages / mark_as_read / register / get_history で update
 --      - is_online (subscribe flag) と組み合わせて idle vs active を区別
 -- v8: messages に sender_github_login 列を追加（PAT owner の forensic audit、issue #21 Fix 1）
---      - NULL 許容: trust mode 由来 or migration 前の既存 row は NULL
+--      - NULL 許容: migration 前の既存 row のみ NULL (production server は PAT/trust 両 mode で non-null を書き込む)
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -82,7 +82,7 @@ CREATE TABLE messages (
   sender TEXT NOT NULL,
   recipient TEXT NOT NULL,
   body TEXT NOT NULL,
-  sender_github_login TEXT,        -- v8: PAT owner の GitHub login (forensic audit)。NULL = trust mode or migration 前 row
+  sender_github_login TEXT,        -- v8: PAT owner の GitHub login (forensic audit)。NULL = migration 前の既存 row のみ
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
