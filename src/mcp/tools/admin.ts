@@ -13,6 +13,19 @@ import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
+/**
+ * list_sessions_by_user ハンドラに渡す session の最小 shape。
+ * Session interface (server.ts) から transport / server を除いた observable フィールドのみ。
+ * テストでは実 Session を組み立てず純粋関数として検証できる (= PresenceSession と同じ設計方針)。
+ */
+export interface SessionView {
+  tenantDomain: string;
+  userId: string;
+  githubLogin: string;
+  subscribedUris: ReadonlySet<string>;
+  createdAt: number; // Date.now() at session creation
+}
+
 const ADMIN_HANDLE = '@admin';
 
 function ensureAdmin(userId: string): CallToolResult | null {
@@ -173,4 +186,110 @@ export async function handleGetUserHistory(
     .all(scope.tenantId, handleName, handleName, limit) as unknown[];
 
   return ok({ user: handleName, count: messages.length, messages });
+}
+
+// ---- list_sessions_by_user --------------------------------------------------
+
+const listSessionsByUserInput = z.object({
+  name: z.string().min(1, 'name required'),
+  /**
+   * tenant_id でフィルタ。 null / 省略 = 全 tenant を横断検索。
+   * 指定する場合は X-Tenant-Id ヘッダー値 (例: 'default') と一致させる。
+   */
+  tenant: z.string().nullable().optional(),
+});
+
+export const listSessionsByUserTool = {
+  name: 'list_sessions_by_user',
+  description:
+    '[admin] 指定ユーザーの active session 一覧を返す。zombie session 蓄積の観測・issue #114 verify・incident response に使用。tenant 省略 = 全 tenant 横断。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: {
+        type: 'string',
+        description: '対象 participant 名 (@ あり/なし両方可)',
+      },
+      tenant: {
+        type: 'string',
+        nullable: true,
+        description: 'tenant_id でフィルタ (省略 / null = 全 tenant)',
+      },
+    },
+    required: ['name'],
+  },
+};
+
+/**
+ * list_sessions_by_user ハンドラ。
+ *
+ * @param scope          - テナントスコープ付き DB ハンドル (last_active_at lookup に使用)
+ * @param args           - ツール引数 (name, tenant?)
+ * @param userId         - 呼び出し元ユーザー ID (@ 付き canonical)
+ * @param sessionEntries - sessions Map の Iterable (server.ts から渡す)。
+ *                         SessionView の superset であれば型互換 (= 実 Session を直接渡せる)。
+ */
+export async function handleListSessionsByUser(
+  scope: TenantScope,
+  args: unknown,
+  userId: string,
+  sessionEntries: Iterable<readonly [string, SessionView]>
+): Promise<CallToolResult> {
+  const denied = ensureAdmin(userId);
+  if (denied) return denied;
+
+  let input: z.infer<typeof listSessionsByUserInput>;
+  try {
+    input = listSessionsByUserInput.parse(args);
+  } catch (error) {
+    return errorResult(
+      'list_sessions_by_user failed',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  const handleName = input.name.startsWith('@') ? input.name : `@${input.name}`;
+  const tenantFilter = input.tenant ?? null;
+
+  const results: Array<{
+    session_id: string;
+    tenant_id: string;
+    user: string;
+    github_login: string;
+    created_at: string;
+    last_active_at: string | null;
+    subscribed_uris: string[];
+    is_alive: boolean;
+  }> = [];
+
+  for (const [sid, session] of sessionEntries) {
+    if (session.userId !== handleName) continue;
+    if (tenantFilter !== null && session.tenantDomain !== tenantFilter) continue;
+
+    // participants.last_active_at を DB から直接 lookup (cross-tenant 対応のため scope.db を使用)
+    const participantRow = scope.db
+      .prepare(
+        `SELECT last_active_at FROM participants WHERE tenant_id = ? AND name = ?`
+      )
+      .get(session.tenantDomain, session.userId) as
+      | { last_active_at: string | null }
+      | undefined;
+
+    results.push({
+      session_id: sid,
+      tenant_id: session.tenantDomain,
+      user: session.userId,
+      github_login: session.githubLogin,
+      created_at: new Date(session.createdAt).toISOString(),
+      last_active_at: participantRow?.last_active_at ?? null,
+      subscribed_uris: Array.from(session.subscribedUris),
+      // sessions Map にある = SSE alive (= dead session は ping loop が Map から削除済み)
+      is_alive: true,
+    });
+  }
+
+  // created_at DESC (最近 create された session を先頭に)
+  results.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  return ok({ user: handleName, tenant: tenantFilter, count: results.length, sessions: results });
 }

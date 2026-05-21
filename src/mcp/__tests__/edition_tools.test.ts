@@ -5,8 +5,8 @@ import { resolveEdition } from '../../edition.js';
 /**
  * ListTools で露出される tool 一覧が edition によって変わることを単体検証する。
  *
- * - CE: 全 tool (base 9 + admin 2 + CE-operator 3 = 14) が露出
- * - PE: CE-operator 3 (list_tenants / get_tenant / delete_tenant) が除外され 11 件
+ * - CE: 全 tool (base 9 + admin 3 + CE-operator 3 = 15) が露出
+ * - PE: CE-operator 3 (list_tenants / get_tenant / delete_tenant) が除外され 12 件
  *
  * CallTool 側の defense-in-depth (= PE で CE-operator tool 名を直接 call して error)
  * は createMcpServer 内 closure のため本 file では cover しない。E2E は別途。
@@ -29,6 +29,7 @@ describe('getAvailableTools (edition × tool list)', () => {
     // admin
     expect(ns).toContain('delete_user');
     expect(ns).toContain('get_user_history');
+    expect(ns).toContain('list_sessions_by_user');
     // CE-operator
     expect(ns).toContain('list_tenants');
     expect(ns).toContain('get_tenant');
@@ -61,6 +62,7 @@ describe('getAvailableTools (edition × tool list)', () => {
     // admin tools は PE でも保持 (= 1 default tenant 内での admin 操作は意味がある)
     expect(ns).toContain('delete_user');
     expect(ns).toContain('get_user_history');
+    expect(ns).toContain('list_sessions_by_user');
   });
 
   it('CE と PE で件数の差 = 3 (= CE-operator tools の数)', () => {
