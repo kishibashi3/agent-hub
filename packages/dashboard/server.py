@@ -853,9 +853,80 @@ def get_timeline_data(range_label="7d"):
     return {"range_label": range_label, "buckets": buckets, "total": total}
 
 
+def get_agent_activity_data(range_label="7d"):
+    """Time-bucket agent activity data (= issue #113)。
+
+    is_online は sessions Map (runtime) で保持されており SQLite には永続化されていないため、
+    messages テーブルの COUNT(DISTINCT sender) を "active" の proxy として使用する。
+    - active:    そのバケット内にメッセージを送信した distinct agent 数
+    - registered: participants の non-deleted 総数 (= 現在値; 歴史的変化は非追跡)
+    - idle:      registered - active の近似値 (最低 0)
+
+    Args:
+        range_label: "24h" / "7d" / "30d" のいずれか
+
+    Returns:
+        dict: {range_label, buckets: [{time, active, idle}], registered}
+    """
+    if range_label == "24h":
+        bucket_format = "%Y-%m-%d %H:00"
+        lookback_sql = "datetime('now', '-24 hours')"
+        limit = 24
+    elif range_label == "30d":
+        bucket_format = "%Y-%m-%d"
+        lookback_sql = "datetime('now', '-30 days')"
+        limit = 30
+    else:
+        range_label = "7d"
+        bucket_format = "%Y-%m-%d %H:00"
+        lookback_sql = "datetime('now', '-7 days')"
+        limit = 168
+
+    if TENANT is None:
+        active_sql = f"""
+            SELECT strftime('{bucket_format}', created_at) AS bucket,
+                   COUNT(DISTINCT sender) AS c
+            FROM messages
+            WHERE datetime(created_at) >= {lookback_sql}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            LIMIT ?
+        """
+        active_params = (limit,)
+        reg_sql = "SELECT COUNT(*) FROM participants WHERE deleted_at IS NULL"
+        reg_params = ()
+    else:
+        active_sql = f"""
+            SELECT strftime('{bucket_format}', created_at) AS bucket,
+                   COUNT(DISTINCT sender) AS c
+            FROM messages
+            WHERE tenant_id = ? AND datetime(created_at) >= {lookback_sql}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            LIMIT ?
+        """
+        active_params = (TENANT, limit)
+        reg_sql = "SELECT COUNT(*) FROM participants WHERE tenant_id = ? AND deleted_at IS NULL"
+        reg_params = (TENANT,)
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute(active_sql, active_params)
+    buckets = [{"time": row[0], "active": row[1]} for row in cur.fetchall()]
+    cur.execute(reg_sql, reg_params)
+    registered = cur.fetchone()[0]
+    con.close()
+
+    for b in buckets:
+        b["idle"] = max(0, registered - b["active"])
+
+    return {"range_label": range_label, "buckets": buckets, "registered": registered}
+
+
 def render_timeline(range_label="7d"):
     """Timeline page (= View 4) の body HTML を build。 D3.js で line chart 描画。"""
     d = get_timeline_data(range_label)
+    a = get_agent_activity_data(range_label)
     # active class for range selector
     range_buttons = []
     for r in ["24h", "7d", "30d"]:
@@ -865,6 +936,8 @@ def render_timeline(range_label="7d"):
         )
     range_nav = " ".join(range_buttons)
     buckets_json = json.dumps(d["buckets"])
+    agent_buckets_json = json.dumps(a["buckets"])
+    registered = a["registered"]
 
     return f"""<div class='view-content'>
 <h2>Timeline — message volume over time</h2>
@@ -914,6 +987,99 @@ if (tlBuckets.length === 0) {{
     .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end').attr('dx', '-0.5em').attr('dy', '0.5em')
     .attr('font-size', '10px');
 }}
+</script>
+
+<h2 style='margin-top:40px'>Timeline — agent activity over time</h2>
+<div style='margin-bottom:8px'>
+  <span class='dim'>registered agents (current): <strong>{registered}</strong></span>
+  &nbsp;
+  <span style='display:inline-flex;align-items:center;gap:4px;margin-left:16px'>
+    <span style='display:inline-block;width:12px;height:12px;background:var(--accent);opacity:0.9;border-radius:2px'></span>
+    <span class='dim'>active (sent msg in bucket)</span>
+  </span>
+  <span style='display:inline-flex;align-items:center;gap:4px;margin-left:12px'>
+    <span style='display:inline-block;width:12px;height:12px;background:#888;opacity:0.45;border-radius:2px'></span>
+    <span class='dim'>idle (registered − active)</span>
+  </span>
+</div>
+<p class='dim' style='font-size:11px;margin:0 0 8px'>
+  ※ is_online は runtime 非永続のため、"active" = そのバケット内に送信した distinct agent 数で近似
+</p>
+<div id='agent-activity-chart' style='width:100%; height:320px; margin-top:8px'></div>
+<script>
+(function() {{
+  const agBuckets = {agent_buckets_json};
+  const agRegistered = {registered};
+  const agContainer = document.getElementById('agent-activity-chart');
+  const agW = agContainer.offsetWidth, agH = agContainer.offsetHeight;
+  const agMargin = {{top: 20, right: 30, bottom: 60, left: 50}};
+  const agIW = agW - agMargin.left - agMargin.right;
+  const agIH = agH - agMargin.top - agMargin.bottom;
+
+  const agSvg = d3.select('#agent-activity-chart').append('svg')
+    .attr('width', agW).attr('height', agH)
+    .append('g').attr('transform', `translate(${{agMargin.left}},${{agMargin.top}})`);
+
+  if (agBuckets.length === 0) {{
+    agSvg.append('text').attr('x', agIW/2).attr('y', agIH/2).attr('text-anchor', 'middle')
+      .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
+      .text('No agent activity in selected range');
+  }} else {{
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const agX = d3.scaleBand().domain(agBuckets.map(d => d.time)).range([0, agIW]).padding(0.1);
+    const yMax = Math.max(agRegistered, d3.max(agBuckets, d => d.active + d.idle) || 1);
+    const agY = d3.scaleLinear().domain([0, yMax]).range([agIH, 0]).nice();
+
+    // stacked bars: active (bottom, accent) + idle (top, grey)
+    // active bars start from the axis baseline
+    agSvg.selectAll('.bar-active').data(agBuckets).join('rect')
+      .attr('class', 'bar-active')
+      .attr('x', d => agX(d.time))
+      .attr('y', d => agY(d.active))
+      .attr('width', agX.bandwidth())
+      .attr('height', d => agIH - agY(d.active))
+      .attr('fill', accent).attr('opacity', 0.85);
+
+    // idle bars stacked on top of active (from active to active+idle = registered)
+    agSvg.selectAll('.bar-idle').data(agBuckets).join('rect')
+      .attr('class', 'bar-idle')
+      .attr('x', d => agX(d.time))
+      .attr('y', d => agY(d.idle + d.active))
+      .attr('width', agX.bandwidth())
+      .attr('height', d => agY(d.active) - agY(d.idle + d.active))
+      .attr('fill', '#888').attr('opacity', 0.35);
+
+    // tooltips
+    agSvg.selectAll('.bar-active').append('title')
+      .text(d => `${{d.time}}\nactive: ${{d.active}}\nidle: ${{d.idle}}`);
+    agSvg.selectAll('.bar-idle').append('title')
+      .text(d => `${{d.time}}\nactive: ${{d.active}}\nidle: ${{d.idle}}`);
+
+    // dashed reference line at registered count
+    if (agRegistered > 0) {{
+      agSvg.append('line')
+        .attr('x1', 0).attr('x2', agIW)
+        .attr('y1', agY(agRegistered)).attr('y2', agY(agRegistered))
+        .attr('stroke', '#aaa').attr('stroke-dasharray', '4,3').attr('stroke-width', 1);
+      agSvg.append('text')
+        .attr('x', agIW + 4).attr('y', agY(agRegistered) + 4)
+        .attr('font-size', '10px')
+        .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
+        .text(`registered (${{agRegistered}})`);
+    }}
+
+    // Y axis (integer ticks)
+    agSvg.append('g').call(d3.axisLeft(agY).ticks(Math.min(yMax, 6)).tickFormat(d3.format('d')));
+
+    // X axis
+    const agTickEvery = Math.max(1, Math.floor(agBuckets.length / 12));
+    const agXAxis = d3.axisBottom(agX)
+      .tickValues(agBuckets.filter((_, i) => i % agTickEvery === 0).map(d => d.time));
+    agSvg.append('g').attr('transform', `translate(0,${{agIH}})`).call(agXAxis)
+      .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end')
+      .attr('dx', '-0.5em').attr('dy', '0.5em').attr('font-size', '10px');
+  }}
+}})();
 </script>
 </div>"""
 
