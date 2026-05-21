@@ -11,13 +11,14 @@ import type { SendMessageInput } from '../../types/schema.js';
 /**
  * issue #21 Fix 1 — schema v7 → v8 migration test
  *
- * 既存 v7 DB に v8 migration を適用したとき、
+ * v7 DB に v8 migration を単体適用したとき、
  * - `messages.sender_github_login` column が追加され
  * - 既存 row は sender_github_login = NULL で初期化され
  * - schema_version table に v8 が記録される
  * ことを verify する。
  *
- * また、send_message が sender_github_login を正しく書き込むことを確認する。
+ * 注: v9 以降は applyMigrations(db) を使うと sender_github_login → sender_login に rename される。
+ * このファイルは v8 step の isolation test として runMigration 直呼びを使う。
  */
 describe('migration v7 → v8 (issue #21 Fix 1: messages.sender_github_login)', () => {
   let db: Database.Database;
@@ -126,7 +127,7 @@ describe('migration v7 → v8 (issue #21 Fix 1: messages.sender_github_login)', 
     });
   }
 
-  it('v7 → v8 migration で messages.sender_github_login column が追加される', () => {
+  it('v7 → v8 migration (単体) で messages.sender_github_login column が追加される', () => {
     buildV7Schema();
     expect(getCurrentVersion(db)).toBe(7);
 
@@ -148,8 +149,16 @@ describe('migration v7 → v8 (issue #21 Fix 1: messages.sender_github_login)', 
       `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
     ).run('default', legacyMsgId, '@alice', '@bob', 'legacy message');
 
-    // v8 migration 適用
-    applyMigrations(db);
+    // v8 migration のみ単体適用 (applyMigrations は v9 まで走るため直呼び)
+    runMigration(db, {
+      version: 8,
+      description: 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)',
+      sql: `
+        ALTER TABLE messages ADD COLUMN sender_github_login TEXT;
+        INSERT INTO schema_version (version, description)
+        VALUES (8, 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
+      `,
+    });
     expect(getCurrentVersion(db)).toBe(8);
 
     // sender_github_login column が増えている
@@ -169,41 +178,42 @@ describe('migration v7 → v8 (issue #21 Fix 1: messages.sender_github_login)', 
     expect(row.sender_github_login).toBeNull();
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v8 まで上がり sender_github_login column が存在する', () => {
+  it('v0 (= fresh install) では schema.sql から直接 v9 まで上がり sender_login column が存在する', () => {
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(8);
+    expect(getCurrentVersion(db)).toBe(9);
 
-    // sender_github_login column が schema.sql 由来で存在する
+    // sender_login column が schema.sql 由来で存在する (v9 名)
     const columns = db
       .prepare(`PRAGMA table_info(messages)`)
       .all() as { name: string }[];
-    expect(columns.map((c) => c.name)).toContain('sender_github_login');
+    expect(columns.map((c) => c.name)).toContain('sender_login');
+    expect(columns.map((c) => c.name)).not.toContain('sender_github_login');
   });
 
-  it('v8 → v8 で no-op (= idempotent)', () => {
+  it('v9 → v9 で no-op (= idempotent)', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(8);
+    expect(getCurrentVersion(db)).toBe(9);
 
-    // 再適用しても version は 8 のまま
+    // 再適用しても version は 9 のまま
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(8);
+    expect(getCurrentVersion(db)).toBe(9);
 
-    // schema_version table は v8 row が重複していない
+    // schema_version table は v9 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(8) as { version: number }[];
+      .all(9) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });
 
 // ============================================================
-// send_message での sender_github_login 書き込み確認 (issue #21 Fix 1)
+// send_message での sender_login 書き込み確認 (issue #127)
 // ============================================================
 
-describe('sendMessage sender_github_login write (issue #21 Fix 1)', () => {
+describe('sendMessage sender_login write (issue #127)', () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -226,53 +236,53 @@ describe('sendMessage sender_github_login write (issue #21 Fix 1)', () => {
     db.close();
   });
 
-  it('PAT mode: senderGithubLogin を渡すと messages.sender_github_login に記録される', () => {
-    // PAT mode: githubLogin = 検証済み GitHub login (PAT owner)
+  it('PAT mode: senderLogin を渡すと messages.sender_login に記録される', () => {
+    // PAT mode: login = 検証済み GitHub login (PAT owner)
     const input: SendMessageInput = { to: 'bob', message: 'PAT mode message' };
     const msg = sendMessage(db, 'default', input, 'alice', 'kishibashi3');
 
     const row = db
-      .prepare('SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?')
-      .get('default', msg.id) as { sender_github_login: string | null };
+      .prepare('SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?')
+      .get('default', msg.id) as { sender_login: string | null };
 
-    expect(row.sender_github_login).toBe('kishibashi3');
+    expect(row.sender_login).toBe('kishibashi3');
   });
 
-  it('trust mode: senderGithubLogin = handle name (non-null) で記録される', () => {
-    // trust mode (server.ts L443): githubLogin = handleName.slice(1) = handle の @ 除去形
+  it('trust mode: senderLogin = handle name (non-null) で記録される', () => {
+    // trust mode (server.ts L443): login = handleName.slice(1) = handle の @ 除去形
     // → production server は trust mode でも non-null を書き込む
     const input: SendMessageInput = { to: 'bob', message: 'trust mode message' };
-    const msg = sendMessage(db, 'default', input, 'alice', 'alice'); // githubLogin = handle name
+    const msg = sendMessage(db, 'default', input, 'alice', 'alice'); // senderLogin = handle name
 
     const row = db
-      .prepare('SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?')
-      .get('default', msg.id) as { sender_github_login: string | null };
+      .prepare('SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?')
+      .get('default', msg.id) as { sender_login: string | null };
 
-    expect(row.sender_github_login).toBe('alice');
+    expect(row.sender_login).toBe('alice');
   });
 
-  it('senderGithubLogin 省略時は NULL になる (= 直接 API 呼び出し / migration 前 row 互換)', () => {
+  it('senderLogin 省略時は NULL になる (= 直接 API 呼び出し / migration 前 row 互換)', () => {
     // 注: production server は PAT/trust 両 mode で non-null を渡すため、
     // この NULL path は migration 前の既存 row と legacy direct-API 呼び出しのみ。
-    const input: SendMessageInput = { to: 'bob', message: 'no githubLogin provided' };
+    const input: SendMessageInput = { to: 'bob', message: 'no senderLogin provided' };
     const msg = sendMessage(db, 'default', input, 'alice');
 
     const row = db
-      .prepare('SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?')
-      .get('default', msg.id) as { sender_github_login: string | null };
+      .prepare('SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?')
+      .get('default', msg.id) as { sender_login: string | null };
 
-    expect(row.sender_github_login).toBeNull();
+    expect(row.sender_login).toBeNull();
   });
 
-  it('senderGithubLogin = null を明示しても NULL になる', () => {
+  it('senderLogin = null を明示しても NULL になる', () => {
     const input: SendMessageInput = { to: 'bob', message: 'null explicit' };
     const msg = sendMessage(db, 'default', input, 'alice', null);
 
     const row = db
-      .prepare('SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?')
-      .get('default', msg.id) as { sender_github_login: string | null };
+      .prepare('SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?')
+      .get('default', msg.id) as { sender_login: string | null };
 
-    expect(row.sender_github_login).toBeNull();
+    expect(row.sender_login).toBeNull();
   });
 
   it('cross-persona override: override handle 送信者でも PAT owner が記録される', () => {
@@ -283,25 +293,25 @@ describe('sendMessage sender_github_login write (issue #21 Fix 1)', () => {
     );
 
     const input: SendMessageInput = { to: 'alice', message: 'review comment' };
-    // userId = '@reviewer' (override handle)、githubLogin = 'kishibashi3' (PAT owner)
+    // userId = '@reviewer' (override handle)、senderLogin = 'kishibashi3' (PAT owner)
     const msg = sendMessage(db, 'default', input, 'reviewer', 'kishibashi3');
 
     expect(msg.sender).toBe('@reviewer');
 
     const row = db
-      .prepare('SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?')
-      .get('default', msg.id) as { sender_github_login: string | null };
+      .prepare('SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?')
+      .get('default', msg.id) as { sender_login: string | null };
 
     // PAT owner が記録されている (= cross-persona override の forensic trail)
-    expect(row.sender_github_login).toBe('kishibashi3');
+    expect(row.sender_login).toBe('kishibashi3');
   });
 
-  it('Message 型は sender_github_login フィールドを含む', () => {
+  it('Message 型は sender_login フィールドを含む', () => {
     const input: SendMessageInput = { to: 'bob', message: 'type check' };
     const msg = sendMessage(db, 'default', input, 'alice', 'kishibashi3');
 
-    // Message 型として sender_github_login にアクセスできる
-    expect(msg).toHaveProperty('sender_github_login');
-    expect(msg.sender_github_login).toBe('kishibashi3');
+    // Message 型として sender_login にアクセスできる
+    expect(msg).toHaveProperty('sender_login');
+    expect(msg.sender_login).toBe('kishibashi3');
   });
 });

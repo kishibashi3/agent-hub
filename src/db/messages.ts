@@ -7,8 +7,8 @@ import { randomUUID } from 'crypto';
  * - DM: to が個人名の場合
  * - チーム: to がチーム名の場合、メンバー全員に配信（送信者自身は除く）
  *
- * @param senderGithubLogin - PAT owner の GitHub login (forensic audit 用、issue #21 Fix 1)。
- *   production server は PAT/trust 両 mode で non-null を渡す (trust mode: handle name = githubLogin)。
+ * @param senderLogin - auth login (PAT owner 等、forensic audit 用、issue #127)。
+ *   production server は PAT/trust 両 mode で non-null を渡す (trust mode: handle name = login)。
  *   省略 or null の場合は NULL として記録される (= migration 前の既存 row との互換保持)。
  */
 export function sendMessage(
@@ -16,7 +16,7 @@ export function sendMessage(
   tenantId: string,
   input: SendMessageInput,
   sender: string,
-  senderGithubLogin?: string | null
+  senderLogin?: string | null
 ): Message {
   const senderName = sender.startsWith('@') ? sender : `@${sender}`;
   const recipientName = input.to.startsWith('@') ? input.to : `@${input.to}`;
@@ -61,11 +61,11 @@ export function sendMessage(
   // メッセージを作成
   const messageId = randomUUID();
   const now = new Date().toISOString();
-  const githubLogin = senderGithubLogin ?? null;
+  const login = senderLogin ?? null;
 
   db.prepare(
-    'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_github_login, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(tenantId, messageId, senderName, recipientName, input.message, githubLogin, now);
+    'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_login, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(tenantId, messageId, senderName, recipientName, input.message, login, now);
 
   const message = db
     .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')

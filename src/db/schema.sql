@@ -13,6 +13,7 @@
 --      - is_online (subscribe flag) と組み合わせて idle vs active を区別
 -- v8: messages に sender_github_login 列を追加（PAT owner の forensic audit、issue #21 Fix 1）
 --      - NULL 許容: migration 前の既存 row のみ NULL (production server は PAT/trust 両 mode で non-null を書き込む)
+-- v9: messages.sender_github_login → sender_login rename (auth provider agnostic, issue #127)
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -22,7 +23,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (8, 'agent-hub v8: add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
+VALUES (9, 'agent-hub v9: rename messages.sender_github_login to sender_login (issue #127)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -82,7 +83,7 @@ CREATE TABLE messages (
   sender TEXT NOT NULL,
   recipient TEXT NOT NULL,
   body TEXT NOT NULL,
-  sender_github_login TEXT,        -- v8: PAT owner の GitHub login (forensic audit)。NULL = migration 前の既存 row のみ
+  sender_login TEXT,               -- v8/v9: auth login (PAT owner 等、forensic audit)。NULL = migration 前の既存 row のみ
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
