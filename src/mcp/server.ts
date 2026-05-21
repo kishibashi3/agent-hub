@@ -1286,7 +1286,7 @@ function createMcpServer(): Server {
       case 'delete_team':
         return await handleDeleteTeam(scope, args, userId);
       case 'send_message':
-        return await handleSendMessage(scope, args, userId);
+        return await handleSendMessage(scope, args, userId, githubLogin);
       case 'get_messages':
         return await handleGetMessages(scope, args, userId);
       case 'get_history':

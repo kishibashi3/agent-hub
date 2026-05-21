@@ -1,4 +1,4 @@
--- agent-hub スキーマ v7
+-- agent-hub スキーマ v8
 -- MCP Server 用。参加者・チーム・メッセージ・既読管理 (multi-tenant)。
 -- v3: participants に owner 列を追加（PAT 認証下のハンドル所有者を記録）
 -- v4: participants に mode 列を追加（peer の worker type: stateful/stateless/global）
@@ -11,6 +11,8 @@
 -- v7: participants に last_active_at 列を追加（productive activity timestamp）
 --      - send_message / get_messages / mark_as_read / register / get_history で update
 --      - is_online (subscribe flag) と組み合わせて idle vs active を区別
+-- v8: messages に sender_github_login 列を追加（PAT owner の forensic audit、issue #21 Fix 1）
+--      - NULL 許容: migration 前の既存 row のみ NULL (production server は PAT/trust 両 mode で non-null を書き込む)
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -20,7 +22,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (7, 'agent-hub v7: add last_active_at column to participants for activity precision');
+VALUES (8, 'agent-hub v8: add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -80,6 +82,7 @@ CREATE TABLE messages (
   sender TEXT NOT NULL,
   recipient TEXT NOT NULL,
   body TEXT NOT NULL,
+  sender_github_login TEXT,        -- v8: PAT owner の GitHub login (forensic audit)。NULL = migration 前の既存 row のみ
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)

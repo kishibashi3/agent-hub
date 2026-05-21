@@ -36,16 +36,20 @@ export const sendMessageTool = {
 
 /**
  * send_message ツールのハンドラー
- * 
- * @param db - データベースインスタンス
+ *
+ * @param scope - テナントスコープ付き DB ハンドル
  * @param args - ツール引数（to, message）
  * @param userId - 送信者のユーザーID（X-User-Id ヘッダーから取得）
+ * @param githubLogin - 認証済み GitHub login (forensic audit 用、issue #21 Fix 1)。
+ *   production server は PAT/trust 両 mode で non-null を渡す (trust mode: handle name = githubLogin)。
+ *   省略 or null の場合は NULL として記録される (= migration 前の既存 row との互換保持用)。
  * @returns MCP CallToolResult
  */
 export async function handleSendMessage(
   scope: TenantScope,
   args: unknown,
-  userId: string
+  userId: string,
+  githubLogin?: string | null
 ): Promise<CallToolResult> {
   try {
     // 引数のバリデーション
@@ -58,7 +62,7 @@ export async function handleSendMessage(
     scope.updateLastActiveAt(sender);
 
     // メッセージ送信
-    const message = scope.sendMessage(input, sender);
+    const message = scope.sendMessage(input, sender, githubLogin);
 
     // リアルタイム通知発火（best-effort、失敗しても送信自体は成功扱い）
     // Inbox URI に tenant 識別子は載せず、dispatch 側で scope.tenantId と

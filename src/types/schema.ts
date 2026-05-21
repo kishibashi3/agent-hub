@@ -63,6 +63,9 @@ export const messageSchema = z.object({
   sender: z.string(),
   recipient: z.string(),
   body: z.string(),
+  // v8: PAT owner の GitHub login。NULL = migration 前の既存 row のみ (issue #21 Fix 1)
+  // production server は PAT/trust 両 mode で non-null を書き込む (trust mode: githubLogin = handle name)
+  sender_github_login: z.string().nullable(),
   created_at: z.string(),
 });
 

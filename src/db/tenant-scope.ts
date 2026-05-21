@@ -39,7 +39,7 @@ export interface TenantScope {
   updateLastActiveAt(name: string): void;
 
   // messages
-  sendMessage(input: SendMessageInput, sender: string): Message;
+  sendMessage(input: SendMessageInput, sender: string, senderGithubLogin?: string | null): Message;
   getMessage(messageId: string, requester: string): Message;
   getUnreadMessages(reader: string): Message[];
   getHistory(input: GetHistoryInput, requester: string): Message[];
@@ -82,7 +82,8 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
     updateLastActiveAt: (name) => P.updateLastActiveAt(db, tenantId, name),
 
     // messages
-    sendMessage: (input, sender) => M.sendMessage(db, tenantId, input, sender),
+    sendMessage: (input, sender, senderGithubLogin) =>
+      M.sendMessage(db, tenantId, input, sender, senderGithubLogin),
     getMessage: (messageId, requester) =>
       M.getMessage(db, tenantId, messageId, requester),
     getUnreadMessages: (reader) => M.getUnreadMessages(db, tenantId, reader),
