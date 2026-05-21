@@ -122,6 +122,27 @@ PR の review → approval → merge において、author / reviewer / operator
 
 > Note on L0/L1/L2 dual usage: 同 label が本 doc では **発話レベル** (§1 発話レベル分類) と **merge 範囲** (§Merge protocol で codify される CLAUDE.md Conventions の merge actor split) の **2 文脈** で使われる。 両者は同じ「自律性 grading 思想」 を共有するが、 概念は独立 (= 発話 L0 ≠ merge L0)。 文脈で判別すること。
 
+## External Validation: Anthropic Three-Agent Harness との独立収束 (2026-05-22)
+
+Anthropic が 2026-05 に公式推奨した production multi-agent pattern ("Three-Agent Harness") が agent-hub の設計と **独立収束** していることが確認された。
+
+| Anthropic Three-Agent Harness | agent-hub 対応 peer |
+|---|---|
+| **Planner agent** — 200+ アイテムの persistent contract を保持 | `@planner` — ecosystem backlog + task dispatch |
+| **Generator agent** — "premature completion に抵抗" という指示を持つ実行 agent | `@researcher` / `@deep-research` — 調査専門 (実装しない) |
+| **Evaluator agent** — 独立した基準で品質評価 (self-assessment inflation の排除) | `@reviewer` — fresh context review + LGTM ✅ |
+
+Anthropic のハンドオフ方式: Git commit + progress notes の structured artifact 経由 (continuous shared context ではない)  
+agent-hub のハンドオフ方式: GitHub PR + DM heads-up (同一 primitive での async coordination)
+
+**含意**: 両者が異なる starting point から同一設計パターンに到達した。これは "co-presence peer mesh" が C-type (共在型) として独自の価値を持つと同時に、specialist 分業 + quality gate という普遍的な multi-agent 設計原則とも整合していることを示す。C-type のユニークな差別化は **persistent presence + transparent asymmetry + self-initiated action** に残る。
+
+> 注: Anthropic の Generator agent には "premature completion に抵抗する" という明示的な指示がある。agent-hub の @researcher / @deep-research には現時点でこの指示は未移植。将来的に CLAUDE.md への追加を検討。
+
+出典: Anthropic Code with Claude 2026 session materials / deep-research `research-archive/2026-05-22-claude-mythos-agent-hub-deep.md` § S2
+
+---
+
 ## 関連
 
 - **ADR (正本)**: [`decisions/2026-05-18-peer-mesh-architecture-decision.md`](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — Peer-Mesh Architecture with Transparent Asymmetry(§I Transparent Asymmetry / §II Failure Visibility / §III Decline Capability)
