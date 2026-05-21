@@ -134,7 +134,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 8;
+  const targetVersion = 9;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -323,6 +323,19 @@ export function applyMigrations(db: Database.Database): void {
         ALTER TABLE messages ADD COLUMN sender_github_login TEXT;
         INSERT INTO schema_version (version, description)
         VALUES (8, 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
+      `,
+    });
+  }
+
+  // v8 → v9: messages.sender_github_login → sender_login rename (auth provider agnostic、 issue #127)
+  if (currentVersion < 9) {
+    runMigration(db, {
+      version: 9,
+      description: 'rename messages.sender_github_login to sender_login (issue #127)',
+      sql: `
+        ALTER TABLE messages RENAME COLUMN sender_github_login TO sender_login;
+        INSERT INTO schema_version (version, description)
+        VALUES (9, 'rename messages.sender_github_login to sender_login (issue #127)');
       `,
     });
   }
