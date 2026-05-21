@@ -1,8 +1,8 @@
 # agent-hub Landscape — 2026年競合 Positioning
 
-> **責務**: 「人＋エージェントが対等に共在する協働空間」という観点での競合・近縁プロダクト調査。agent-hub の差別化軸を明確化する。 🚧 スケルトン(競合詳細調査未完、ただし差別化軸 § は 2026-05-18 ADR で grounded)
+> **責務**: 「人＋エージェントが対等に共在する協働空間」という観点での競合・近縁プロダクト調査。agent-hub の差別化軸を明確化する。
 
-調査日: 2026-05-05（初版スケルトン） / 2026-05-19（ADR 反映改訂）
+調査日: 2026-05-05（初版スケルトン） / 2026-05-19（ADR 反映改訂） / 2026-05-22（詳細調査完了 — 5トラック並列調査、一次資料確認済み）
 
 > **2026-05-18 ADR Update**: `docs/decisions/2026-05-18-peer-mesh-architecture-decision.md` で **Peer-Mesh Architecture with Transparent Asymmetry** thesis が決定。本 doc の「差別化軸」「結論」は仮説から ADR grounded へ昇格(競合 一覧 § は引き続き要詳細調査)。
 
@@ -16,25 +16,28 @@
 | **B. オーケストレーション型マルチエージェント** | 人 = 監督、AI = ワーカー群 | AutoGen, CrewAI, LangGraph, BAND, Microsoft Agent 365 |
 | **C. 共在型ペアエージェント** | 人＋エージェントペアが対等に交わる | **agent-hub** ／ Negroponte 構想（製品化希薄） |
 
-## 候補一覧（要詳細調査）
+## 候補一覧（2026-05-22 詳細調査完了）
 
-| 製品 | 類型 | agent-hub との一致度 | 備考 |
+> 各候補は公式ドキュメント・最新リリース・一次資料をもとに評定。詳細調査レポート: [`deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md`](https://github.com/kishibashi3/agent-hub-roles-kaz/blob/main/deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md)
+
+| 製品 | 類型 | agent-hub との一致度 | 備考 (2026-05-22 確認済み) |
 |---|---|---|---|
-| Devin | A | × | 委任型。比較表で対比すると agent-hub の "共在" が際立つ |
-| Cursor Background Agent | A | × | 委任型 |
-| BAND | B | × | distributed multi-agent + governance。agent ops 寄り |
-| Microsoft Agent 365 / Copilot Chat | B | × | M365 内ワーカー。Copilot は脇役 |
+| Devin 2.2 | A+ | × | "Devin Manages Devins" — fleet 型階層に進化。Human = delegator は変わらず |
+| Cursor 3 "Glass" | A+ | × | Background Agent fleet mgmt。委任型の深化 |
+| BAND | B | × | Room 概念あり **C 類型と表面類似** だが human は room 外の "final decider"。Transparent Asymmetry・Decline Capability 不在 |
+| Microsoft Agent 365 (GA 2026-05-01) | B | × | Enterprise governance control plane。agent はワーカー。OSS 対抗軸あり |
+| MAF (Microsoft Agent Framework) | B | × | AutoGen 後継。AutoGen は maintenance mode (last commit 2025-09-30) |
 | AgentCraft | B | × | Hall でエージェント可視化、人が指示 |
-| AutoGen / Microsoft agent-framework | B | × | フレームワーク |
-| CrewAI | B | × | タスク委任クルー |
-| LangGraph | B | × | DAG/グラフベース |
+| AutoGen ~~(→ MAF へ移行済み)~~ | B | × | maintenance mode 確認済み。後継は MAF |
+| CrewAI v0.95 | B | × | multi-crew routing。タスク委任クルーの標準化 |
+| LangGraph v1.2.0 | B | × | 2026年 B 類型 de facto standard。State machine + checkpointing |
 | A2A (Google) | — | × | プロトコル層、製品ではない |
-| Letta (旧 MemGPT) multi-agent | B寄り | △ | エージェント間DM。"人＋エージェント" ペア概念なし |
+| Letta (旧 MemGPT) v0.16.x | B | × | agent-to-agent 通信あり。ただし 2026年方向は自律性強化・HITL 薄化 → **C 類型から離れる方向。旧 △ から格下げ** |
+| Dust | B | △ | $40M Series B (2026-05-18)。"multiplayer AI" 標榜で C 類型と問題意識共有。ただし AI はツール層止まり、human co-presence なし |
+| HiClaw | B | △ | Matrix rooms + AI agent。room 概念のみ C 類型類似。human は room 外部 orchestrator |
 | personal.ai | — | △ | 個人専属AI、ペア交流場なし |
 | Slack/Teams + bot | — | × | bot は脇役 |
 | Negroponte / Knowledge Navigator | C（思想） | ◎ | "your agent talks to my agent" の元祖構想 |
-
-> TODO: 各候補について公式ドキュメント・最新リリースを確認し、類型と一致度を確定する。
 
 ## agent-hub の差別化軸(2026-05-18 ADR grounded)
 
@@ -80,11 +83,17 @@ Negroponte / Knowledge Navigator の系譜に思想的祖先があり、2026 年
 
 ## 次のアクション
 
-- [ ] BAND の最新ドキュメントを精読（最も思想が近い競合の可能性）
-- [ ] Microsoft Agent 365 の発表記事（2026-05-05）の詳細確認
-- [ ] Letta multi-agent の実装を確認（"代理"の概念が無いか）
-- [ ] "Personal AI Envoy" 系の最新製品を網羅調査（Task サブエージェントで実施）
-- [ ] 結果を反映して本ファイルを確定版に更新
+- [x] BAND の最新ドキュメントを精読 → room 概念あるが human co-presence なし (B 類型確認)
+- [x] Microsoft Agent 365 の発表記事（2026-05-01 GA）の詳細確認 → enterprise B 類型
+- [x] Letta multi-agent の実装を確認 → C 類型から離れる方向。△→× に格下げ
+- [x] "Personal AI Envoy" 系の最新製品を網羅調査 → Dust/HiClaw 等を追加。C 類型参入なし
+- [x] 結果を反映して本ファイルを確定版に更新 (2026-05-22)
+
+### 継続観察対象
+
+- **Dust** — 次回 product update 時に human co-presence 要件の充足を再確認
+- **BAND** — room に human が直接 join できる機能の有無を継続確認
+- **Letta ロードマップ** — 2026 H2 方向性を GitHub issues/Discord で追跡
 
 ## 関連
 
@@ -94,3 +103,5 @@ Negroponte / Knowledge Navigator の系譜に思想的祖先があり、2026 年
 - A2A 調査（不採用）: [`a2a.md`](./a2a.md)
 - Direct Dialogue digest + Unified View v1: [`discussions/2026-05-18-peer-mesh-industry-discussion.md`](./discussions/2026-05-18-peer-mesh-industry-discussion.md)
 - Evidence archive: [agent-hub-researcher: research-archive/2026-05-18-coordination-convention-test.md](https://github.com/kishibashi3/agent-hub-researcher/blob/main/research-archive/2026-05-18-coordination-convention-test.md)
+- **詳細調査レポート (2026-05-22)**: [deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md](https://github.com/kishibashi3/agent-hub-roles-kaz/blob/main/deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md) — 5トラック並列調査、Adversarial Check 済み
+- **Letta 詳細評価**: [deep-research/research-archive/2026-05-22-letta-c-type-proximity-assessment.md](https://github.com/kishibashi3/agent-hub-roles-kaz/blob/main/deep-research/research-archive/2026-05-22-letta-c-type-proximity-assessment.md)
