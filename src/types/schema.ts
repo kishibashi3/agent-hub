@@ -63,6 +63,8 @@ export const messageSchema = z.object({
   sender: z.string(),
   recipient: z.string(),
   body: z.string(),
+  // v8: PAT owner の GitHub login。NULL = trust mode 由来 or migration 前 row (issue #21 Fix 1)
+  sender_github_login: z.string().nullable(),
   created_at: z.string(),
 });
 

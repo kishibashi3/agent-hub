@@ -134,7 +134,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 7;
+  const targetVersion = 8;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -309,6 +309,20 @@ export function applyMigrations(db: Database.Database): void {
         ALTER TABLE participants ADD COLUMN last_active_at TEXT;
         INSERT INTO schema_version (version, description)
         VALUES (7, 'add last_active_at column to participants for activity precision');
+      `,
+    });
+  }
+
+  // v7 → v8: messages に sender_github_login 列を追加 (= PAT owner forensic audit、 issue #21 Fix 1)
+  // NULL 許容: trust mode 由来 or migration 前の既存 row は NULL のまま。
+  if (currentVersion < 8) {
+    runMigration(db, {
+      version: 8,
+      description: 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)',
+      sql: `
+        ALTER TABLE messages ADD COLUMN sender_github_login TEXT;
+        INSERT INTO schema_version (version, description)
+        VALUES (8, 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
       `,
     });
   }

@@ -127,9 +127,9 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
        VALUES (?, ?, ?, ?)`
     ).run('default', '@legacy-alice', 'Legacy Alice', 'kishibashi');
 
-    // v7 migration 適用
+    // migration 適用 (v6 → latest = v8)
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(7);
+    expect(getCurrentVersion(db)).toBe(8);
 
     // last_active_at column が増えている
     const v7Columns = db
@@ -148,12 +148,12 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
     expect(row.last_active_at).toBeNull();
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v7 まで上がる', () => {
+  it('v0 (= fresh install) では schema.sql から直接 v8 まで上がる (last_active_at も存在)', () => {
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(7);
+    expect(getCurrentVersion(db)).toBe(8);
 
     // last_active_at column が schema.sql 由来で存在する
     const columns = db
@@ -162,18 +162,18 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
     expect(columns.map((c) => c.name)).toContain('last_active_at');
   });
 
-  it('v7 → v7 で no-op (= idempotent)', () => {
+  it('v8 → v8 で no-op (= idempotent)、v8 row は重複しない', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(7);
+    expect(getCurrentVersion(db)).toBe(8);
 
-    // 再適用しても version は 7 のまま
+    // 再適用しても version は 8 のまま
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(7);
+    expect(getCurrentVersion(db)).toBe(8);
 
-    // schema_version table は v7 row が重複していない
+    // schema_version table は v8 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(7) as { version: number }[];
+      .all(8) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

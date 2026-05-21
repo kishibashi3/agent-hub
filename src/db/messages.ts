@@ -6,12 +6,16 @@ import { randomUUID } from 'crypto';
  * メッセージを送信する
  * - DM: to が個人名の場合
  * - チーム: to がチーム名の場合、メンバー全員に配信（送信者自身は除く）
+ *
+ * @param senderGithubLogin - PAT owner の GitHub login (forensic audit 用、issue #21 Fix 1)。
+ *   trust mode 由来 or 未設定の場合は null。messages.sender_github_login 列に書き込む。
  */
 export function sendMessage(
   db: Database,
   tenantId: string,
   input: SendMessageInput,
-  sender: string
+  sender: string,
+  senderGithubLogin?: string | null
 ): Message {
   const senderName = sender.startsWith('@') ? sender : `@${sender}`;
   const recipientName = input.to.startsWith('@') ? input.to : `@${input.to}`;
@@ -56,10 +60,11 @@ export function sendMessage(
   // メッセージを作成
   const messageId = randomUUID();
   const now = new Date().toISOString();
+  const githubLogin = senderGithubLogin ?? null;
 
   db.prepare(
-    'INSERT INTO messages (tenant_id, id, sender, recipient, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(tenantId, messageId, senderName, recipientName, input.message, now);
+    'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_github_login, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(tenantId, messageId, senderName, recipientName, input.message, githubLogin, now);
 
   const message = db
     .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')
