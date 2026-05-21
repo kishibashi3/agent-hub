@@ -509,6 +509,29 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     const handleBase = override || githubLogin;
     const handleName = `@${handleBase}`;
 
+    // Fix 3 (issue #21): cross-persona override を WARN log で記録。
+    // 同一 PAT を持つ複数 process がそれぞれ異なる persona で接続している場合の
+    // 監視 visibility を提供する (= schema 変更不要の cheap mitigation)。
+    if (override !== '' && override !== githubLogin) {
+      console.warn(
+        `[auth] cross-persona override: PAT owner=${githubLogin} → handle=@${override}` +
+          ` (tenant=${tenantDomain})`
+      );
+    }
+
+    // Fix 2 (issue #21): strict handle ownership mode。
+    // `AGENT_HUB_STRICT_HANDLE_OWNERSHIP` が set の場合、cross-persona override を拒否。
+    // 単一 persona deployment で意図せぬ persona switch を構造的に防止する。
+    if (override !== '' && override !== githubLogin && isStrictHandleOwnershipEnabled()) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message:
+          `AGENT_HUB_STRICT_HANDLE_OWNERSHIP: cross-persona override is not allowed. ` +
+          `PAT owner=${githubLogin} cannot connect as @${override}. ` +
+          `Unset X-User-Id to connect as @${githubLogin}, or disable strict mode.`,
+      });
+    }
+
     if (!checkDeploymentInitGate(res, tenantDomain, handleName)) return;
 
     try {
@@ -781,6 +804,24 @@ export function stopActivePingLoop(): void {
 export function isAutoReissueDisabled(): boolean {
   return process.env.MCP_AUTO_REISSUE_DISABLED !== undefined &&
     process.env.MCP_AUTO_REISSUE_DISABLED !== '';
+}
+
+/**
+ * Fix 2 (issue #21): strict handle ownership mode。
+ *
+ * `AGENT_HUB_STRICT_HANDLE_OWNERSHIP` が set (= 空文字以外) の場合、
+ * PAT auth で `X-User-Id` override による cross-persona 接続を **拒否**。
+ * override 元 githubLogin と override 先 handle の owner が一致しない場合は 403。
+ *
+ * 未設定 or 空文字 = 旧動作 (= override 許可、マルチペルソナ運用可能)。
+ * `1` を設定する運用が推奨 (= single-persona deployment で意図せぬ cross-persona を防ぐ)。
+ *
+ * 「set = 新 feature (= strict) を有効化」 なので binary env var 規約 (= set → 有効)
+ * と整合する。
+ */
+export function isStrictHandleOwnershipEnabled(): boolean {
+  return process.env.AGENT_HUB_STRICT_HANDLE_OWNERSHIP !== undefined &&
+    process.env.AGENT_HUB_STRICT_HANDLE_OWNERSHIP !== '';
 }
 
 /**
