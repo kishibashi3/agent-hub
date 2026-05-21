@@ -38,6 +38,23 @@ export interface BoundedInMemoryEventStoreOptions {
   ttlMs?: number;
   /** clock injection (test 用) */
   now?: () => number;
+  /**
+   * replay 時の event フィルタ (= issue #117 fix)。
+   *
+   * `replayEventsAfter` で各 event を送信する前に呼び出し、`false` を返した
+   * event は replay から除外する。`undefined` なら全 event を replay (= 旧動作)。
+   *
+   * 主用途: `notifications/resources/updated` (= inbox hint) の replay 抑制。
+   * これらは「新着あり」を示す coalescing hint であり、replay しても
+   * クライアントが ack 前の同一メッセージを再処理するだけ (= double dispatch)。
+   * 実際の message は get_unread() で取得できるため、hint の再送は不要。
+   * safety-net poll (SDK 30s) が取りこぼしをカバーする。
+   *
+   * **Contract**: filter は純粋・同期・例外なしで実装すること。
+   * 現実装は filter の throw を想定していない (= try/catch なし)。
+   * 将来 filter が外部 I/O を伴う場合は非同期版の追加を検討する。
+   */
+  replayFilter?: (message: JSONRPCMessage) => boolean;
 }
 
 const DEFAULT_MAX_EVENTS_PER_STREAM = 200;
@@ -49,12 +66,14 @@ export class BoundedInMemoryEventStore implements EventStore {
   private readonly maxEventsPerStream: number;
   private readonly ttlMs: number;
   private readonly now: () => number;
+  private readonly replayFilter: ((message: JSONRPCMessage) => boolean) | undefined;
   private seq = 0;
 
   constructor(options: BoundedInMemoryEventStoreOptions = {}) {
     this.maxEventsPerStream = options.maxEventsPerStream ?? DEFAULT_MAX_EVENTS_PER_STREAM;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.now = options.now ?? Date.now;
+    this.replayFilter = options.replayFilter;
   }
 
   /**
@@ -134,6 +153,9 @@ export class BoundedInMemoryEventStore implements EventStore {
     for (const entry of bucket) {
       if (this.parseSeq(entry.eventId) <= lastSeq) continue;
       if (entry.storedAt <= threshold) continue; // TTL 切れは飛ばす (= delivery loss は容認)
+      // replayFilter が false を返した event は replay しない (= issue #117 fix)。
+      // event は store 済みなので event ID は連続性を保つ。hint 系通知はここで除外。
+      if (this.replayFilter && !this.replayFilter(entry.message)) continue;
       await send(entry.eventId, entry.message);
     }
     return streamId;

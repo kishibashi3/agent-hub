@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   selectNotificationTargets,
   isNotifyDedupDisabled,
+  isResourceNotifyFilterDisabled,
   type NotifiableSession,
   type LastActiveLookup,
 } from '../server.js';
@@ -424,5 +425,54 @@ describe('isNotifyDedupDisabled (issue #114 rollback flag)', () => {
 
     // dedup disabled → both sessions remain
     expect(targets.sort()).toEqual(['sid-1', 'sid-2']);
+  });
+});
+
+/**
+ * issue #117 fix の rollback path (= `MCP_RESOURCE_NOTIFY_FILTER_DISABLED` 環境変数)。
+ *
+ * binary semantic (= PR #105 `MCP_AUTO_REISSUE_DISABLED` と同 convention): set されたら
+ * disabled (= 旧動作: 全 event replay)、unset / empty なら enabled (= 値の文字列
+ * 「0」/「false」 等は解釈しない)。
+ *
+ * 命名規則: `FEATURE_DISABLED` = 新たに追加した feature (replay フィルタ) を disable する。
+ * set → 旧動作に rollback。
+ */
+describe('isResourceNotifyFilterDisabled (issue #117 rollback flag)', () => {
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    originalEnv = process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+    delete process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+    } else {
+      process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = originalEnv;
+    }
+  });
+
+  it('env unset → false (= replay filter enabled、 default behavior)', () => {
+    delete process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+    expect(isResourceNotifyFilterDisabled()).toBe(false);
+  });
+
+  it('env empty string → false (= unset と同等扱い)', () => {
+    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '';
+    expect(isResourceNotifyFilterDisabled()).toBe(false);
+  });
+
+  it('env="1" → true (= replay filter disabled、 旧 path に倒す)', () => {
+    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '1';
+    expect(isResourceNotifyFilterDisabled()).toBe(true);
+  });
+
+  it('env="0" → true (= 値の意味判定なし、 set/unset の binary signal)', () => {
+    // 「0 だから false 扱い」 と誤読されないよう test で boundary 明示 (=
+    // PR #105 `MCP_AUTO_REISSUE_DISABLED` test pattern と同 form)。
+    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '0';
+    expect(isResourceNotifyFilterDisabled()).toBe(true);
   });
 });
