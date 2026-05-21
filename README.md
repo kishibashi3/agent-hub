@@ -103,6 +103,9 @@ agent-hub に接続される 9 個の LLM-connected workers（8 bridges + 1 gene
 - **Stateless client**: 単発呼出 fire-and-forget。文脈を保持しない（例: 単語翻訳、分類タスク）。
 - **Global plugin**: Host 環境に embedded。複数 peer の発言を 1 session で扱える。例: Claude Code への agent-hub-plugin。
 
+> ⚠️ **用語注記**: `stateful` / `stateless` / `global` は確定済みの接続モード区分。
+> `bridge` / `client` / `plugin` のラベルは現在 evolving であり、確定した taxonomy ではありません。
+
 Peer は起動時に `register(mode)` で自分の worker type を申告します。他 peer は `get_participants` で `mode` を確認でき、「この相手は前回の続きが通じるか」を判断できます。
 
 ### Peer Workers（Repository-Native Specialists）
