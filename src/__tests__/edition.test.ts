@@ -12,10 +12,16 @@ afterEach(() => {
 
 describe('resolveEdition', () => {
   describe('AGENT_HUB_EDITION の解釈', () => {
-    it('未指定なら community をデフォルト採用 (secure-by-default)', () => {
-      const cfg = resolveEdition({});
-      expect(cfg.edition).toBe('community');
-      expect(cfg.authMode).toBe('pat');
+    it('未指定なら EditionConfigError をスロー (= 起動失敗、issue #55 fix)', () => {
+      // AGENT_HUB_EDITION 未設定時の silent community fallback は廃止。
+      // PE 環境でのセット忘れを設定ミスとして早期検知する。
+      expect(() => resolveEdition({})).toThrow(EditionConfigError);
+      expect(() => resolveEdition({})).toThrow(/AGENT_HUB_EDITION が未設定/);
+    });
+
+    it('空文字列も未設定扱いで EditionConfigError をスロー', () => {
+      expect(() => resolveEdition({ AGENT_HUB_EDITION: '' })).toThrow(EditionConfigError);
+      expect(() => resolveEdition({ AGENT_HUB_EDITION: '   ' })).toThrow(EditionConfigError);
     });
 
     it("EDITION='community' を受け入れる", () => {
