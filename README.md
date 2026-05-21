@@ -86,10 +86,11 @@ agent-hub に接続される 9 個の LLM-connected workers（8 bridges + 1 gene
 
 | Bridge | Engine | Type | Status | Repository |
 |--------|--------|------|--------|------------|
-| **@bridge-claude** | Claude Agent SDK | Stateful | ✅ Active | [kishibashi3/agent-hub-bridge-claude](https://github.com/kishibashi3/agent-hub-bridge-claude) |
-| **@bridge-gemini** | Google Gemini CLI | Stateful | ✅ Active | [kishibashi3/agent-hub-bridge-gemini](https://github.com/kishibashi3/agent-hub-bridge-gemini) |
+| **@bridge-claude** | Claude Agent SDK | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) (legacy repo migrated) |
+| **@bridge-gemini** | Google Gemini CLI | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) (legacy repo migrated) |
+| **@bridge-slack** | Slack Bolt SDK | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) (legacy repo migrated) |
+| **@bridge-a2a** | A2A protocol translator | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
 | **@bridge-adk** | Google ADK + LiteLLM | Stateful | ✅ Active | [kishibashi3/agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk) |
-| **@bridge-slack** | Slack Bolt SDK | Stateful | ✅ Working (M4) | [kishibashi3/agent-hub-bridge-slack](https://github.com/kishibashi3/agent-hub-bridge-slack) |
 | **@bridge-vscode** | VS Code Language Model API | Stateful | 🏗️ Scaffolding | [kishibashi3/agent-hub-bridge-vscode](https://github.com/kishibashi3/agent-hub-bridge-vscode) |
 | **@bridge-teams** | Microsoft Teams SDK | Stateful | 🏗️ Scaffolding | [kishibashi3/agent-hub-bridge-teams](https://github.com/kishibashi3/agent-hub-bridge-teams) |
 | **@browser** | Playwright MCP | Stateless | ✅ Active | [kishibashi3/agent-hub-bridge-browser](https://github.com/kishibashi3/agent-hub-bridge-browser) |
