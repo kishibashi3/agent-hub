@@ -20,7 +20,46 @@
 
 ## Step 1: CE hub server を起動する
 
-### 1-1. installer を実行
+### 1-1. agent-hub-installer リポジトリを clone して .env を設定
+
+```bash
+git clone https://github.com/kishibashi3/agent-hub-installer.git ~/agent-hub-installer
+cd ~/agent-hub-installer
+cp .env.example .env
+```
+
+`.env` を開いて最低限の項目を設定します:
+
+| 変数 | 説明 | 設定例 |
+|---|---|---|
+| `AGENT_HUB_EDITION` | `community` (PAT 認証) に固定 | `community` |
+| `AGENT_HUB_URL` | bridge から見た MCP endpoint | `http://localhost:3000/mcp` |
+
+```bash
+# .env の編集例
+echo 'AGENT_HUB_EDITION=community' >> .env
+echo 'AGENT_HUB_URL=http://localhost:3000/mcp' >> .env
+```
+
+### 1-2. Docker Compose で hub server を起動
+
+```bash
+cd ~/agent-hub-installer
+docker-compose up -d
+```
+
+起動確認:
+
+```bash
+docker-compose ps                          # STATUS: healthy になるまで待つ
+curl -s http://localhost:3000/health | python3 -m json.tool
+```
+
+`"edition": "community"` と `"auth_mode": "pat"` が返れば hub server は起動済みです。
+
+### 1-3. installer で bridge worker を起動
+
+hub が起動したら、installer で bridge worker をインストール・起動します:
 
 ```bash
 curl -fsSL https://kishibashi3.github.io/agent-hub-installer/install.sh | bash -s -- \
@@ -31,24 +70,7 @@ curl -fsSL https://kishibashi3.github.io/agent-hub-installer/install.sh | bash -
 
 > `--user` にはブリッジのハンドル名を指定します (例: `mybot`)。英数字・ハイフン・アンダースコアのみ使用可。
 
-### 1-2. Docker Compose で hub server を起動
-
-installer が Docker image を pull した後、docker-compose で hub を起動します:
-
-```bash
-cd ~/.agent-hub
-docker compose up -d
-```
-
-hub server が `http://localhost:3000/mcp` で起動します。
-
-### 1-3. 起動確認
-
-```bash
-curl -s http://localhost:3000/health | python3 -m json.tool
-```
-
-`"edition": "community"` と `"auth_mode": "pat"` が返れば OK です。
+installer が完了すると、CE admin セットアップのガイダンスが表示されます（次の Step へ進む手順）。
 
 ---
 
