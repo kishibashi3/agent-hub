@@ -190,10 +190,10 @@ roles リポジトリを clone して peer bridges を起動します。
 
 ```bash
 # Tier 1 (試用): テンプレートをそのまま使う
-git clone https://github.com/kishibashi3/agent-hub-roles-kaz ~/.agent-hub/roles
+git clone https://github.com/kishibashi3/agent-hub-roles ~/.agent-hub/roles
 
 # Tier 2 (本番): 自分の private fork を使う
-gh repo create --template kishibashi3/agent-hub-roles-kaz --private <your-org>/agent-hub-roles
+gh repo create --template kishibashi3/agent-hub-roles --private <your-org>/agent-hub-roles
 git clone git@github.com:<your-org>/agent-hub-roles ~/.agent-hub/roles
 ```
 

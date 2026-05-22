@@ -18,7 +18,7 @@
 
 ## 候補一覧（2026-05-22 詳細調査完了）
 
-> 各候補は公式ドキュメント・最新リリース・一次資料をもとに評定。詳細調査レポート: [`deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md`](https://github.com/kishibashi3/agent-hub-roles-kaz/blob/main/deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md)
+> 各候補は公式ドキュメント・最新リリース・一次資料をもとに評定。詳細調査レポート: `deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md`
 
 | 製品 | 類型 | agent-hub との一致度 | 備考 (2026-05-22 確認済み) |
 |---|---|---|---|
@@ -103,5 +103,5 @@ Negroponte / Knowledge Navigator の系譜に思想的祖先があり、2026 年
 - A2A 調査（不採用）: [`a2a.md`](./a2a.md)
 - Direct Dialogue digest + Unified View v1: [`discussions/2026-05-18-peer-mesh-industry-discussion.md`](./discussions/2026-05-18-peer-mesh-industry-discussion.md)
 - Evidence archive: [agent-hub-researcher: research-archive/2026-05-18-coordination-convention-test.md](https://github.com/kishibashi3/agent-hub-researcher/blob/main/research-archive/2026-05-18-coordination-convention-test.md)
-- **詳細調査レポート (2026-05-22)**: [deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md](https://github.com/kishibashi3/agent-hub-roles-kaz/blob/main/deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md) — 5トラック並列調査、Adversarial Check 済み
-- **Letta 詳細評価**: [deep-research/research-archive/2026-05-22-letta-c-type-proximity-assessment.md](https://github.com/kishibashi3/agent-hub-roles-kaz/blob/main/deep-research/research-archive/2026-05-22-letta-c-type-proximity-assessment.md)
+- **詳細調査レポート (2026-05-22)**: `deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md` — 5トラック並列調査、Adversarial Check 済み
+- **Letta 詳細評価**: `deep-research/research-archive/2026-05-22-letta-c-type-proximity-assessment.md`
