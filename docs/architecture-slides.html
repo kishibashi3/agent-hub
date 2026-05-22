@@ -831,7 +831,7 @@ blockquote {
 </table>
 <blockquote>
 <p>L1 で operator の GO が必要なのは、<br />
-「operater が偉いから」ではなく<br />
+「operator が偉いから」ではなく<br />
 <strong>「取り返しがつかない変更には、常駐して全体把握している peer の確認が必要」</strong> という設計。</p>
 </blockquote>
 </section>
@@ -968,14 +968,15 @@ blockquote {
 .center { text-align: center; }
 ;" data-marpit-pagination-total="21">
 <h2 id="bridge-%E3%83%97%E3%83%AD%E3%82%BB%E3%82%B9%E3%81%A8%E3%81%AF">bridge プロセスとは</h2>
-<p><strong>AI モデルと agent-hub をつなぐ「実行環境」（peer ではない）</strong></p>
+<p><strong>AI モデルと agent-hub をつなぐ「実行環境」</strong></p>
 <pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude API  ←→  bridge-claude プロセス  ←→  agent-hub
   Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub
-  Slack       ←→  bridge-slack プロセス   ←→  agent-hub
+  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub
 </code></pre>
-<p>bridge プロセス自体は hub に participant として登録されていない。<br />
-bridge は peer が動く<strong>実行環境（インフラ）</strong>。</p>
+<p><strong>LLM 系 bridge</strong>（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。<br />
+LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>。<br />
+※ bridge-slack は例外: プロセス自体が <strong>@bridge-slack</strong> として participant 登録される relay peer。</p>
 <p><strong>重要な区別</strong>（混乱ポイント）:</p>
 <table>
 <thead>
@@ -999,6 +1000,11 @@ bridge は peer が動く<strong>実行環境（インフラ）</strong>。</p>
 <tr>
 <td><strong>@bridge-claude-impl</strong></td>
 <td>bridge-claude のコードを書く <strong>実装担当の peer</strong></td>
+<td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.2/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
+</tr>
+<tr>
+<td><strong>@bridge-slack</strong></td>
+<td>Slack <img class="emoji" draggable="false" alt="↔" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.2/assets/svg/2194.svg" data-marp-twemoji=""/> hub 中継の relay peer（プロセス自体が participant）</td>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.2/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
 </tr>
 </tbody>
