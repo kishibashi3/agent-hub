@@ -580,13 +580,24 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     }
   }
 
-  // edition resolver が AuthMode を 'trust' | 'pat' に narrow しているため
+  // Professional Edition: OIDC 認証は Step 3 (src/auth/oidc.ts) で実装予定。
+  // Step 1 では型定義のみ追加し、'oidc' mode で起動した場合は 501 を返す (stub)。
+  if (mode === 'oidc') {
+    return res.status(501).json({
+      error: 'NotImplemented',
+      message:
+        'OIDC 認証は Professional Edition の実装 Step 3 (src/auth/oidc.ts) で追加予定です。'
+          + ' 現バージョンでは AGENT_HUB_EDITION=professional は起動できますが認証は未実装です。',
+    });
+  }
+
+  // edition resolver が AuthMode を 'trust' | 'pat' | 'oidc' に narrow しているため
   // この分岐に来ることは無いが、型の網羅性 (exhaustiveness) のための fallback。
   // istanbul ignore next
   const _unreachable: never = mode;
   return res.status(500).json({
     error: 'ServerMisconfigured',
-    message: `unknown AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
+    message: `unknown AUTH_MODE: ${_unreachable}. Use 'trust', 'pat', or 'oidc'.`,
   });
 }
 

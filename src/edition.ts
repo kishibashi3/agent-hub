@@ -8,9 +8,15 @@
  *   - PE+`AGENT_HUB_DISABLE_DEFAULT_TENANT` は startup で WARN log (silent ignore 廃止)
  *   - error message は両方向 migration hint で対称化
  *
+ * Professional Edition (PR #139 設計 doc) を追加:
+ *   - OIDC 認証 (GitHub PAT 不要)、PostgreSQL、Redis pub/sub
+ *   - `AGENT_HUB_EDITION=professional` + `DATABASE_URL` + `OIDC_ISSUER` 必須
+ *   - `REDIS_URL` 未設定は WARN-only (single instance では動作)
+ *
  * Edition 概観:
- *   - **Community Edition (CE)**: PAT 必須、multi-tenant、インターネット公開可
  *   - **Private Edition (PE)**: 認証なし (trust mode 固定)、default tenant のみ、完全 LAN 内専用
+ *   - **Community Edition (CE)**: PAT 必須、multi-tenant、インターネット公開可
+ *   - **Professional Edition**: OIDC 認証、PostgreSQL、Redis pub/sub、~100 人規模 (issue #133)
  *
  * Single source of truth として `resolveEdition(env)` を呼び、各レイヤ (auth /
  * tenant gate / tool list) はその結果の boolean フラグを参照する。env を直接
@@ -22,8 +28,8 @@
  * LAN dev で trust mode を使いたい場合は `AGENT_HUB_EDITION=private` を明示する。
  */
 
-export type Edition = 'community' | 'private';
-export type AuthMode = 'trust' | 'pat';
+export type Edition = 'community' | 'private' | 'professional';
+export type AuthMode = 'trust' | 'pat' | 'oidc';
 
 /**
  * 解決後の edition 設定。各レイヤが参照する。
@@ -37,6 +43,8 @@ export type AuthMode = 'trust' | 'pat';
  *   への接続を 503 で塞ぐ deployment init gate を発動するか
  * - `exposesCeAdminTools`: list_tenants / get_tenant / delete_tenant 等の
  *   CE-operator tools を ListTools で露出するか
+ * - `requiresPostgres`: true → PostgreSQL を必須とする (SQLite 不可)。Professional Edition のみ true。
+ * - `requiresRedis`: true → Redis pub/sub を有効化する。Professional Edition で REDIS_URL が設定されている場合に true。
  */
 export interface EditionConfig {
   edition: Edition;
@@ -45,6 +53,8 @@ export interface EditionConfig {
   enforcesDefaultTenantRestriction: boolean;
   enforcesDeploymentInitGate: boolean;
   exposesCeAdminTools: boolean;
+  requiresPostgres: boolean;
+  requiresRedis: boolean;
 }
 
 /**
@@ -61,10 +71,10 @@ export class EditionConfigError extends Error {
 /**
  * env (= `process.env` 互換 dictionary) から edition 設定を解決する。
  *
- * 解決規則 (v2 設計反映):
+ * 解決規則 (v2 設計反映 + Professional Edition 追加):
  *   1. `AGENT_HUB_EDITION` を読む。未指定 or 空文字 → `EditionConfigError` (= 起動失敗)
- *   2. value validation: 'community' | 'private' 以外 → `EditionConfigError`
- *   3. `AUTH_MODE` 値 validation: 'trust' | 'pat' 以外 → `EditionConfigError`
+ *   2. value validation: 'community' | 'private' | 'professional' 以外 → `EditionConfigError`
+ *   3. `AUTH_MODE` 値 validation: 'trust' | 'pat' | 'oidc' 以外 → `EditionConfigError`
  *   4. edition + AUTH_MODE 整合性 check:
  *      - **CE + `AUTH_MODE=trust`** → **v1 では WARN-only で許容** (= 起動成功、v2 で hard reject 予告)、
  *        `AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1` 明示時は audit-friendly な opt-in WARN に切替え
@@ -84,27 +94,79 @@ export function resolveEdition(
     // issue #55 fix (redline #1): env 未設定時の silent community fallback を廃止。
     // PE 環境で AGENT_HUB_EDITION 設定漏れが PAT 必須 CE として silent start するリスクを排除する。
     throw new EditionConfigError(
-      "AGENT_HUB_EDITION が未設定です。'community' か 'private' を指定してください。"
+      "AGENT_HUB_EDITION が未設定です。'community'、'private'、または 'professional' を指定してください。"
     );
   }
-  if (editionRaw !== 'community' && editionRaw !== 'private') {
+  if (editionRaw !== 'community' && editionRaw !== 'private' && editionRaw !== 'professional') {
     throw new EditionConfigError(
-      `AGENT_HUB_EDITION='${editionRaw}' は未知の値です。'community' か 'private' を指定してください。`
+      `AGENT_HUB_EDITION='${editionRaw}' は未知の値です。'community'、'private'、または 'professional' を指定してください。`
     );
   }
   const edition: Edition = editionRaw;
 
   const authModeRawRaw = env.AUTH_MODE?.trim().toLowerCase();
   const authModeExplicit: AuthMode | null =
-    authModeRawRaw === 'trust' || authModeRawRaw === 'pat' ? authModeRawRaw : null;
+    authModeRawRaw === 'trust' || authModeRawRaw === 'pat' || authModeRawRaw === 'oidc'
+      ? authModeRawRaw
+      : null;
   if (authModeRawRaw && authModeExplicit === null) {
     throw new EditionConfigError(
-      `AUTH_MODE='${authModeRawRaw}' は未知の値です。'trust' か 'pat' を指定してください。`
+      `AUTH_MODE='${authModeRawRaw}' は未知の値です。'trust'、'pat'、または 'oidc' を指定してください。`
     );
   }
 
+  // ── Professional Edition ──────────────────────────────────────────────────
+  // CE/PE の authMode 処理より前に early-return する (authMode は 'oidc' 固定のため分岐不要)。
+  if (edition === 'professional') {
+    // OIDC 必須: AUTH_MODE 未指定 or 'oidc' → OK。'trust' / 'pat' は設計矛盾で reject。
+    if (authModeExplicit !== null && authModeExplicit !== 'oidc') {
+      throw new EditionConfigError(
+        `AGENT_HUB_EDITION=professional では AUTH_MODE='${authModeExplicit}' は使用できません。`
+          + ' OIDC 認証のみサポートします'
+          + ' (AUTH_MODE 指定を削除するか AUTH_MODE=oidc を指定してください)。'
+      );
+    }
+    // DATABASE_URL 未指定 → startup fail-fast (PostgreSQL 必須)
+    if (!env.DATABASE_URL) {
+      throw new EditionConfigError(
+        'AGENT_HUB_EDITION=professional では DATABASE_URL (PostgreSQL) が必須です。'
+      );
+    }
+    // OIDC_ISSUER 未指定 → startup fail-fast
+    if (!env.OIDC_ISSUER) {
+      throw new EditionConfigError(
+        'AGENT_HUB_EDITION=professional では OIDC_ISSUER が必須です。'
+      );
+    }
+    // REDIS_URL 未指定 → WARN-only (single instance では動作、multi instance では必須)
+    if (!env.REDIS_URL) {
+      console.warn(
+        '[professional] REDIS_URL が未設定です。SSE push は single instance 内でのみ動作します。'
+          + ' multi instance 構成では REDIS_URL を設定してください。'
+      );
+    }
+    return {
+      edition: 'professional',
+      authMode: 'oidc',
+      allowsNamedTenant: true,
+      enforcesDefaultTenantRestriction: env.AGENT_HUB_DISABLE_DEFAULT_TENANT !== '0',
+      enforcesDeploymentInitGate: true,
+      exposesCeAdminTools: true,
+      requiresPostgres: true,
+      requiresRedis: !!env.REDIS_URL,
+    };
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   let authMode: AuthMode;
   if (edition === 'community') {
+    // CE は OIDC 非対応。AUTH_MODE=oidc は Professional Edition 専用。
+    if (authModeExplicit === 'oidc') {
+      throw new EditionConfigError(
+        'AGENT_HUB_EDITION=community で AUTH_MODE=oidc は使用できません。'
+          + ' OIDC 認証で運用するなら AGENT_HUB_EDITION=professional を指定してください。'
+      );
+    }
     // CE は PAT 必須が default、AUTH_MODE=trust 明示 (= v1 では legacy 経路) を WARN-only で許容。
     // v2 で hard reject される予定。AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1 で v2 まで延命可能。
     if (authModeExplicit === 'trust') {
@@ -128,12 +190,19 @@ export function resolveEdition(
       authMode = 'pat';
     }
   } else {
-    // PE は trust 固定。AUTH_MODE=pat を明示されたら設計矛盾として hard reject。
+    // PE は trust 固定。AUTH_MODE=pat または AUTH_MODE=oidc を明示されたら設計矛盾として hard reject。
     if (authModeExplicit === 'pat') {
       throw new EditionConfigError(
         'AGENT_HUB_EDITION=private で AUTH_MODE=pat は使用できません。' +
           ' LAN 専用運用なら AUTH_MODE 指定を削除 (PE は trust 固定)、' +
           ' PAT 認証で公開運用なら AGENT_HUB_EDITION=community を指定してください。'
+      );
+    }
+    // PE は OIDC 非対応。AUTH_MODE=oidc は Professional Edition 専用。
+    if (authModeExplicit === 'oidc') {
+      throw new EditionConfigError(
+        'AGENT_HUB_EDITION=private で AUTH_MODE=oidc は使用できません。'
+          + ' OIDC 認証で運用するなら AGENT_HUB_EDITION=professional を指定してください。'
       );
     }
     authMode = 'trust';
@@ -151,6 +220,8 @@ export function resolveEdition(
       enforcesDefaultTenantRestriction: restriction,
       enforcesDeploymentInitGate: true,
       exposesCeAdminTools: true,
+      requiresPostgres: false,
+      requiresRedis: false,
     };
   }
 
@@ -169,5 +240,7 @@ export function resolveEdition(
     enforcesDefaultTenantRestriction: false,
     enforcesDeploymentInitGate: false,
     exposesCeAdminTools: false,
+    requiresPostgres: false,
+    requiresRedis: false,
   };
 }
