@@ -130,13 +130,13 @@ CREATE TABLE invitations (
   id           TEXT NOT NULL,              -- UUID
   github_login TEXT,                       -- β: 招かれる GitHub login。α では NULL
   token        TEXT UNIQUE,               -- α: 招待 token。β では NULL
-  invited_by   TEXT NOT NULL,              -- 招いた participant の handle
+  invited_by   TEXT,                       -- 招いた participant の handle (NULL = migration backfill 等で招待元不明)
   expires_at   TEXT,                       -- NULL = 無期限
   consumed_at  TEXT,                       -- NULL = 未使用
   status       TEXT NOT NULL DEFAULT 'active',  -- active / consumed / revoked
   created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
   PRIMARY KEY (tenant_id, id),
-  FOREIGN KEY (tenant_id, invited_by) REFERENCES participants(tenant_id, name)
+  FOREIGN KEY (tenant_id, invited_by) REFERENCES participants(tenant_id, name)  -- NULL は FK チェック対象外 (SQLite 準拠)
 );
 
 CREATE INDEX idx_invitations_login  ON invitations(tenant_id, github_login);
@@ -178,14 +178,28 @@ CREATE INDEX idx_join_requests_status ON join_requests(tenant_id, status);
 
 ### 6-1. `invite` tool の引数設計
 
+`mode` を必須パラメータとして JSON Schema / バリデーションを明確化する:
+
 ```json
+// β: handle 指定 (github_login を whitelist 登録)
 {
-  "to": "@alice",          // β: handle 指定 (github_login に変換)
-  // または
-  "mode": "token",         // α: token 発行
+  "mode": "handle",        // 必須: "handle" | "token"
+  "to": "@alice",          // mode=handle の場合に必須: github_login に変換
+  "expires_in": "24h"      // 有効期限 (optional, default=null=無期限)
+}
+
+// α: token 発行 (Discord 招待リンク型)
+{
+  "mode": "token",         // 必須: "handle" | "token"
   "expires_in": "24h"      // 有効期限 (optional, default=null=無期限)
 }
 ```
+
+| フィールド | 型 | 必須 | 説明 |
+|---|---|---|---|
+| `mode` | `"handle" \| "token"` | ✅ 必須 | 招待方式 (β=handle / α=token) |
+| `to` | `string` | mode=handle 時のみ必須 | 招待する GitHub handle (`@alice` 形式) |
+| `expires_in` | `string` | 任意 | 有効期限 (`"24h"`, `"7d"` 等。NULL=無期限) |
 
 ---
 
@@ -206,9 +220,9 @@ CREATE INDEX idx_join_requests_status ON join_requests(tenant_id, status);
 接続時:
   1. X-Tenant-Id を読む
   2. tenant が存在しなければ:
-     - AGENT_HUB_REQUIRE_INVITATION=0 (default, 後方互換) → TOFU フロー継続
-     - AGENT_HUB_REQUIRE_INVITATION=1 → 接続者の github_login が invitations に
-       あるかチェック。なければ 403 forbidden
+     - AGENT_HUB_REQUIRE_INVITATION 未設定 (default, 後方互換) → TOFU フロー継続
+     - AGENT_HUB_REQUIRE_INVITATION=1 (任意 non-empty 値) → 接続者の github_login が
+       invitations にあるかチェック。なければ 403 forbidden
   3. 既存 tenant への新規参加者:
      - TOFU モード: 従来通り自動 register
      - invitation モード: invitations.github_login が一致する active record が
@@ -219,10 +233,14 @@ CREATE INDEX idx_join_requests_status ON join_requests(tenant_id, status);
 
 | env var | 値 | 動作 |
 |---|---|---|
-| `AGENT_HUB_REQUIRE_INVITATION` | `0` (default) | 従来の TOFU 動作 (後方互換) |
-| `AGENT_HUB_REQUIRE_INVITATION` | `1` | invitation check 必須 |
+| `AGENT_HUB_REQUIRE_INVITATION` | 未設定 (default) | 従来の TOFU 動作 (後方互換) |
+| `AGENT_HUB_REQUIRE_INVITATION` | 任意の non-empty 値 (`1` 推奨) | invitation check 必須 |
 
-Phase 3 でこの default を `1` に変更する (= TOFU を deprecated に)。
+> **Convention**: 他の boolean env var (`AGENT_HUB_DISABLE_DEFAULT_TENANT` 等) と同様に
+> 「unset = off / 任意 non-empty = on」の規則に従う。`=0` での明示 off は **不可**
+> (実装時: `process.env.AGENT_HUB_REQUIRE_INVITATION !== undefined` で判定)。
+
+Phase 3 でこの default を変更 (unset = invitation 必須 / `AGENT_HUB_DISABLE_INVITATION_CHECK=1` で TOFU 許容) へ切り替える予定。
 
 ---
 
@@ -260,7 +278,11 @@ Phase 3 でこの default を `1` に変更する (= TOFU を deprecated に)。
   `sender.is_invited == true` → gate bypass (通常処理)
 
 `sender.is_invited` の判定方法:
-- server が `get_messages` レスポンスに `sender_invited: boolean` フィールドを追加 (α案)
+- server が `get_messages` レスポンスに `sender_invited: boolean | null` フィールドを追加 (α案)
+  - `true` = invitation record あり (invited)
+  - `false` = invitation record なし (not invited)
+  - `null` = invitation 機能導入前の legacy row (判定不能)。`sender_owner_match: boolean | null`
+    の先例 (issue #5 設計) に倣い、bridge は `null` を「gate bypass しない」方向で扱う
 - または bridge が `get_participants` で招待済みリストを取得してキャッシュ (β案)
 
 ---
@@ -273,12 +295,15 @@ Phase 3 でこの default を `1` に変更する (= TOFU を deprecated に)。
 
 ```sql
 -- migration: 既存 participants を invited 扱いに
+-- invited_by は NULL: 既存参加者は招待制導入前に参加しており「招待元」という概念が存在しない。
+-- t.owner (= tenants.owner) は GitHub login 形式であり、invited_by が参照する
+-- participants.name (= handle 形式 '@alice') と型が異なるため NULL を使用する。
 INSERT INTO invitations (tenant_id, id, github_login, invited_by, consumed_at, status)
 SELECT
   p.tenant_id,
   lower(hex(randomblob(16))),  -- UUID 代用
-  p.owner,                     -- github_login = 既存 owner
-  t.owner,                     -- invited_by = tenant owner
+  p.owner,                     -- github_login = 既存参加者の GitHub login
+  NULL,                        -- invited_by = NULL (招待元は存在しない)
   p.created_at,                -- consumed_at = 元々の参加日時
   'consumed'
 FROM participants p
@@ -291,9 +316,9 @@ WHERE p.owner IS NOT NULL
 ### 10-2. 段階的 rollout
 
 ```
-Step 1 (現在): AGENT_HUB_REQUIRE_INVITATION=0 (default) — TOFU 継続
-Step 2 (Phase 1 完了後): opt-in 環境変数で invitation mode に切替可能
-Step 3 (Phase 3): AGENT_HUB_REQUIRE_INVITATION=1 を default 化、TOFU を deprecated
+Step 1 (現在): AGENT_HUB_REQUIRE_INVITATION 未設定 (default) — TOFU 継続
+Step 2 (Phase 1 完了後): AGENT_HUB_REQUIRE_INVITATION=1 (任意 non-empty) で invitation mode に切替可能
+Step 3 (Phase 3): default を invitation 必須に変更 / AGENT_HUB_DISABLE_INVITATION_CHECK=1 で TOFU 許容
 ```
 
 ---
