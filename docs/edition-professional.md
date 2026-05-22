@@ -370,6 +370,12 @@ if (edition === 'professional') {
       'AGENT_HUB_EDITION=professional では DATABASE_URL (PostgreSQL) が必須です。'
     );
   }
+  // OIDC_ISSUER が未指定の場合は startup で fail-fast
+  if (!env.OIDC_ISSUER) {
+    throw new EditionConfigError(
+      'AGENT_HUB_EDITION=professional では OIDC_ISSUER が必須です。'
+    );
+  }
   // REDIS_URL が未指定の場合は WARN (single instance では fallback 可能)
   if (!env.REDIS_URL) {
     console.warn(
