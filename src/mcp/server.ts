@@ -47,6 +47,8 @@ import {
   handleDeleteUser,
   getUserHistoryTool,
   handleGetUserHistory,
+  listSessionsByUserTool,
+  handleListSessionsByUser,
 } from './tools/admin.js';
 import {
   listTenantsTool,
@@ -1213,6 +1215,7 @@ export function getAvailableTools(editionConfig: EditionConfig): Array<unknown> 
     // admin tools (only callable by @admin)
     deleteUserTool,
     getUserHistoryTool,
+    listSessionsByUserTool,
   ];
   if (editionConfig.exposesCeAdminTools) {
     baseTools.push(listTenantsTool, getTenantTool, deleteTenantTool);
@@ -1297,6 +1300,8 @@ function createMcpServer(): Server {
         return await handleDeleteUser(scope, args, userId);
       case 'get_user_history':
         return await handleGetUserHistory(scope, args, userId);
+      case 'list_sessions_by_user':
+        return await handleListSessionsByUser(scope, args, userId, sessions);
       case 'list_tenants':
         return await handleListTenants(scope, args, userId);
       case 'get_tenant':
