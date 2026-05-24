@@ -62,7 +62,7 @@ send_message(to: "@you", body: "auth bypass — your call")
 
 Same `send_message` it uses for everything else. You reply through whatever interface you're looking at (Slack, terminal, web). The reply lands in `@reviewer`'s inbox. No pause, no resume, no dashboard.
 
-This is what a [Feb 2026 arXiv paper (2602.15831)](https://arxiv.org/abs/2602.15831) called the "A2H Protocol" — agents reaching humans through the same channel they use to reach each other. agent-hub has had it running since before the paper was published.
+A Feb 2026 pre-print ([arXiv:2602.15831](https://arxiv.org/abs/2602.15831)) independently proposed the same concept under the name "A2H Protocol" — agents reaching humans through the same channel they use to reach each other. agent-hub had a working implementation before the pre-print appeared.
 
 ---
 
@@ -71,7 +71,7 @@ This is what a [Feb 2026 arXiv paper (2602.15831)](https://arxiv.org/abs/2602.15
 **One command** (Linux/macOS):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kishibashi3/agent-hub-installer/main/installer.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kishibashi3/agent-hub-installer/main/install.sh | bash
 ```
 
 This starts the hub server + scheduler via Docker and walks you through connecting your first agent.
@@ -152,9 +152,8 @@ Admin tools (`delete_user`, `get_user_history`) and CE operator tools (`list_ten
 | `@bridge-a2a` | A2A protocol | ✅ Active |
 | `@bridge-adk` | Google ADK + LiteLLM | ✅ Active |
 | `@client-litellm` | Generic LLM (LiteLLM) | ✅ Active |
-| `@browser` | Playwright MCP | ✅ Active |
 
-All bridges live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges).
+`@bridge-claude`, `@bridge-gemini`, `@bridge-slack`, `@bridge-a2a` live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges). `@bridge-adk` is at [kishibashi3/agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk). `@client-litellm` is at [kishibashi3/agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm).
 
 **Worker modes:**
 - `stateful` — holds context across messages; resume after restart works
@@ -170,7 +169,7 @@ All bridges live in [kishibashi3/agent-hub-bridges](https://github.com/kishibash
 ## Architecture
 
 - **Transport**: MCP over HTTP + Server-Sent Events (Streamable HTTP, session resumable via `Mcp-Session-Id`)
-- **Push**: `notifications/resources/updated` on `send_message` — server side fully implemented; client support varies by MCP client ([status](docs/mcp-notification-client-status.md))
+- **Push**: `notifications/resources/updated` on `send_message` — server side fully implemented; most MCP clients don't yet implement `resources/subscribe`, so bridges fall back to 30s polling
 - **Storage**: SQLite (better-sqlite3), all tables tenant-isolated by `tenant_id`
 - **Presence**: `is_online` reflects active SSE subscription, not heartbeat
 - **Single instance**: no horizontal scale (SQLite + in-memory session map)
@@ -215,7 +214,7 @@ Environment variables: see `.env.example`. Key ones:
 | `MCP_PORT` | `3000` | |
 | `AGENT_HUB_EDITION` | `community` | `community` or `private` |
 | `GITHUB_PAT` | — | Required for CE |
-| `AGENT_HUB_DISABLE_DEFAULT_TENANT` | enabled | Set `=0` to open the default tenant in local dev |
+| `AGENT_HUB_DISABLE_DEFAULT_TENANT` | on (default tenant closed) | Set `=0` to open the default tenant in local dev |
 
 ---
 
