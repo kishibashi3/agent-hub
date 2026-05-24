@@ -153,7 +153,7 @@ Admin tools (`delete_user`, `get_user_history`) and CE operator tools (`list_ten
 | `@bridge-adk` | Google ADK + LiteLLM | ✅ Active |
 | `@client-litellm` | Generic LLM (LiteLLM) | ✅ Active |
 
-`@bridge-claude`, `@bridge-gemini`, `@bridge-slack`, `@bridge-a2a` live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges). `@bridge-adk` is at [kishibashi3/agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk). `@client-litellm` is at [kishibashi3/agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm).
+`@bridge-claude`, `@bridge-gemini`, `@bridge-slack`, `@bridge-a2a` live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges). `@bridge-adk` and `@client-litellm` are standalone workers (repositories private/archived).
 
 **Worker modes:**
 - `stateful` — holds context across messages; resume after restart works
