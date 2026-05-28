@@ -787,9 +787,15 @@ export async function runOneActivePingCycle(): Promise<{
   //
   // 正常系の bridge は initialize → subscribe を数秒以内に実施するため、
   // 5 分 TTL は安全マージンとして十分。
+  //
+  // NOTE: ping フェーズと同様にスナップショットを取ってから iterate する。
+  // `await transport.close()` で event loop に制御が戻る間に新規 session が
+  // `sessions.set()` される可能性があるため、live Map の直接 iterate は避ける
+  // (= @reviewer Minor #1 指摘対応)。
   let orphansEvicted = 0;
   const nowMs = Date.now();
-  for (const [sid, session] of sessions) {
+  const orphanSnapshot = Array.from(sessions.entries());
+  for (const [sid, session] of orphanSnapshot) {
     if (
       session.subscribedUris.size === 0 &&
       nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS
