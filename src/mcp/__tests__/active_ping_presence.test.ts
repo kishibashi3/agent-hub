@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   isPingLoopDisabled,
   startActivePingLoop,
   stopActivePingLoop,
+  runOneActivePingCycle,
+  _addSessionForTesting,
+  _clearSessionsForTesting,
 } from '../server.js';
 
 /**
@@ -117,5 +120,85 @@ describe('MCP active ping presence (issue #91)', () => {
       // 連続 stop も OK
       expect(() => stopActivePingLoop()).not.toThrow();
     });
+  });
+});
+
+/**
+ * issue #155: orphan session eviction の behavior test。
+ *
+ * spec: bridge の kill → re-spawn 時に initialize が短時間に複数発行され、
+ * subscribe に到達しない orphan session が sessions Map に残留する。
+ * ping は alive のまま (StreamableHTTP 接続が alive) なため ping loop で回収されない。
+ * → `runOneActivePingCycle` 末尾の eviction sweep で ORPHAN_IDLE_TTL_MS (5 min) 超の
+ *   未 subscribe session を強制 close + delete する。
+ *
+ * テスト注入: `_addSessionForTesting` / `_clearSessionsForTesting` (issue #155 追加 export)。
+ * production コードでは呼ばない (_resetGhostWarnCacheForTests と同 pattern)。
+ */
+describe('orphan session eviction (issue #155)', () => {
+  const SIX_MIN_MS = 6 * 60_000;  // ORPHAN_IDLE_TTL_MS (5min) より大きい
+  const THIRTY_SEC_MS = 30_000;   // ORPHAN_IDLE_TTL_MS より小さい
+
+  /**
+   * mock session を作る。
+   * - `server.ping()` は常に resolve (= ping フェーズでは回収されない)
+   * - `transport.close()` は vi.fn() で副作用なし
+   */
+  function makeMockSession(opts: {
+    subscribedUris?: string[];
+    ageMs: number;
+  }) {
+    return {
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+      server: { ping: vi.fn().mockResolvedValue(undefined) },
+      userId: '@test-user',
+      githubLogin: 'test-user',
+      tenantDomain: 'default',
+      subscribedUris: new Set(opts.subscribedUris ?? []),
+      createdAt: Date.now() - opts.ageMs,
+    };
+  }
+
+  afterEach(() => {
+    _clearSessionsForTesting();
+  });
+
+  it('TTL 超え + unsubscribed → evicted (orphansEvicted=1)', async () => {
+    _addSessionForTesting('orphan-old', makeMockSession({ ageMs: SIX_MIN_MS }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(1);
+    expect(stats.disconnected).toBe(0); // ping 失敗ではなく eviction で回収
+  });
+
+  it('TTL 未満 + unsubscribed → not evicted (= 初期化中の猶予)', async () => {
+    _addSessionForTesting('new-unsubscribed', makeMockSession({ ageMs: THIRTY_SEC_MS }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(0);
+  });
+
+  it('TTL 超え + subscribed → not evicted (= 正常 session は保護)', async () => {
+    _addSessionForTesting('active-subscribed', makeMockSession({
+      subscribedUris: ['inbox://@test-user'],
+      ageMs: SIX_MIN_MS,
+    }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(0);
+  });
+
+  it('orphan 2 件 + 正常 1 件 → orphan 2 件のみ evict', async () => {
+    _addSessionForTesting('orphan-1', makeMockSession({ ageMs: SIX_MIN_MS }));
+    _addSessionForTesting('orphan-2', makeMockSession({ ageMs: SIX_MIN_MS }));
+    _addSessionForTesting('active-1', makeMockSession({
+      subscribedUris: ['inbox://@test-user'],
+      ageMs: SIX_MIN_MS,
+    }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(2);
+    expect(stats.total).toBe(3);
+  });
+
+  it('runOneActivePingCycle の返り値に orphansEvicted フィールドが含まれる', async () => {
+    const stats = await runOneActivePingCycle();
+    expect(typeof stats.orphansEvicted).toBe('number');
   });
 });

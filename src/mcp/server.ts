@@ -168,6 +168,23 @@ export function _resetGhostWarnCacheForTests(): void {
 }
 
 /**
+ * Test-only: sessions Map に任意の Session を注入する (issue #155 orphan eviction test 用)。
+ * `_resetGhostWarnCacheForTests` / `setEditionConfigForTesting` と同 pattern。
+ * production コードでは呼ばない。
+ */
+export function _addSessionForTesting(sid: string, session: unknown): void {
+  sessions.set(sid, session as Session);
+}
+
+/**
+ * Test-only: sessions Map を全件 clear する (issue #155 orphan eviction test 用)。
+ * afterEach で呼んで test isolation を保証する。
+ */
+export function _clearSessionsForTesting(): void {
+  sessions.clear();
+}
+
+/**
  * Edition 設定 (= deployment-time singleton)。
  *
  * `MCPServer.start()` で `resolveEdition(process.env)` を 1 度だけ呼んで cache する。
@@ -637,6 +654,18 @@ const PING_TIMEOUT_MS = 5_000;
 const PING_MAX_RETRIES = 2;
 
 /**
+ * Orphan session の idle TTL (= issue #155)。
+ *
+ * `initialize` 完了後に `subscribe` を送らないまま本値を超えた session を
+ * ping cycle 末尾で強制 evict する。
+ *
+ * 正常系の bridge は `initialize` → `subscribe` を MCP init シーケンス内で
+ * 同期実施 (= 通常 < 5 秒)。5 分は安全マージンとして十分。
+ * これを超える未 subscribe は起動失敗と等価とみなして良い。
+ */
+const ORPHAN_IDLE_TTL_MS = 5 * 60_000;
+
+/**
  * Feature flag: `MCP_PING_LOOP_DISABLED` env が set されていれば active ping loop 無効化
  * (= rollback safety + 既存 SSE-only presence に倒す)。
  *
@@ -709,6 +738,7 @@ export async function runOneActivePingCycle(): Promise<{
   total: number;
   alive: number;
   disconnected: number;
+  orphansEvicted: number;
 }> {
   // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
   const snapshot: Array<[string, Session]> = Array.from(sessions.entries());
@@ -745,7 +775,44 @@ export async function runOneActivePingCycle(): Promise<{
     }
     disconnectedCount++;
   }
-  return { total: snapshot.length, alive: aliveCount, disconnected: disconnectedCount };
+
+  // --- orphan session eviction (issue #155) ---
+  //
+  // `subscribe` を送らないまま ORPHAN_IDLE_TTL_MS を超えた session を強制回収。
+  //
+  // root cause: bridge の kill → re-spawn 時に MCP initialize が短時間に複数発行される。
+  // 各 initialize で sessions.set() される が、 subscribe に到達するのは最後の 1 session のみ。
+  // 残りは subscribedUris=[] のまま残留し、 StreamableHTTP の接続が alive のため ping も
+  // 成功し続ける → 上の ping フェーズでは回収されない。
+  //
+  // 正常系の bridge は initialize → subscribe を数秒以内に実施するため、
+  // 5 分 TTL は安全マージンとして十分。
+  let orphansEvicted = 0;
+  const nowMs = Date.now();
+  for (const [sid, session] of sessions) {
+    if (
+      session.subscribedUris.size === 0 &&
+      nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS
+    ) {
+      console.log(
+        `[MCP] orphan session evicted: ${sid} ` +
+          `(userId=${session.userId} tenant=${session.tenantDomain} ` +
+          `createdAt=${new Date(session.createdAt).toISOString()}, issue #155)`
+      );
+      try {
+        await session.transport.close();
+      } catch (err) {
+        console.error(`[MCP] orphan evict transport.close failed for sid=${sid} (non-fatal):`, err);
+      }
+      // transport.onclose も sessions.delete を呼ぶが、 race 回避で明示削除
+      if (sessions.has(sid)) {
+        sessions.delete(sid);
+      }
+      orphansEvicted++;
+    }
+  }
+
+  return { total: snapshot.length, alive: aliveCount, disconnected: disconnectedCount, orphansEvicted };
 }
 
 /**
@@ -768,9 +835,10 @@ export function startActivePingLoop(): () => void {
   );
   activePingLoopInterval = setInterval(() => {
     void runOneActivePingCycle().then((stats) => {
-      if (stats.disconnected > 0) {
+      if (stats.disconnected > 0 || stats.orphansEvicted > 0) {
         console.log(
-          `[MCP] ping cycle: total=${stats.total} alive=${stats.alive} disconnected=${stats.disconnected}`
+          `[MCP] ping cycle: total=${stats.total} alive=${stats.alive} ` +
+            `disconnected=${stats.disconnected} orphansEvicted=${stats.orphansEvicted}`
         );
       }
     });
