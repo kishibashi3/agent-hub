@@ -142,7 +142,7 @@ def get_data():
         key = tuple(sorted([s, r]))
         links_raw[key] = links_raw.get(key, 0) + c
 
-    top = sorted(totals, key=lambda x: -totals[x])[:14]
+    top = sorted(totals, key=lambda x: -totals[x])
     top_set = set(top)
 
     nodes = [{"id": n, "total": totals[n], "team": n in teams} for n in top]
@@ -338,6 +338,12 @@ table.link-list .bar { height:8px; background:var(--accent); border-radius:2px; 
         style="width:80px;accent-color:var(--accent);cursor:pointer">
       <span id="drift-val" style="width:2ch;text-align:right">3</span>
     </label>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--text2)">
+      nodes
+      <input id="top-n" type="range" min="1" max="NODE_COUNT" value="NODE_DEFAULT" step="1"
+        style="width:80px;accent-color:var(--accent);cursor:pointer">
+      <span id="top-n-val" style="min-width:2ch;text-align:right">NODE_DEFAULT</span>
+    </label>
     tenant: TENANT_LABEL &nbsp;|&nbsp; reload で最新取得
     <button id="theme-btn" onclick="toggleTheme()">🌙 dark</button>
   </div>
@@ -361,9 +367,6 @@ NAV_BAR_HTML
 
 <!-- D3.js は <head> で先行 load 済 (= 2026-05-20 timeline bug fix、 旧 location)。 -->
 <script>
-const nodes = NODES_JSON;
-const links = LINKS_JSON;
-
 const roleColor = id => {
   if (id.includes('planner'))    return '#f78166';
   if (id.includes('reviewer'))   return '#ffa657';
@@ -378,11 +381,17 @@ const roleColor = id => {
   return '#8b949e';
 };
 
+// ── mesh view only (= #graph-pane が存在する場合のみ D3 初期化) ──────────
 const pane = document.getElementById('graph-pane');
+if (pane) {
+
+const allNodesRaw = NODES_JSON;
+const allLinksRaw = LINKS_JSON;
+
 const w = pane.offsetWidth, h = pane.offsetHeight;
 const svg = d3.select('#svg').attr('viewBox', [0, 0, w, h]);
 
-// ── SVG defs: glow filters + radial gradients per color ──────────────────
+// ── SVG defs: glow filters (one-time setup) ──────────────────────────────
 const defs = svg.append('defs');
 
 // glow filter
@@ -399,116 +408,135 @@ const egMerge = edgeGlow.append('feMerge');
 egMerge.append('feMergeNode').attr('in','blur');
 egMerge.append('feMergeNode').attr('in','SourceGraphic');
 
-// radial gradient per node
-nodes.forEach(d => {
-  const c = roleColor(d.id);
-  const grad = defs.append('radialGradient')
-    .attr('id', 'g-' + d.id.replace(/[@-]/g,'_'))
-    .attr('cx','35%').attr('cy','35%').attr('r','65%');
-  grad.append('stop').attr('offset','0%').attr('stop-color','#fff').attr('stop-opacity','0.35');
-  grad.append('stop').attr('offset','50%').attr('stop-color', c).attr('stop-opacity','1');
-  grad.append('stop').attr('offset','100%').attr('stop-color', d3.color(c).darker(1.2)).attr('stop-opacity','1');
-});
-
-const maxTotal = d3.max(nodes, d => d.total);
-const maxVal   = d3.max(links, d => d.value);
-const rScale = d3.scaleSqrt().domain([0, maxTotal]).range([6, 32]);
-const wScale = d3.scaleSqrt().domain([0, maxVal]).range([0.8, 6]);
-const opacityScale = d3.scaleLinear().domain([0, maxVal]).range([0.25, 0.85]);
-
-const sim = d3.forceSimulation(nodes)
-  .force('link', d3.forceLink(links).id(d => d.id).distance(d => 120 - wScale(d.value) * 3).strength(0.35))
-  .force('charge', d3.forceManyBody().strength(-380))
-  .force('center', d3.forceCenter(w / 2, h / 2))
-  .force('collision', d3.forceCollide().radius(d => rScale(d.total) + 12));
-
 const g = svg.append('g');
 
-// curved edges as <path>
-const link = g.append('g').selectAll('path').data(links).join('path')
-  .attr('fill', 'none')
-  .attr('stroke', d => roleColor(d.source.id || d.source))
-  .attr('stroke-opacity', d => opacityScale(d.value))
-  .attr('stroke-width', d => wScale(d.value))
-  .attr('filter', 'url(#edge-glow)');
+svg.call(d3.zoom().scaleExtent([0.3, 4])
+  .on('zoom', e => g.attr('transform', e.transform)));
 
-const node = g.append('g').selectAll('g').data(nodes).join('g')
-  .call(d3.drag()
-    .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-    .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
-    .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+let currentSim = null;
 
-// diamond points helper
-const diamond = r => `0,${-r} ${r},0 0,${r} ${-r},0`;
+// ── redraw(topN): ノード数を変えて force-graph を再描画 ─────────────────
+function redraw(topN) {
+  if (currentSim) currentSim.stop();
+  g.selectAll('*').remove();
 
-function addInteraction(sel) {
-  sel.on('mouseover', (e, d) => {
-      d3.select(e.currentTarget).attr('stroke-opacity', 1).attr('stroke-width', 2);
-      const tip = document.getElementById('tooltip');
-      const myLinks = links.filter(l => l.source.id === d.id || l.target.id === d.id);
-      const rows = myLinks.sort((a,b) => b.value - a.value).slice(0,6)
-        .map(l => {
-          const peer = l.source.id === d.id ? l.target.id : l.source.id;
-          return `<span style="color:var(--text2)">${peer}</span>: ${l.value}`;
-        }).join('<br>');
-      const badge = d.team ? ' <span style="font-size:9px;color:#ffa657">[team]</span>' : '';
-      tip.innerHTML = `<strong style="color:var(--accent)">${d.id}</strong>${badge}<br>total: ${d.total}<br>${rows}`;
-      tip.style.display = 'block';
-      tip.style.left = (e.pageX + 14) + 'px';
-      tip.style.top  = (e.pageY - 10) + 'px';
-    })
-    .on('mousemove', e => {
-      const tip = document.getElementById('tooltip');
-      tip.style.left = (e.pageX + 14) + 'px';
-      tip.style.top  = (e.pageY - 10) + 'px';
-    })
-    .on('mouseout', e => {
-      d3.select(e.currentTarget).attr('stroke-opacity', 0.6).attr('stroke-width', 1);
-      document.getElementById('tooltip').style.display = 'none';
-    });
+  // 上位 topN ノードと対応リンクを抽出 (shallow copy で D3 mutation を分離)
+  const ns = allNodesRaw.slice(0, topN).map(d => ({...d}));
+  const nsSet = new Set(ns.map(d => d.id));
+  const ls = allLinksRaw
+    .filter(l => nsSet.has(l.source) && nsSet.has(l.target))
+    .map(d => ({...d}));
+
+  // radial gradient per node (redraw ごとに再生成)
+  defs.selectAll('radialGradient').remove();
+  ns.forEach(d => {
+    const c = roleColor(d.id);
+    const grad = defs.append('radialGradient')
+      .attr('id', 'g-' + d.id.replace(/[@-]/g,'_'))
+      .attr('cx','35%').attr('cy','35%').attr('r','65%');
+    grad.append('stop').attr('offset','0%').attr('stop-color','#fff').attr('stop-opacity','0.35');
+    grad.append('stop').attr('offset','50%').attr('stop-color', c).attr('stop-opacity','1');
+    grad.append('stop').attr('offset','100%').attr('stop-color', d3.color(c).darker(1.2)).attr('stop-opacity','1');
+  });
+
+  const maxTotal = d3.max(ns, d => d.total);
+  const maxVal   = d3.max(ls, d => d.value);
+  const rScale = d3.scaleSqrt().domain([0, maxTotal || 1]).range([6, 32]);
+  const wScale = d3.scaleSqrt().domain([0, maxVal || 1]).range([0.8, 6]);
+  const opacityScale = d3.scaleLinear().domain([0, maxVal || 1]).range([0.25, 0.85]);
+
+  currentSim = d3.forceSimulation(ns)
+    .force('link', d3.forceLink(ls).id(d => d.id).distance(d => 120 - wScale(d.value) * 3).strength(0.35))
+    .force('charge', d3.forceManyBody().strength(-380))
+    .force('center', d3.forceCenter(w / 2, h / 2))
+    .force('collision', d3.forceCollide().radius(d => rScale(d.total) + 12));
+
+  // curved edges as <path>
+  const link = g.append('g').selectAll('path').data(ls).join('path')
+    .attr('fill', 'none')
+    .attr('stroke', d => roleColor(d.source.id || d.source))
+    .attr('stroke-opacity', d => opacityScale(d.value))
+    .attr('stroke-width', d => wScale(d.value))
+    .attr('filter', 'url(#edge-glow)');
+
+  const node = g.append('g').selectAll('g').data(ns).join('g')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) currentSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end',   (e, d) => { if (!e.active) currentSim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  // diamond points helper
+  const diamond = r => `0,${-r} ${r},0 0,${r} ${-r},0`;
+
+  function addInteraction(sel) {
+    sel.on('mouseover', (e, d) => {
+        d3.select(e.currentTarget).attr('stroke-opacity', 1).attr('stroke-width', 2);
+        const tip = document.getElementById('tooltip');
+        const myLinks = ls.filter(l => l.source.id === d.id || l.target.id === d.id);
+        const rows = myLinks.sort((a,b) => b.value - a.value).slice(0,6)
+          .map(l => {
+            const peer = l.source.id === d.id ? l.target.id : l.source.id;
+            return `<span style="color:var(--text2)">${peer}</span>: ${l.value}`;
+          }).join('<br>');
+        const badge = d.team ? ' <span style="font-size:9px;color:#ffa657">[team]</span>' : '';
+        tip.innerHTML = `<strong style="color:var(--accent)">${d.id}</strong>${badge}<br>total: ${d.total}<br>${rows}`;
+        tip.style.display = 'block';
+        tip.style.left = (e.pageX + 14) + 'px';
+        tip.style.top  = (e.pageY - 10) + 'px';
+      })
+      .on('mousemove', e => {
+        const tip = document.getElementById('tooltip');
+        tip.style.left = (e.pageX + 14) + 'px';
+        tip.style.top  = (e.pageY - 10) + 'px';
+      })
+      .on('mouseout', e => {
+        d3.select(e.currentTarget).attr('stroke-opacity', 0.6).attr('stroke-width', 1);
+        document.getElementById('tooltip').style.display = 'none';
+      });
+  }
+
+  // agents: circle with gradient + glow
+  node.filter(d => !d.team).append('circle')
+    .attr('r', d => rScale(d.total))
+    .attr('fill', d => `url(#g-${d.id.replace(/[@-]/g,'_')})`)
+    .attr('stroke', d => roleColor(d.id))
+    .attr('stroke-width', 1).attr('stroke-opacity', 0.6)
+    .attr('filter', 'url(#glow)')
+    .call(addInteraction);
+
+  // teams: diamond shape
+  node.filter(d => d.team).append('polygon')
+    .attr('points', d => diamond(rScale(d.total) * 1.1))
+    .attr('fill', d => `url(#g-${d.id.replace(/[@-]/g,'_')})`)
+    .attr('stroke', d => roleColor(d.id))
+    .attr('stroke-width', 1.5).attr('stroke-opacity', 0.8)
+    .attr('stroke-dasharray', '4 2')
+    .attr('filter', 'url(#glow)')
+    .call(addInteraction);
+
+  // label
+  node.append('text')
+    .attr('dy', d => rScale(d.total) * (d.team ? 1.2 : 1) + 14)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '10px')
+    .attr('fill', () => getComputedStyle(document.documentElement).getPropertyValue('--node-text').trim() || '#333')
+    .attr('pointer-events', 'none')
+    .text(d => d.team ? `${d.id} ◆` : d.id);
+
+  // curved path helper
+  function arcPath(d) {
+    const sx = d.source.x, sy = d.source.y;
+    const tx = d.target.x, ty = d.target.y;
+    const dx = tx - sx, dy = ty - sy;
+    const dr = Math.sqrt(dx*dx + dy*dy) * 1.4;
+    return `M${sx},${sy}A${dr},${dr} 0 0,1 ${tx},${ty}`;
+  }
+
+  currentSim.on('tick', () => {
+    link.attr('d', arcPath);
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
 }
-
-// agents: circle with gradient + glow
-node.filter(d => !d.team).append('circle')
-  .attr('r', d => rScale(d.total))
-  .attr('fill', d => `url(#g-${d.id.replace(/[@-]/g,'_')})`)
-  .attr('stroke', d => roleColor(d.id))
-  .attr('stroke-width', 1).attr('stroke-opacity', 0.6)
-  .attr('filter', 'url(#glow)')
-  .call(addInteraction);
-
-// teams: diamond shape
-node.filter(d => d.team).append('polygon')
-  .attr('points', d => diamond(rScale(d.total) * 1.1))
-  .attr('fill', d => `url(#g-${d.id.replace(/[@-]/g,'_')})`)
-  .attr('stroke', d => roleColor(d.id))
-  .attr('stroke-width', 1.5).attr('stroke-opacity', 0.8)
-  .attr('stroke-dasharray', '4 2')
-  .attr('filter', 'url(#glow)')
-  .call(addInteraction);
-
-// label
-node.append('text')
-  .attr('dy', d => rScale(d.total) * (d.team ? 1.2 : 1) + 14)
-  .attr('text-anchor', 'middle')
-  .attr('font-size', '10px')
-  .attr('fill', () => getComputedStyle(document.documentElement).getPropertyValue('--node-text').trim() || '#333')
-  .attr('pointer-events', 'none')
-  .text(d => d.team ? `${d.id} ◆` : d.id);
-
-// curved path helper
-function arcPath(d) {
-  const sx = d.source.x, sy = d.source.y;
-  const tx = d.target.x, ty = d.target.y;
-  const dx = tx - sx, dy = ty - sy;
-  const dr = Math.sqrt(dx*dx + dy*dy) * 1.4;
-  return `M${sx},${sy}A${dr},${dr} 0 0,1 ${tx},${ty}`;
-}
-
-sim.on('tick', () => {
-  link.attr('d', arcPath);
-  node.attr('transform', d => `translate(${d.x},${d.y})`);
-});
 
 // drift speed slider
 const speedSlider = document.getElementById('drift-speed');
@@ -517,22 +545,33 @@ speedSlider.addEventListener('input', () => { speedVal.textContent = speedSlider
 
 let drifting = true;
 setInterval(() => {
-  if (!drifting) return;
+  if (!drifting || !currentSim) return;
   const s = parseFloat(speedSlider.value);
   if (s === 0) return;
-  nodes.forEach(d => {
+  currentSim.nodes().forEach(d => {
     if (d.fx != null) return;
     d.vx = (d.vx || 0) + (Math.random() - 0.5) * s * 0.2;
     d.vy = (d.vy || 0) + (Math.random() - 0.5) * s * 0.2;
   });
-  sim.alpha(Math.max(sim.alpha(), s * 0.015)).restart();
+  currentSim.alpha(Math.max(currentSim.alpha(), s * 0.015)).restart();
 }, 1000);
 
 svg.on('mousedown', () => { drifting = false; })
    .on('mouseup',   () => { setTimeout(() => { drifting = true; }, 800); });
 
-svg.call(d3.zoom().scaleExtent([0.3, 4])
-  .on('zoom', e => g.attr('transform', e.transform)));
+// top-n slider (ノード数リアルタイム変更)
+const topNSlider = document.getElementById('top-n');
+const topNVal    = document.getElementById('top-n-val');
+topNSlider.addEventListener('input', () => {
+  const n = parseInt(topNSlider.value, 10);
+  topNVal.textContent = n;
+  redraw(n);
+});
+
+// 初期描画 (slider の default value を使用)
+redraw(parseInt(topNSlider.value, 10));
+
+} // end if (pane)
 
 // resizable divider (= mesh+matrix combined view 専用、 mesh-only / matrix-only / alt
 // view では #divider と #heatmap-pane が存在しないので early return で no-op 化)。
@@ -1292,6 +1331,8 @@ def render_alt_view_layout(view_name, body_html, total_msgs, total_agents, total
         .replace("TOTAL_AGENTS", str(total_agents))
         .replace("TOTAL_LINKS", str(total_links))
         .replace("TENANT_LABEL", esc(TENANT) if TENANT is not None else "all tenants")
+        .replace("NODE_COUNT", "0")
+        .replace("NODE_DEFAULT", "0")
     )
     return body.encode("utf-8")
 
@@ -1317,6 +1358,8 @@ def render_mesh_only(nodes, links, total_msgs, total_agents, total_links):
         '  </div>\n'
         '</div>'
     )
+    node_count = len(nodes)
+    node_default = min(node_count, 14)
     body = (
         HTML.replace("BODY_CLASS", "view-mesh")
         .replace("NAV_BAR_HTML", nav_bar)
@@ -1327,6 +1370,8 @@ def render_mesh_only(nodes, links, total_msgs, total_agents, total_links):
         .replace("TOTAL_AGENTS", str(total_agents))
         .replace("TOTAL_LINKS", str(total_links))
         .replace("TENANT_LABEL", esc(TENANT) if TENANT is not None else "all tenants")
+        .replace("NODE_COUNT", str(node_count))
+        .replace("NODE_DEFAULT", str(node_default))
     )
     return body.encode("utf-8")
 
@@ -1405,8 +1450,9 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif view == "matrix":
                 # 2026-05-20 Mesh/Matrix 分離 (= operator follow-up)
+                # matrix view は 上位 14 名に絞る (mesh view は slider で可変)
                 body = render_matrix_only(
-                    top, counts, totals, total_msgs, total_agents, total_links_for_header,
+                    top[:14], counts, totals, total_msgs, total_agents, total_links_for_header,
                 )
             elif view == "timeline":
                 view_body = render_timeline(range_label)
