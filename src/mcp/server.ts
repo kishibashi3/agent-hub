@@ -1628,7 +1628,7 @@ export class MCPServer {
     //
     // fly.io などの HTTP プロキシは per-request timeout で SSE 接続を切断することがある。
     // `Fly-Timeout-Kill-After: 0` レスポンスヘッダーで fly.io の request timeout を無効化し
-    // SSE 接続を長時間維持する (= issue #156 対応)。他の環境では無視されるため副作用なし。
+    // SSE 接続を長時間維持する (= issue #157 対応)。他の環境では無視されるため副作用なし。
     this.app.get('/mcp', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       if (!sessionId || !sessions.has(sessionId)) {
@@ -1646,12 +1646,23 @@ export class MCPServer {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);
       } catch (error) {
         // SSE 切断 → transport.onclose 未完了のレース中に reconnect が来た場合、
-        // transport.handleRequest が throw する (issue #156)。
+        // transport.handleRequest が throw する (issue #157)。
         // セッションをクリーンアップして 404 を返し、Claude Code に再 initialize を促す。
         // 500 を返すと client が "server error" と誤解し、不必要なアラートが出る。
         console.error('[MCP] GET handleRequest error (SSE reconnect race):', error);
         if (sessionId && sessions.has(sessionId)) {
-          sessions.delete(sessionId);
+          const session = sessions.get(sessionId)!;
+          // eviction パターン (active ping loop と同様): transport.close() → sessions.delete()。
+          // transport.onclose も sessions.delete を呼ぶが race 回避で明示削除する。
+          // close() は既にエラー状態の transport に対して throw する可能性があるため try/catch。
+          try {
+            await session.transport.close();
+          } catch (_closeErr) {
+            // transport は既にエラー状態 or 切断済み — 無視して delete に進む
+          }
+          if (sessions.has(sessionId)) {
+            sessions.delete(sessionId);
+          }
           console.log(`[MCP] session evicted after transport error: ${sessionId}`);
         }
         if (!res.headersSent) {
