@@ -1625,6 +1625,10 @@ export class MCPServer {
     });
 
     // GET /mcp: SSE long-lived ストリーム（クライアント主導の通知受信）
+    //
+    // fly.io などの HTTP プロキシは per-request timeout で SSE 接続を切断することがある。
+    // `Fly-Timeout-Kill-After: 0` レスポンスヘッダーで fly.io の request timeout を無効化し
+    // SSE 接続を長時間維持する (= issue #156 対応)。他の環境では無視されるため副作用なし。
     this.app.get('/mcp', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       if (!sessionId || !sessions.has(sessionId)) {
@@ -1635,11 +1639,31 @@ export class MCPServer {
         });
         return;
       }
+      // fly.io プロキシの request timeout を無効化して SSE 長時間接続を維持する。
+      // ref: https://fly.io/docs/networking/request-headers/#fly-timeout-kill-after
+      res.setHeader('Fly-Timeout-Kill-After', '0');
       try {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);
       } catch (error) {
-        console.error('[MCP] GET handleRequest error:', error);
-        if (!res.headersSent) res.status(500).end();
+        // SSE 切断 → transport.onclose 未完了のレース中に reconnect が来た場合、
+        // transport.handleRequest が throw する (issue #156)。
+        // セッションをクリーンアップして 404 を返し、Claude Code に再 initialize を促す。
+        // 500 を返すと client が "server error" と誤解し、不必要なアラートが出る。
+        console.error('[MCP] GET handleRequest error (SSE reconnect race):', error);
+        if (sessionId && sessions.has(sessionId)) {
+          sessions.delete(sessionId);
+          console.log(`[MCP] session evicted after transport error: ${sessionId}`);
+        }
+        if (!res.headersSent) {
+          res.status(404).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'session connection interrupted; please reinitialize',
+            },
+            id: null,
+          });
+        }
       }
     });
 

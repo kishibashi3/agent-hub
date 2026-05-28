@@ -24,6 +24,10 @@ primary_region = "nrt"
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
+  # issue #156: SSE long-lived 接続を維持するため idle timeout を無効化する。
+  # fly.io のデフォルト ~60s は SSE 接続を切断してしまい、Claude Code の reconnect 時に
+  # 500 が返る問題を引き起こしていた。0 = no timeout。
+  idle_timeout = 0
 
   [[http_service.checks]]
     grace_period = "10s"
