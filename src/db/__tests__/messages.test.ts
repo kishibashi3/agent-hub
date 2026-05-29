@@ -133,6 +133,99 @@ describe('messages.ts', () => {
       expect(message.sender).toBe('@alice');
       expect(message.recipient).toBe('@bob');
     });
+
+    // caused_by テスト群 (issue #162)
+    describe('caused_by', () => {
+      it('caused_by なし → caused_by は null', () => {
+        const msg = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        expect(msg.caused_by ?? null).toBeNull();
+      });
+
+      it('caused_by 付きで送信するとレスポンスに caused_by が含まれる', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root message' }, 'alice');
+        const reply = sendMessage(
+          db,
+          'default',
+          { to: 'alice', message: 'reply', caused_by: root.id },
+          'bob'
+        );
+        expect(reply.caused_by).toBe(root.id);
+      });
+
+      it('存在しない caused_by を指定するとエラー', () => {
+        expect(() =>
+          sendMessage(
+            db,
+            'default',
+            { to: 'bob', message: 'bad ref', caused_by: 'non-existent-id' },
+            'alice'
+          )
+        ).toThrow('caused_by に指定されたメッセージ non-existent-id は存在しません');
+      });
+
+      it('caused_by チェーンが 20 hop を超えるとエラー (境界値)', () => {
+        // hop 0: root (親なし)
+        let prevId = sendMessage(db, 'default', { to: 'bob', message: 'hop 0' }, 'alice').id;
+
+        // hop 1 〜 hop 20: 20 リンクのチェーンを構築
+        // hop 20 の caused_by を遡ると root まで 20 hop = 拒否境界
+        for (let i = 1; i <= 20; i++) {
+          const sender = i % 2 === 1 ? 'bob' : 'alice';
+          const recipient = i % 2 === 1 ? 'alice' : 'bob';
+          prevId = sendMessage(
+            db,
+            'default',
+            { to: recipient, message: `hop ${i}`, caused_by: prevId },
+            sender
+          ).id;
+        }
+
+        // hop 21 → hop 20: CTE で hop20 から root まで 20 hop を検出 → エラー
+        expect(() =>
+          sendMessage(
+            db,
+            'default',
+            { to: 'alice', message: 'hop 21', caused_by: prevId },
+            'bob'
+          )
+        ).toThrow('caused_by チェーンが深さ上限');
+      });
+
+      it('getMessage でも caused_by が返される', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        const reply = sendMessage(
+          db,
+          'default',
+          { to: 'alice', message: 'reply', caused_by: root.id },
+          'bob'
+        );
+
+        const fetched = getMessage(db, 'default', reply.id, 'alice');
+        expect(fetched.caused_by).toBe(root.id);
+      });
+
+      it('getHistory でも caused_by が返される', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        sendMessage(
+          db,
+          'default',
+          { to: 'alice', message: 'reply', caused_by: root.id },
+          'bob'
+        );
+
+        const history = getHistory(
+          db,
+          'default',
+          { to: 'alice', limit: 10 } as GetHistoryInput,
+          'bob'
+        );
+        const reply = history.find((m) => m.body === 'reply');
+        expect(reply?.caused_by).toBe(root.id);
+
+        const rootMsg = history.find((m) => m.body === 'root');
+        expect(rootMsg?.caused_by ?? null).toBeNull();
+      });
+    });
   });
 
   describe('getMessage', () => {

@@ -96,6 +96,13 @@ export function sendMessage(
   // 因果リンクを message_causes に記録 (issue #162)
   // V1: position=0 のみ（単一 caused_by、Tree 構造）
   if (causedBy !== null) {
+    // caused_by_id 存在確認（FK エラーを日本語メッセージに変換、既存パターンと統一）
+    const causedByExists = db
+      .prepare('SELECT 1 FROM messages WHERE tenant_id = ? AND id = ?')
+      .get(tenantId, causedBy);
+    if (!causedByExists) {
+      throw new Error(`caused_by に指定されたメッセージ ${causedBy} は存在しません`);
+    }
     db.prepare(
       'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)'
     ).run(tenantId, messageId, causedBy);
