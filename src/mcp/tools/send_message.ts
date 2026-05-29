@@ -29,6 +29,13 @@ export const sendMessageTool = {
         type: 'string',
         description: '送信するメッセージ本文',
       },
+      caused_by: {
+        type: 'string',
+        description:
+          '(optional) このメッセージを引き起こした元メッセージの ID。因果チェーン追跡用 (issue #162)。' +
+          '省略または null = chain の root（自発的メッセージ・新規タスク開始等）。' +
+          'V1: 単一 ID のみ指定可。V2 で DAG に拡張予定。',
+      },
     },
     required: ['to', 'message'],
   },
@@ -90,6 +97,7 @@ export async function handleSendMessage(
               from: message.sender,
               to: message.recipient,
               message: message.body,
+              caused_by: message.caused_by ?? null,
               timestamp: message.created_at,
             },
             null,

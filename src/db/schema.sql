@@ -1,4 +1,4 @@
--- agent-hub スキーマ v8
+-- agent-hub スキーマ v10
 -- MCP Server 用。参加者・チーム・メッセージ・既読管理 (multi-tenant)。
 -- v3: participants に owner 列を追加（PAT 認証下のハンドル所有者を記録）
 -- v4: participants に mode 列を追加（peer の worker type: stateful/stateless/global）
@@ -14,6 +14,9 @@
 -- v8: messages に sender_github_login 列を追加（PAT owner の forensic audit、issue #21 Fix 1）
 --      - NULL 許容: migration 前の既存 row のみ NULL (production server は PAT/trust 両 mode で non-null を書き込む)
 -- v9: messages.sender_github_login → sender_login rename (auth provider agnostic, issue #127)
+-- v10: message_causes junction テーブル追加（メッセージ因果チェーン追跡、issue #162）
+--      - V1: position=0 の成分のみ使用（単一 caused_by、Tree 構造）
+--      - V2: position > 0 で DAG（複数親）に拡張可能。migration 不要。
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -23,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (9, 'agent-hub v9: rename messages.sender_github_login to sender_login (issue #127)');
+VALUES (10, 'agent-hub v10: message_causes junction table for causal chain tracking (issue #162)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -92,6 +95,24 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_recipient ON messages(tenant_id, recipient);
 CREATE INDEX idx_messages_sender ON messages(tenant_id, sender);
 CREATE INDEX idx_messages_created_at ON messages(tenant_id, created_at);
+
+-- メッセージ因果テーブル (issue #162)
+-- DM / チーム broadcast 間のリクエスト伝播経路を記録する。
+-- V1: position=0 の成分のみ使用（send_message の caused_by 引数 = 直接の親）
+-- V2: position > 0 を追加することで DAG（複数親）に拡張可能。テーブル再作成不要。
+-- FK: ON DELETE CASCADE で親 message 削除時に自動削除。caused_by_id は no action（orphan を許容）。
+CREATE TABLE message_causes (
+  tenant_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  caused_by_id TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,  -- 0 = primary（主因果）/ 将来 DAG 対応で 1,2,... を追加
+  PRIMARY KEY (tenant_id, message_id, caused_by_id),
+  FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id)
+);
+
+-- caused_by_id で「このメッセージを原因とする子メッセージ」を高速検索するためのインデックス
+CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
 
 -- 既読管理
 CREATE TABLE read_receipts (

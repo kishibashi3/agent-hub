@@ -51,6 +51,7 @@ export async function handleGetMessages(
       from: msg.sender,
       to: msg.recipient,
       message: msg.body,
+      caused_by: msg.caused_by ?? null,
       timestamp: msg.created_at,
     }));
 

@@ -66,6 +66,10 @@ export const messageSchema = z.object({
   // v9: auth login (PAT owner 等)。NULL = migration 前の既存 row のみ (issue #127)
   // production server は PAT/trust 両 mode で non-null を書き込む (trust mode: login = handle name)
   sender_login: z.string().nullable(),
+  // v10: 直接の親メッセージ ID (issue #162)。message_causes(position=0) の JOIN 結果として付与。
+  // messages テーブル自体には存在しない — SELECT * では取得できず、LEFT JOIN で解決する。
+  // optional: JOIN なしの SELECT * 結果との後方互換を保つ。
+  caused_by: z.string().nullable().optional(),
   created_at: z.string(),
 });
 
@@ -74,6 +78,9 @@ export type Message = z.infer<typeof messageSchema>;
 export const sendMessageInputSchema = z.object({
   to: z.string().min(1),
   message: z.string().min(1),
+  // v10: 因果追跡 (issue #162)。省略 or null = chain の root（自発的メッセージ等）。
+  // opt-in 設計: SDK / LLM が明示的に指定する。自動伝播しない。
+  caused_by: z.string().optional(),
 });
 
 export type SendMessageInput = z.infer<typeof sendMessageInputSchema>;

@@ -58,6 +58,32 @@ export function sendMessage(
     }
   }
 
+  // caused_by 深さ上限チェック (loop prevention、issue #162)
+  // message_causes を再帰的に遡り 20 hop 以上で拒否。
+  // DFS サイクル検出はバッチ処理向けのため、ここでは深さ上限のみ検査する。
+  const causedBy = input.caused_by ?? null;
+  if (causedBy !== null) {
+    const depthRow = db
+      .prepare(
+        `WITH RECURSIVE chain(id, depth) AS (
+           SELECT ?, 0
+           UNION ALL
+           SELECT mc.caused_by_id, c.depth + 1
+           FROM message_causes mc
+           JOIN chain c ON mc.tenant_id = ? AND mc.message_id = c.id AND mc.position = 0
+           WHERE c.depth < 20
+         )
+         SELECT MAX(depth) AS max_depth FROM chain`
+      )
+      .get(causedBy, tenantId) as { max_depth: number | null };
+
+    if (depthRow?.max_depth !== null && depthRow.max_depth >= 20) {
+      throw new Error(
+        `caused_by チェーンが深さ上限 (20 hop) を超えています。ループが疑われます。`
+      );
+    }
+  }
+
   // メッセージを作成
   const messageId = randomUUID();
   const now = new Date().toISOString();
@@ -67,8 +93,22 @@ export function sendMessage(
     'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_login, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(tenantId, messageId, senderName, recipientName, input.message, login, now);
 
+  // 因果リンクを message_causes に記録 (issue #162)
+  // V1: position=0 のみ（単一 caused_by、Tree 構造）
+  if (causedBy !== null) {
+    db.prepare(
+      'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)'
+    ).run(tenantId, messageId, causedBy);
+  }
+
   const message = db
-    .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')
+    .prepare(
+      `SELECT m.*, mc.caused_by_id AS caused_by
+       FROM messages m
+       LEFT JOIN message_causes mc
+         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+       WHERE m.tenant_id = ? AND m.id = ?`
+    )
     .get(tenantId, messageId) as Message;
 
   return message;
@@ -93,7 +133,13 @@ export function getMessage(
   }
 
   const message = db
-    .prepare('SELECT * FROM messages WHERE tenant_id = ? AND id = ?')
+    .prepare(
+      `SELECT m.*, mc.caused_by_id AS caused_by
+       FROM messages m
+       LEFT JOIN message_causes mc
+         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+       WHERE m.tenant_id = ? AND m.id = ?`
+    )
     .get(tenantId, messageId) as Message | undefined;
 
   if (!message) {
@@ -138,8 +184,10 @@ export function getUnreadMessages(
 
   const messages = db
     .prepare(
-      `SELECT m.*
+      `SELECT m.*, mc.caused_by_id AS caused_by
        FROM messages m
+       LEFT JOIN message_causes mc
+         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
        LEFT JOIN read_receipts rr
          ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
        WHERE m.tenant_id = ?
@@ -206,15 +254,21 @@ export function getHistory(
 
   if (targetIsTeam) {
     query = `
-      SELECT * FROM messages
-      WHERE tenant_id = ? AND recipient = ?`;
+      SELECT m.*, mc.caused_by_id AS caused_by
+      FROM messages m
+      LEFT JOIN message_causes mc
+        ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+      WHERE m.tenant_id = ? AND m.recipient = ?`;
     params = [tenantId, targetName];
   } else {
     query = `
-      SELECT * FROM messages
-      WHERE tenant_id = ?
-        AND ((sender = ? AND recipient = ?)
-          OR (sender = ? AND recipient = ?))`;
+      SELECT m.*, mc.caused_by_id AS caused_by
+      FROM messages m
+      LEFT JOIN message_causes mc
+        ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+      WHERE m.tenant_id = ?
+        AND ((m.sender = ? AND m.recipient = ?)
+          OR (m.sender = ? AND m.recipient = ?))`;
     params = [tenantId, requesterName, targetName, targetName, requesterName];
   }
 
@@ -225,11 +279,11 @@ export function getHistory(
   // future Japanese 検索 needs 顕在化時の expansion path = ICU collation / FTS5 unicode61 candidate (= 設計 doc §5.2 + §9)
   // 空文字列 = filter なしと同等扱い (= 設計 doc §3.2)
   if (input.filter && input.filter.length > 0) {
-    query += `\n        AND body LIKE '%' || ? || '%'`;
+    query += `\n        AND m.body LIKE '%' || ? || '%'`;
     params.push(input.filter);
   }
 
-  query += `\n      ORDER BY created_at DESC, rowid DESC\n      LIMIT ?`;
+  query += `\n      ORDER BY m.created_at DESC, m.rowid DESC\n      LIMIT ?`;
   params.push(input.limit);
 
   const messages = db.prepare(query).all(...params) as Message[];
