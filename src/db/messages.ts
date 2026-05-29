@@ -58,11 +58,20 @@ export function sendMessage(
     }
   }
 
-  // caused_by 深さ上限チェック (loop prevention、issue #162)
-  // message_causes を再帰的に遡り 20 hop 以上で拒否。
-  // DFS サイクル検出はバッチ処理向けのため、ここでは深さ上限のみ検査する。
+  // caused_by バリデーション（DB write の前にすべて完了させ orphaned message を防ぐ）
   const causedBy = input.caused_by ?? null;
   if (causedBy !== null) {
+    // 1) 存在確認（FK エラーを日本語メッセージに変換、既存パターンと統一）
+    const causedByExists = db
+      .prepare('SELECT 1 FROM messages WHERE tenant_id = ? AND id = ?')
+      .get(tenantId, causedBy);
+    if (!causedByExists) {
+      throw new Error(`caused_by に指定されたメッセージ ${causedBy} は存在しません`);
+    }
+
+    // 2) 深さ上限チェック (loop prevention、issue #162)
+    // message_causes を再帰的に遡り 20 hop 以上で拒否。
+    // DFS サイクル検出はバッチ処理向けのため、ここでは深さ上限のみ検査する。
     const depthRow = db
       .prepare(
         `WITH RECURSIVE chain(id, depth) AS (
@@ -84,7 +93,7 @@ export function sendMessage(
     }
   }
 
-  // メッセージを作成
+  // メッセージを作成（バリデーション完了後に DB write）
   const messageId = randomUUID();
   const now = new Date().toISOString();
   const login = senderLogin ?? null;
@@ -96,13 +105,6 @@ export function sendMessage(
   // 因果リンクを message_causes に記録 (issue #162)
   // V1: position=0 のみ（単一 caused_by、Tree 構造）
   if (causedBy !== null) {
-    // caused_by_id 存在確認（FK エラーを日本語メッセージに変換、既存パターンと統一）
-    const causedByExists = db
-      .prepare('SELECT 1 FROM messages WHERE tenant_id = ? AND id = ?')
-      .get(tenantId, causedBy);
-    if (!causedByExists) {
-      throw new Error(`caused_by に指定されたメッセージ ${causedBy} は存在しません`);
-    }
     db.prepare(
       'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)'
     ).run(tenantId, messageId, causedBy);
