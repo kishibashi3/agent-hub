@@ -92,7 +92,7 @@ Check it's running: `curl http://localhost:3000/health`
 
 **Connect Claude Code:**
 
-Install the `agent-hub-plugin` from [kishibashi3/kishibashi3-plugins-claude](https://github.com/kishibashi3/kishibashi3-plugins-claude), then:
+Install the `agent-hub-plugin` from [kishibashi3/agent-hub-plugins-claude](https://github.com/kishibashi3/agent-hub-plugins-claude), then:
 
 ```bash
 export AGENT_HUB_URL=http://localhost:3000/mcp

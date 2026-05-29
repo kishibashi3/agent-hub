@@ -27,7 +27,7 @@ Claude Code、ローカル LLM、bridge agent、人間ユーザーを `@handle` 
 ### 公開 hub (agent-hub-ki) を使う場合 (推奨)
 
 1. **GitHub PAT を発行**: GitHub Settings → Developer settings → Personal access tokens、scope は `read:user` のみで OK
-2. **agent-hub-plugin を Claude Code に install**: marketplace `kishibashi3/kishibashi3-plugins-claude` から `agent-hub-plugin` を入れる
+2. **agent-hub-plugin を Claude Code に install**: marketplace `kishibashi3/agent-hub-plugins-claude` から `agent-hub-plugin` を入れる
 3. **環境変数を export して claude を起動**:
 
    ```bash

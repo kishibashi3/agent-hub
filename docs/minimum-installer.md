@@ -44,7 +44,7 @@ agent-hub ecosystem は現状 alpha、初めて触る人(= ecosystem 外の engi
 
 ### 3.1 公開 hub (agent-hub-ki.fly.dev) 利用 path (= 最短)
 
-[`README.md`](../README.md) 「公開 hub を使う場合」 + [`kishibashi3-plugins-claude` README](https://github.com/kishibashi3/kishibashi3-plugins-claude/blob/main/plugins/agent-hub-plugin/README.md) 参照。
+[`README.md`](../README.md) 「公開 hub を使う場合」 + [`agent-hub-plugins-claude` README](https://github.com/kishibashi3/agent-hub-plugins-claude/blob/main/plugins/agent-hub-plugin/README.md) 参照。
 
 **Step list** (= L0 minimum まで):
 
@@ -55,7 +55,7 @@ agent-hub ecosystem は現状 alpha、初めて触る人(= ecosystem 外の engi
 | 3 | `~/.bashrc` (or `~/.zshrc`) 編集で `export AGENT_HUB_URL` + `export GITHUB_PAT` + (`export AGENT_HUB_TENANT`) 追加 | 2 min | shell 設定 file 編集、export 必須(代入だけだと NG)を間違えやすい |
 | 4 | 新 shell 起動 or `source ~/.bashrc` | < 1 min | env 反映の概念把握 |
 | 5 | `claude` 起動 | < 1 min | - |
-| 6 | `/plugin marketplace add https://github.com/kishibashi3/kishibashi3-plugins-claude` | 1 min | trust prompt、URL 入力 |
+| 6 | `/plugin marketplace add https://github.com/kishibashi3/agent-hub-plugins-claude` | 1 min | trust prompt、URL 入力 |
 | 7 | `/plugin install agent-hub-plugin` | 1 min | trust prompt |
 | 8 | `/reload-plugins` | < 1 min | 「install 直後は MCP server が登録されないことがある」の caveat |
 | 9 | `/mcp` で接続確認 | < 1 min | ✓ connected / ✓ authenticated 両方確認 |
@@ -359,7 +359,7 @@ self-host PE / CE 利用層向け、`agenthub up --hub=local` と統合余地あ
 - `agent-hub.sh` repo or `agent-hub/scripts/install.sh` 新規作成
 - gh CLI OAuth Device Flow 経由の PAT auto-issue 実装
 - shell rc auto-edit(idempotent) + AGENT_HUB_URL prompt
-- 既存 `kishibashi3-plugins-claude` README の手順を script 化
+- 既存 `agent-hub-plugins-claude` README の手順を script 化
 
 **Phase 2 (= ~2-3 month、Phase 1 後)**:
 - `agenthub` CLI tool 新規 repo(`kishibashi3/agenthub-cli` 想定)
@@ -431,7 +431,7 @@ self-host PE / CE 利用層向け、`agenthub up --hub=local` と統合余地あ
 - agent-hub `docs/architecture.md` §1.2 layer 解説 + §9「始めるには」
 - agent-hub `docs/edition-model.md`(CE / PE 区別)
 - agent-hub `docs/deployment-pi5.md`(Pi5 deploy 詳細手順)
-- `kishibashi3-plugins-claude/plugins/agent-hub-plugin/README.md`(plugin setup)
+- `agent-hub-plugins-claude/plugins/agent-hub-plugin/README.md`(plugin setup)
 - `agent-hub-bridge-claude/README.md`(bridge worker setup 「予定」)
 - agent-hub ADR `docs/decisions/2026-05-18-peer-mesh-architecture-decision.md` §I(Transparent Asymmetry within Symmetric Mesh、minimum 体験の差別化根拠)
 - agent-hub `docs/collaboration-model.md`(共在 co-presence operational mechanism)

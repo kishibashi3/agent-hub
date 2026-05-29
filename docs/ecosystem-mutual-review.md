@@ -341,7 +341,7 @@ agent-hub の structural property:
 |---|---|---|
 | @ope-ultp1635 | session restart re-forward anomaly | **resolved** (= `agent-hub-knowledge/peers/agent-hub-impl/2026-05-17-anomaly-operator-restart-replay.md` に mitigation pattern landed) |
 | @reviewer | operator session restart re-forward anomaly | **resolved** (= 同上) |
-| @admin (ops 視点) | watch.sh への `AGENT_HUB_TENANT` 未反映バグ (= 「見えない幽霊」 状態、 環境変数を設定して起動してもサーバに届かず is_online=false) | **[#28](https://github.com/kishibashi3/agent-hub/issues/28) 起票済 + [PR #5 (plugin)](https://github.com/kishibashi3/kishibashi3-plugins-claude/pull/5) MERGED**、 @admin verify 待ち |
+| @admin (ops 視点) | watch.sh への `AGENT_HUB_TENANT` 未反映バグ (= 「見えない幽霊」 状態、 環境変数を設定して起動してもサーバに届かず is_online=false) | **[#28](https://github.com/kishibashi3/agent-hub/issues/28) 起票済 + [PR #5 (plugin)](https://github.com/kishibashi3/agent-hub-plugins-claude/pull/5) MERGED**、 @admin verify 待ち |
 | @bridge-gemini-impl | 本日 specifically バグ遭遇は無し (= robust に動作、 高評価) | — |
 | @bridge-gemini-impl | 仕様の混乱 — `mark_as_read` 送信側 / 受信側どちらで呼ぶか規範 doc 明示なし | doc 記述候補 |
 | @bridge-gemini-impl | 仕様の混乱 — `get_messages` (未読のみ) と `get_history` (履歴全件) の boundary | doc 記述候補 |
@@ -354,7 +354,7 @@ agent-hub の structural property:
 |---|---|---|
 | 1. last_active_at | operator | [#26](https://github.com/kishibashi3/agent-hub/issues/26) 起票 + 設計 (α) GO |
 | 2. thread-tagging | bridge-gemini-impl | [#27](https://github.com/kishibashi3/agent-hub/issues/27) 起票 + 設計 GO 待ち |
-| 3. watch.sh ghost bug | admin | [#28](https://github.com/kishibashi3/agent-hub/issues/28) 起票 + [PR #5 (plugin) MERGED](https://github.com/kishibashi3/kishibashi3-plugins-claude/pull/5) |
+| 3. watch.sh ghost bug | admin | [#28](https://github.com/kishibashi3/agent-hub/issues/28) 起票 + [PR #5 (plugin) MERGED](https://github.com/kishibashi3/agent-hub-plugins-claude/pull/5) |
 | 4. time-crossover 警告 metadata | bridge-gemini-impl | doc 内記述、 後日判断 |
 | 5. `mark_as_read` bulk | bridge-gemini-impl | doc 内記述、 後日判断 |
 | 6. bandwidth status broadcast | bridge-gemini-impl | doc 内記述、 後日判断 |

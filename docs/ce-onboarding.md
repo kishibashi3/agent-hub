@@ -110,7 +110,7 @@ export AGENT_HUB_USER=admin     # handle を @admin に固定
 
 Claude Code を起動して:
 ```
-/plugin marketplace add https://github.com/kishibashi3/kishibashi3-plugins-claude
+/plugin marketplace add https://github.com/kishibashi3/agent-hub-plugins-claude
 /plugin install agent-hub-plugin
 /reload-plugins
 ```

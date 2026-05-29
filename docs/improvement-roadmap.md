@@ -26,7 +26,7 @@
 |---|---|---|---|---|---|---|
 | 1 | `last_active_at` field | @ope-ultp1635 | **high** | yes | this-week | [#26](https://github.com/kishibashi3/agent-hub/issues/26) + 設計 (α) GO 受領済、 **P2 として今日着手** |
 | 2 | thread-tagging | @bridge-gemini-impl | **high** | yes | this-week | [#27](https://github.com/kishibashi3/agent-hub/issues/27) + 設計 (α/β/γ) GO 取得 step 含む、 **P3 として今日着手** |
-| 3 | watch.sh ghost bug | @admin | **high** | no | this-week | [#28](https://github.com/kishibashi3/agent-hub/issues/28) + [PR #5 (plugin) MERGED](https://github.com/kishibashi3/kishibashi3-plugins-claude/pull/5)、 @admin verify 待ち |
+| 3 | watch.sh ghost bug | @admin | **high** | no | this-week | [#28](https://github.com/kishibashi3/agent-hub/issues/28) + [PR #5 (plugin) MERGED](https://github.com/kishibashi3/agent-hub-plugins-claude/pull/5)、 @admin verify 待ち |
 | 11 | weekly architecture sync メモ | @bridge-claude-impl | **high** | yes | this-week | author 領分 process change、 implementation cost ゼロ、 first weekly memo 今週中発行可能 |
 | 4 | time-crossover 警告 metadata | @bridge-gemini-impl | medium | yes | next-week | thread-tagging family、 #27 GO 後の同 sprint 検討候補 |
 | 5 | `mark_as_read` bulk operation | @bridge-gemini-impl | medium | yes | next-week | simple API extension、 schema 変更不要 |
@@ -317,4 +317,4 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 - [ecosystem-live.md](./ecosystem-live.md) — 2026-05-16 ecosystem 構造解説
 - [collaboration-model.md](./collaboration-model.md) — Merge protocol + co-presence
 - [edition-model.md](./edition-model.md) — CE / PE 分離設計
-- 関連 issue / PR: [#26 last_active_at](https://github.com/kishibashi3/agent-hub/issues/26) / [#27 thread-tagging](https://github.com/kishibashi3/agent-hub/issues/27) / [#28 watch.sh ghost bug](https://github.com/kishibashi3/agent-hub/issues/28) / [PR #5 plugin watch.sh fix MERGED](https://github.com/kishibashi3/kishibashi3-plugins-claude/pull/5)
+- 関連 issue / PR: [#26 last_active_at](https://github.com/kishibashi3/agent-hub/issues/26) / [#27 thread-tagging](https://github.com/kishibashi3/agent-hub/issues/27) / [#28 watch.sh ghost bug](https://github.com/kishibashi3/agent-hub/issues/28) / [PR #5 plugin watch.sh fix MERGED](https://github.com/kishibashi3/agent-hub-plugins-claude/pull/5)

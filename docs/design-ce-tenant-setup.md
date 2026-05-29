@@ -164,7 +164,7 @@ Your hub is running. Now claim @admin to initialize the deployment:
        export AGENT_HUB_USER=admin        # fixes your handle to @admin
 
   2. Install agent-hub-plugin in Claude Code (if not yet):
-       /plugin marketplace add https://github.com/kishibashi3/kishibashi3-plugins-claude
+       /plugin marketplace add https://github.com/kishibashi3/agent-hub-plugins-claude
        /plugin install agent-hub-plugin
 
   3. Call the register tool (from Claude Code):
