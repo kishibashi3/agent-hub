@@ -77,6 +77,10 @@ jobs:
           echo "git_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "git_commit_at=$(git log -1 --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Set up QEMU
+        # ARM64 イメージを amd64 runner でクロスビルドするために QEMU エミュレーションが必要
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -109,6 +113,8 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          # linux/amd64 + linux/arm64 の multi-arch manifest を同時ビルド・push
+          platforms: linux/amd64,linux/arm64
           # PR 時は push=false で build verify のみ
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.tags }}
@@ -126,6 +132,8 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          # linux/amd64 + linux/arm64 の multi-arch manifest を同時ビルド・push
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: ${{ steps.tags.outputs.labels }}
