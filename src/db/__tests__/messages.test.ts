@@ -226,6 +226,79 @@ describe('messages.ts', () => {
         expect(rootMsg?.caused_by ?? null).toBeNull();
       });
     });
+
+    // root_message_id テスト群 (issue #166)
+    describe('root_message_id (internal)', () => {
+      it('caused_by なしのメッセージは message_causes に行が存在しない', () => {
+        const msg = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        const row = db
+          .prepare('SELECT * FROM message_causes WHERE tenant_id = ? AND message_id = ?')
+          .get('default', msg.id);
+        expect(row).toBeUndefined();
+      });
+
+      it('直接の返信の root_message_id は caused_by と等しい (depth=1)', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        const reply = sendMessage(
+          db,
+          'default',
+          { to: 'alice', message: 'reply', caused_by: root.id },
+          'bob'
+        );
+        const row = db
+          .prepare('SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0')
+          .get('default', reply.id) as { root_message_id: string };
+        expect(row.root_message_id).toBe(root.id);
+      });
+
+      it('孫返信 (depth=2) の root_message_id は最初の root と等しい', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        const reply1 = sendMessage(
+          db,
+          'default',
+          { to: 'alice', message: 'reply1', caused_by: root.id },
+          'bob'
+        );
+        const reply2 = sendMessage(
+          db,
+          'default',
+          { to: 'bob', message: 'reply2', caused_by: reply1.id },
+          'alice'
+        );
+        const row = db
+          .prepare('SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0')
+          .get('default', reply2.id) as { root_message_id: string };
+        // 孫も root.id を引き継ぐ（1回の SELECT で解決、WITH RECURSIVE 不要）
+        expect(row.root_message_id).toBe(root.id);
+      });
+
+      it('長いチェーン (depth=10) でも root_message_id は全て最初の root を指す', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        let prevId = root.id;
+        const chainIds: string[] = [];
+
+        for (let i = 1; i <= 10; i++) {
+          const sender = i % 2 === 1 ? 'bob' : 'alice';
+          const recipient = i % 2 === 1 ? 'alice' : 'bob';
+          const msg = sendMessage(
+            db,
+            'default',
+            { to: recipient, message: `hop ${i}`, caused_by: prevId },
+            sender
+          );
+          chainIds.push(msg.id);
+          prevId = msg.id;
+        }
+
+        // 全ての reply が root.id を root_message_id に持つ
+        for (const msgId of chainIds) {
+          const row = db
+            .prepare('SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0')
+            .get('default', msgId) as { root_message_id: string };
+          expect(row.root_message_id).toBe(root.id);
+        }
+      });
+    });
   });
 
   describe('getMessage', () => {

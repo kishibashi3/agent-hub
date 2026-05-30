@@ -141,7 +141,7 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
 
     // v9 → v10 migration 適用
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(10);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // sender_login に rename されている
     const v9Columns = db
@@ -174,7 +174,7 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
 
     // v9 → v10 migration 適用
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(10);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // rename 後も値が保持されている
     const afterRow = db
@@ -188,7 +188,7 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(10);
+    expect(getCurrentVersion(db)).toBe(11);
 
     const columns = db
       .prepare(`PRAGMA table_info(messages)`)
@@ -199,16 +199,16 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
 
   it('v10 → v10 で no-op (= idempotent)', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(10);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // 再適用しても version は 10 のまま
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(10);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // schema_version table は v10 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(10) as { version: number }[];
+      .all(11) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

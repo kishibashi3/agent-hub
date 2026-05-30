@@ -17,6 +17,8 @@
 -- v10: message_causes junction テーブル追加（メッセージ因果チェーン追跡、issue #162）
 --      - V1: position=0 の成分のみ使用（単一 caused_by、Tree 構造）
 --      - V2: position > 0 で DAG（複数親）に拡張可能。migration 不要。
+-- v11: message_causes に root_message_id カラム追加（O(1) スレッド検索、issue #166）
+--      - 挿入時に caused_by.root_message_id ?? caused_by で計算して保存。WITH RECURSIVE 不要。
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -26,7 +28,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (10, 'agent-hub v10: message_causes junction table for causal chain tracking (issue #162)');
+VALUES (11, 'agent-hub v11: add root_message_id to message_causes for O(1) thread search (issue #166)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -106,13 +108,17 @@ CREATE TABLE message_causes (
   message_id TEXT NOT NULL,
   caused_by_id TEXT NOT NULL,
   position INTEGER NOT NULL DEFAULT 0,  -- 0 = primary（主因果）/ 将来 DAG 対応で 1,2,... を追加
+  root_message_id TEXT NOT NULL,         -- スレッドルート messages.id (O(1) スレッド検索用、issue #166)
   PRIMARY KEY (tenant_id, message_id, caused_by_id),
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE,
-  FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id)
+  FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id),
+  FOREIGN KEY (tenant_id, root_message_id) REFERENCES messages(tenant_id, id)
 );
 
 -- caused_by_id で「このメッセージを原因とする子メッセージ」を高速検索するためのインデックス
 CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
+-- root_message_id でスレッド内全メッセージを O(1) で検索するためのインデックス
+CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
 
 -- 既読管理
 CREATE TABLE read_receipts (
