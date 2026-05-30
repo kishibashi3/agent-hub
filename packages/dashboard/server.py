@@ -64,7 +64,8 @@ PPD_WINDOW_HOURS = 4    # 同一セッションとみなす時間窓
 PPD_MIN_ROUNDS = 3      # 「ピンポン」とみなす最低往復回数
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
-OPERATOR_HANDLE = "@ope-ultp1635"
+# エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
+# 返答         = 同スレッド内の後続メッセージ (送信者不問)
 ESCALATION_SIGNALS = [
     "確認をお願い", "判断をお願い", "L1", "GO をお願い",
     "承認", "許可をください", "どうしますか", "判断してください",
@@ -1573,18 +1574,16 @@ def compute_eqs_from_db():
        effective_root (= COALESCE(mc.root_message_id, m.id)) を取得。
        root message (= caused_by なし) は m.id が自分自身のスレッドルート。
     2. thread_map = {root_id: [created_at ASC 順のメッセージリスト]} を構築 (O(N))。
-    3. エスカレーション検出 (OPERATOR_HANDLE 宛 + ESCALATION_SIGNALS マッチ)。
+    3. エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)。
     4. 各エスカレーションのスレッドを thread_map から O(1) で取得し、
        エスカレーション後の最初のメッセージ（送信者不問）を返答とする。
-       ← 旧実装は @ope-ultp1635 発信 + 24h 窓限定だったが廃止。
-         スレッド内の誰からの返答も対象 (operator が第三者に委任する場合を含む)。
     5. 返答本文を GO / 非 GO / unknown に分類。
     6. overescalation_rate = GO数 / 全エスカレーション数 × 100
        quality_score = 100 - |rate - 50| × 2  (50% が理想、 設計書 §3.2.2)
 
     旧実装の問題点 (PR #169 Minor):
     - O(N²): 各エスカレーションに対し全メッセージを線形スキャン
-    - @ope-ultp1635 発信の返信のみ対象（スレッド内の他参加者を見落とし）
+    - OPERATOR_HANDLE 宛 / 発信のみ対象 (特定 handle への依存)
     - 24h 窓フィルタが thread 境界と無関係
 
     Returns:
@@ -1640,11 +1639,10 @@ def compute_eqs_from_db():
         msg_root[msg_id]          = effective_root
         thread_map[effective_root].append(msg)
 
-    # エスカレーション検出 (OPERATOR_HANDLE 宛 + シグナルキーワード)
+    # エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)
     escalations = [
         m for m in all_msgs
-        if m["recipient"] == OPERATOR_HANDLE
-        and any(sig in m["body"] for sig in ESCALATION_SIGNALS)
+        if any(sig in m["body"] for sig in ESCALATION_SIGNALS)
     ]
 
     if not escalations:
@@ -1842,7 +1840,7 @@ def render_health():
 <div class='health-section'>
   <h3>⬆ Escalation Quality Score (EQS)</h3>
   <p class='dim health-note'>
-    {esc(OPERATOR_HANDLE)} へのエスカレーション品質スコア。
+    エスカレーションシグナルを含むメッセージの品質スコア（宛先・送信者不問）。
     GO 系返答の割合（過剰 or 不足）を検出。
   </p>
   {eqs_html}
