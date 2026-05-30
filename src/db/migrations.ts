@@ -140,7 +140,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 10;
+  const targetVersion = 11;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -366,6 +366,49 @@ export function applyMigrations(db: Database.Database): void {
         CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
         INSERT INTO schema_version (version, description)
         VALUES (10, 'add message_causes junction table for causal chain tracking (issue #162)');
+      `,
+    });
+  }
+
+  // v10 → v11: message_causes に root_message_id カラム追加（O(1) スレッド検索、issue #166）
+  // root_message_id = caused_by.root_message_id ?? caused_by (挿入時に計算して保存)
+  // 既存 row のバックフィル: WITH RECURSIVE で因果チェーンを遡りルートを特定。
+  // base case: caused_by_id が message_causes に存在しない → caused_by_id 自身がルート。
+  // recursive case: 親の root_message_id を引き継ぐ。
+  if (currentVersion < 11) {
+    runMigration(db, {
+      version: 11,
+      description: 'add root_message_id to message_causes for O(1) thread search (issue #166)',
+      sql: `
+        ALTER TABLE message_causes ADD COLUMN root_message_id TEXT;
+        CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
+        WITH RECURSIVE resolved(tenant_id, message_id, root_message_id) AS (
+          SELECT mc.tenant_id, mc.message_id, mc.caused_by_id
+          FROM message_causes mc
+          WHERE mc.position = 0
+            AND NOT EXISTS (
+              SELECT 1 FROM message_causes p
+              WHERE p.tenant_id = mc.tenant_id
+                AND p.message_id = mc.caused_by_id
+                AND p.position = 0
+            )
+          UNION ALL
+          SELECT mc.tenant_id, mc.message_id, r.root_message_id
+          FROM message_causes mc
+          JOIN resolved r
+            ON r.tenant_id = mc.tenant_id
+            AND r.message_id = mc.caused_by_id
+          WHERE mc.position = 0
+        )
+        UPDATE message_causes
+        SET root_message_id = (
+          SELECT root_message_id FROM resolved
+          WHERE resolved.tenant_id = message_causes.tenant_id
+            AND resolved.message_id = message_causes.message_id
+        )
+        WHERE root_message_id IS NULL AND position = 0;
+        INSERT INTO schema_version (version, description)
+        VALUES (11, 'add root_message_id to message_causes for O(1) thread search (issue #166)');
       `,
     });
   }

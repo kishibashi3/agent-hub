@@ -84,10 +84,20 @@ export function sendMessage(
 
   // 因果リンクを message_causes に記録 (issue #162)
   // V1: position=0 のみ（単一 caused_by、Tree 構造）
+  // root_message_id: caused_by の root_message_id を1回参照して計算 (issue #166)
+  //   caused_by に root_message_id があればそれを引き継ぐ、なければ caused_by 自身がルート。
+  //   挿入時1回で解決できるため WITH RECURSIVE 不要。
   if (causedBy !== null) {
+    const parentCause = db
+      .prepare(
+        'SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0'
+      )
+      .get(tenantId, causedBy) as { root_message_id: string | null } | undefined;
+    const rootMessageId = parentCause?.root_message_id ?? causedBy;
+
     db.prepare(
-      'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)'
-    ).run(tenantId, messageId, causedBy);
+      'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position, root_message_id) VALUES (?, ?, ?, 0, ?)'
+    ).run(tenantId, messageId, causedBy, rootMessageId);
   }
 
   const message = db
