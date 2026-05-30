@@ -62,9 +62,20 @@ PORT = int(os.environ.get("PORT", "8080"))
 # PPD: Ping-Pong Detection (= 劇場型燃焼の直接計測、 設計書 §3.2.1)
 PPD_WINDOW_HOURS   = 4  # 同一セッションとみなす時間窓
 # severity しきい値は環境変数で上書き可能 (デフォルト: Warning=5 / Critical=10 / Severe=20)
+# デフォルト根拠: 旧実装 (3/5/7) は低すぎる誤検知が多発。
+#   @ope-ultp1635 指示 (2026-05-30) で Warning=5 / Critical=10 / Severe=20 に調整。
+#   現行 agent 数規模では 20 往復超が実質的な「無限ループ型」の閾値として妥当。
 PPD_WARN_ROUNDS     = int(os.environ.get("PPD_WARN_ROUNDS",      5))
 PPD_CRITICAL_ROUNDS = int(os.environ.get("PPD_CRITICAL_ROUNDS", 10))
 PPD_SEVERE_ROUNDS   = int(os.environ.get("PPD_SEVERE_ROUNDS",   20))
+# 順序整合性チェック: WARN < CRITICAL < SEVERE でない場合は起動時に即座に失敗させる
+if not (PPD_WARN_ROUNDS < PPD_CRITICAL_ROUNDS < PPD_SEVERE_ROUNDS):
+    raise ValueError(
+        f"PPD threshold order violation: "
+        f"PPD_WARN_ROUNDS={PPD_WARN_ROUNDS} must be < "
+        f"PPD_CRITICAL_ROUNDS={PPD_CRITICAL_ROUNDS} must be < "
+        f"PPD_SEVERE_ROUNDS={PPD_SEVERE_ROUNDS}"
+    )
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
 # エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
