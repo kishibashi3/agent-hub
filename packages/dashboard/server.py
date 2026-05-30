@@ -61,10 +61,10 @@ PORT = int(os.environ.get("PORT", "8080"))
 
 # PPD: Ping-Pong Detection (= 劇場型燃焼の直接計測、 設計書 §3.2.1)
 PPD_WINDOW_HOURS   = 4  # 同一セッションとみなす時間窓
-# severity しきい値は環境変数で上書き可能 (デフォルト: Warning=5 / Critical=8 / Severe=12)
-PPD_WARN_ROUNDS     = int(os.environ.get("PPD_WARN_ROUNDS",     5))
-PPD_CRITICAL_ROUNDS = int(os.environ.get("PPD_CRITICAL_ROUNDS", 8))
-PPD_SEVERE_ROUNDS   = int(os.environ.get("PPD_SEVERE_ROUNDS",  12))
+# severity しきい値は環境変数で上書き可能 (デフォルト: Warning=5 / Critical=10 / Severe=20)
+PPD_WARN_ROUNDS     = int(os.environ.get("PPD_WARN_ROUNDS",      5))
+PPD_CRITICAL_ROUNDS = int(os.environ.get("PPD_CRITICAL_ROUNDS", 10))
+PPD_SEVERE_ROUNDS   = int(os.environ.get("PPD_SEVERE_ROUNDS",   20))
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
 # エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
