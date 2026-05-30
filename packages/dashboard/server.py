@@ -43,7 +43,8 @@ import html
 import json
 import os
 import sqlite3
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -53,6 +54,30 @@ DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
 # set されていれば当該 tenant のみ filter。
 TENANT = os.environ.get("AGENT_HUB_TENANT") or None
 PORT = int(os.environ.get("PORT", "8080"))
+
+# ============================================================
+# Health view constants (= Phase 1: PPD + EQS)
+# ============================================================
+
+# PPD: Ping-Pong Detection (= 劇場型燃焼の直接計測、 設計書 §3.2.1)
+PPD_WINDOW_HOURS = 4    # 同一セッションとみなす時間窓
+PPD_MIN_ROUNDS = 3      # 「ピンポン」とみなす最低往復回数
+
+# EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
+OPERATOR_HANDLE = "@ope-ultp1635"
+ESCALATION_SIGNALS = [
+    "確認をお願い", "判断をお願い", "L1", "GO をお願い",
+    "承認", "許可をください", "どうしますか", "判断してください",
+    "エスカレーション", "確認お願い", "判断お願い",
+]
+GO_RESPONSE_SIGNALS = [
+    "了解", "進めてください", "GO", "問題ありません", "承認します",
+    "OK", "go ", "go\n", "GO\n", "Go ",
+]
+NON_GO_RESPONSE_SIGNALS = [
+    "待ってください", "変更が必要", "やり直し", "却下", "別の方法",
+    "確認が必要", "設計を見直し", "NG", "保留", "差し戻し",
+]
 
 
 # ============================================================
@@ -322,6 +347,30 @@ table.link-list a { color:var(--accent); text-decoration:none; }
 table.link-list a:hover { text-decoration:underline; }
 table.link-list .bar-cell { width:200px; }
 table.link-list .bar { height:8px; background:var(--accent); border-radius:2px; opacity:0.7; }
+
+/* health view — severity badges + stat-box reuse */
+.badge { display:inline-block; padding:2px 8px; border-radius:3px; font-size:10px; font-weight:bold; letter-spacing:0.04em; }
+.badge-warning  { background:#ffa657; color:#000; }
+.badge-critical { background:#f78166; color:#fff; }
+.badge-severe   { background:#da3633; color:#fff; }
+.health-section { margin-top:28px; }
+.health-section h3 { font-size:12px; color:var(--text2); margin:0 0 6px; text-transform:uppercase; letter-spacing:0.08em; }
+.health-note { font-size:11px; color:var(--text2); margin:4px 0 8px; }
+
+/* causal tree view */
+.tree-node { padding:5px 0; font-size:12px; }
+.tree-leaf { color:var(--text2); }
+.tree-children { padding-left:20px; border-left:2px solid var(--border2); margin-left:8px; }
+.tree-sender { color:var(--accent); }
+.tree-recipient { color:var(--text); }
+.tree-body { color:var(--text2); font-size:11px; }
+.tree-time { color:var(--text3); font-size:10px; margin-left:6px; }
+details.tree-item > summary { cursor:pointer; list-style:none; }
+details.tree-item > summary::-webkit-details-marker { display:none; }
+details.tree-item > summary::before { content:'▶ '; font-size:9px; color:var(--text3); margin-right:3px; }
+details.tree-item[open] > summary::before { content:'▼ '; }
+details.thread-item > summary::-webkit-details-marker { display:none; }
+details.thread-item > summary::marker { display:none; }
 </style>
 </head>
 <body class="BODY_CLASS">
@@ -1239,12 +1288,14 @@ def render_nav_bar(current_view, agent_handle=None):
     `aria-orientation="vertical"` を付与 (= screen reader 等 a11y tool に 「ここで
     視覚的 section break が起きている」 を伝える ARIA semantic)。
     """
-    # Overview group (= 全体構造を見る view 群、 4 link)
+    # Overview group (= 全体構造を見る view 群、 6 link)
     overview_items = [
-        ("mesh", "Mesh", "/"),
-        ("matrix", "Matrix", "/?view=matrix"),
-        ("timeline", "Timeline", "/?view=timeline"),
-        ("links", "Link List", "/?view=links"),
+        ("mesh",       "Mesh",          "/"),
+        ("matrix",     "Matrix",        "/?view=matrix"),
+        ("timeline",   "Timeline",      "/?view=timeline"),
+        ("links",      "Link List",     "/?view=links"),
+        ("health",     "🔥 Health",     "/?view=health"),
+        ("causaltree", "📎 Causal Tree","/?view=causaltree"),
     ]
     # Drill-down group (= 個別 handle 観察 view)
     # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
@@ -1401,6 +1452,635 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
     )
 
 
+# ============================================================
+# Health view: PPD + EQS data layer (= Phase 1 SHS dashboard)
+# ============================================================
+
+def _parse_ts(ts_str):
+    """messages.created_at (ISO 8601 with optional trailing Z) を datetime に変換。
+
+    better-sqlite3 が生成するフォーマット: '2026-05-30T07:11:16.437Z'
+    Python 3.7〜3.10 の fromisoformat は trailing Z を解釈しないため rstrip する。
+    """
+    if not ts_str:
+        return None
+    return datetime.fromisoformat(ts_str.rstrip("Z"))
+
+
+def compute_ppd_from_db():
+    """Ping-Pong Detection (PPD) を messages テーブルから計算。
+
+    Algorithm:
+    1. 全メッセージを (sender, recipient) ペア（= 正規化済み min/max）で grouping。
+    2. 各ペア内でメッセージを時刻順に並べ、前後の gap > PPD_WINDOW_HOURS で
+       セッション分割する。
+    3. セッション内の送信者列を圧縮（連続同一 sender → 1 turn）し、
+       双方の turn 数の min を「往復数 (rounds)」とする。
+    4. rounds >= PPD_MIN_ROUNDS ならピンポン判定。
+
+    Returns:
+        dict: {threads, total_sessions, ping_pong_count}
+          threads: list of {pair, a, b, rounds, msg_count, start, end, severity}
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    if TENANT is None:
+        cur.execute(
+            "SELECT sender, recipient, created_at FROM messages ORDER BY created_at ASC"
+        )
+    else:
+        cur.execute(
+            "SELECT sender, recipient, created_at FROM messages "
+            "WHERE tenant_id = ? ORDER BY created_at ASC",
+            (TENANT,),
+        )
+    rows = cur.fetchall()
+    con.close()
+
+    # (min, max) ペアでグループ化
+    pair_messages = defaultdict(list)
+    for sender, recipient, created_at in rows:
+        pair = (min(sender, recipient), max(sender, recipient))
+        if sender != recipient:  # self-message は除外
+            pair_messages[pair].append((sender, recipient, created_at))
+
+    ping_pong_threads = []
+    total_sessions = 0
+
+    for pair, msgs in pair_messages.items():
+        # セッション分割: gap > PPD_WINDOW_HOURS で新セッション
+        sessions = []
+        current_session = [msgs[0]]
+        for i in range(1, len(msgs)):
+            prev_ts = _parse_ts(msgs[i - 1][2])
+            curr_ts = _parse_ts(msgs[i][2])
+            if prev_ts and curr_ts:
+                gap_h = (curr_ts - prev_ts).total_seconds() / 3600
+                if gap_h > PPD_WINDOW_HOURS:
+                    sessions.append(current_session)
+                    current_session = [msgs[i]]
+                    continue
+            current_session.append(msgs[i])
+        sessions.append(current_session)
+        total_sessions += len(sessions)
+
+        for session in sessions:
+            if len(session) < PPD_MIN_ROUNDS * 2:
+                continue  # 往復に必要な最低メッセージ数に満たない
+
+            # 連続同一 sender を 1 turn に圧縮 → sender ごとの turn 数をカウント
+            turns: dict[str, int] = {}
+            prev_sender = None
+            for sender, _, _ in session:
+                if sender != prev_sender:
+                    turns[sender] = turns.get(sender, 0) + 1
+                    prev_sender = sender
+
+            if len(turns) < 2:
+                continue  # 一方通行セッション
+
+            rounds = min(turns.values())
+
+            if rounds >= PPD_MIN_ROUNDS:
+                sev = (
+                    "severe"   if rounds >= 7 else
+                    "critical" if rounds >= 5 else
+                    "warning"
+                )
+                ping_pong_threads.append({
+                    "pair":      f"{pair[0]} ↔ {pair[1]}",
+                    "a":         pair[0],
+                    "b":         pair[1],
+                    "rounds":    rounds,
+                    "msg_count": len(session),
+                    "start":     session[0][2],
+                    "end":       session[-1][2],
+                    "severity":  sev,
+                })
+
+    return {
+        "threads":          sorted(ping_pong_threads, key=lambda x: -x["rounds"]),
+        "total_sessions":   total_sessions,
+        "ping_pong_count":  len(ping_pong_threads),
+    }
+
+
+def compute_eqs_from_db():
+    """Escalation Quality Score (EQS) を messages テーブルから計算。
+
+    Algorithm:
+    1. OPERATOR_HANDLE 宛メッセージのうち ESCALATION_SIGNALS にマッチするものを抽出。
+    2. 各エスカレーションに対し、operator からの 24h 以内の返信を検索。
+    3. 返信本文を GO / 非 GO / unknown に分類。
+    4. overescalation_rate = GO数 / 全エスカレーション数 × 100
+       quality_score = 100 - |rate - 50| × 2  (50% が理想)
+
+    Returns:
+        dict: {total_escalations, go_count, non_go_count, unknown_count,
+               overescalation_rate, quality_score}
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    if TENANT is None:
+        cur.execute(
+            "SELECT sender, recipient, body, created_at "
+            "FROM messages ORDER BY created_at ASC"
+        )
+    else:
+        cur.execute(
+            "SELECT sender, recipient, body, created_at "
+            "FROM messages WHERE tenant_id = ? ORDER BY created_at ASC",
+            (TENANT,),
+        )
+    rows = cur.fetchall()
+    con.close()
+
+    all_msgs = [
+        {"sender": r[0], "recipient": r[1], "body": r[2], "created_at": r[3]}
+        for r in rows
+    ]
+
+    # エスカレーション検出 (operator 宛 + シグナルキーワード)
+    escalations = [
+        m for m in all_msgs
+        if m["recipient"] == OPERATOR_HANDLE
+        and any(sig in m["body"] for sig in ESCALATION_SIGNALS)
+    ]
+
+    if not escalations:
+        return {
+            "total_escalations":  0,
+            "go_count":           0,
+            "non_go_count":       0,
+            "unknown_count":      0,
+            "overescalation_rate": None,
+            "quality_score":      None,
+        }
+
+    go_count = non_go_count = unknown_count = 0
+
+    for esc_msg in escalations:
+        esc_ts = _parse_ts(esc_msg["created_at"])
+        if esc_ts is None:
+            unknown_count += 1
+            continue
+
+        response_found = False
+        for resp_msg in all_msgs:
+            # operator からの返信、かつエスカレーション送信者宛
+            if resp_msg["sender"] != OPERATOR_HANDLE:
+                continue
+            if resp_msg["recipient"] != esc_msg["sender"]:
+                continue
+            resp_ts = _parse_ts(resp_msg["created_at"])
+            if resp_ts is None or resp_ts <= esc_ts:
+                continue
+            if (resp_ts - esc_ts).total_seconds() > 24 * 3600:
+                continue
+
+            body = resp_msg["body"]
+            is_go     = any(sig in body for sig in GO_RESPONSE_SIGNALS)
+            is_non_go = any(sig in body for sig in NON_GO_RESPONSE_SIGNALS)
+
+            if is_non_go:
+                non_go_count += 1
+            elif is_go:
+                go_count += 1
+            else:
+                unknown_count += 1
+
+            response_found = True
+            break  # 最初の返信のみ使用
+
+        if not response_found:
+            unknown_count += 1
+
+    total = len(escalations)
+    overescalation_rate = round(go_count / total * 100, 1) if total > 0 else 0.0
+    quality_score = round(max(0.0, 100 - abs(overescalation_rate - 50) * 2), 1)
+
+    return {
+        "total_escalations":   total,
+        "go_count":            go_count,
+        "non_go_count":        non_go_count,
+        "unknown_count":       unknown_count,
+        "overescalation_rate": overescalation_rate,
+        "quality_score":       quality_score,
+    }
+
+
+def render_health():
+    """Health view (= Phase 1 SHS: PPD + EQS) の body HTML を build。"""
+    ppd = compute_ppd_from_db()
+    eqs = compute_eqs_from_db()
+
+    # ── PPD サマリー ──────────────────────────────────────────────────────────
+    total_sessions = max(ppd["total_sessions"], 1)
+    ppd_rate = round(ppd["ping_pong_count"] / total_sessions * 100, 1)
+    ppd_color = (
+        "#39d353" if ppd_rate < 10 else
+        "#ffa657" if ppd_rate < 25 else
+        "#f78166"
+    )
+
+    # PPD アラートテーブル
+    threads = ppd["threads"]
+    if threads:
+        rows_html = []
+        for t in threads[:30]:
+            sev = t["severity"]
+            badge_cls = f"badge badge-{sev}"
+            start_s = esc(t["start"][:16].replace("T", " "))
+            end_s   = esc(t["end"][:16].replace("T", " "))
+            rows_html.append(
+                f"<tr>"
+                f"<td>{esc(t['a'])}&nbsp;↔&nbsp;{esc(t['b'])}</td>"
+                f"<td style='text-align:right'>{t['rounds']}</td>"
+                f"<td style='text-align:right'>{t['msg_count']}</td>"
+                f"<td><span class='{badge_cls}'>{sev.upper()}</span></td>"
+                f"<td style='font-size:10px;color:var(--text2)'>{start_s} → {end_s}</td>"
+                f"</tr>"
+            )
+        ppd_table = (
+            "<table class='link-list' style='max-width:100%'>"
+            "<thead><tr>"
+            "<th>pair</th>"
+            "<th style='text-align:right'>rounds</th>"
+            "<th style='text-align:right'>msgs</th>"
+            "<th>severity</th>"
+            "<th>window</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(rows_html) + "</tbody>"
+            "</table>"
+        )
+    else:
+        ppd_table = (
+            f"<p class='dim' style='padding:12px 0'>"
+            f"⚑ ピンポンスレッド検出なし (min rounds: {PPD_MIN_ROUNDS})</p>"
+        )
+
+    # ── EQS セクション ────────────────────────────────────────────────────────
+    if eqs["total_escalations"] == 0:
+        eqs_html = (
+            "<p class='dim' style='padding:12px 0'>"
+            "エスカレーションメッセージが検出されていません。</p>"
+        )
+    else:
+        rate = eqs["overescalation_rate"]
+        qs   = eqs["quality_score"]
+        rate_color = (
+            "#39d353" if 40 <= rate <= 60 else
+            "#ffa657" if 25 <= rate <= 75 else
+            "#f78166"
+        )
+        qs_color = (
+            "#39d353" if qs >= 70 else
+            "#ffa657" if qs >= 40 else
+            "#f78166"
+        )
+        eqs_html = f"""<div class='detail-stats' style='margin-bottom:12px'>
+  <div class='stat-box'>
+    <span class='stat-num'>{eqs['total_escalations']}</span>
+    <span class='stat-label'>total escalations</span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{rate_color}'>{rate}%</span>
+    <span class='stat-label'>overescalation rate<br><span style='font-size:9px'>(ideal: 40〜60%)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{qs_color}'>{qs}</span>
+    <span class='stat-label'>EQS quality score<br><span style='font-size:9px'>(0〜100)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{eqs['go_count']}</span>
+    <span class='stat-label'>GO responses</span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{eqs['non_go_count']}</span>
+    <span class='stat-label'>non-GO responses</span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{eqs['unknown_count']}</span>
+    <span class='stat-label'>unknown / no reply</span>
+  </div>
+</div>
+<p class='dim health-note'>
+  ※ キーワードベース分類。偽陽性あり。EQS_overescalation = GO系返答 / 全エスカレーション × 100。
+  理想値 40〜60%（合議過多型燃焼の検出閾値、設計書 §3.2.2）。
+</p>"""
+
+    return f"""<div class='view-content'>
+<h2>🔥 Structural Health — Phase 1 MVP</h2>
+<p class='dim health-note'>
+  Phase 1 計測指標: PPD（ピンポン検出）+ EQS（エスカレーション品質）<br>
+  燃焼類型対応: 劇場型(2)・合議過多型(6)・無限ループ型(9)
+</p>
+
+<div class='detail-stats' style='margin-bottom:24px'>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{ppd_color}'>{ppd_rate}%</span>
+    <span class='stat-label'>PPD rate<br><span style='font-size:9px'>ping-pong sessions / total</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{ppd["ping_pong_count"]}</span>
+    <span class='stat-label'>ping-pong threads<br><span style='font-size:9px'>≥{PPD_MIN_ROUNDS} rounds detected</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{ppd["total_sessions"]}</span>
+    <span class='stat-label'>total sessions<br><span style='font-size:9px'>({PPD_WINDOW_HOURS}h window)</span></span>
+  </div>
+</div>
+
+<div class='health-section'>
+  <h3>⚑ Ping-Pong Alerts (PPD)</h3>
+  <p class='dim health-note'>
+    同一ペア間 {PPD_WINDOW_HOURS}h 窓内で往復 ≥{PPD_MIN_ROUNDS}回 を検出。
+    Warning(3〜4) / Critical(5〜6) / Severe(7+)。
+    Phase 1: artifact チェックなし（純メッセージ分析）。
+  </p>
+  {ppd_table}
+</div>
+
+<div class='health-section'>
+  <h3>⬆ Escalation Quality Score (EQS)</h3>
+  <p class='dim health-note'>
+    {esc(OPERATOR_HANDLE)} へのエスカレーション品質スコア。
+    GO 系返答の割合（過剰 or 不足）を検出。
+  </p>
+  {eqs_html}
+</div>
+</div>"""
+
+
+# ============================================================
+# Causal Tree view: caused_by ツリー可視化 (= issue #166 活用)
+# ============================================================
+
+def _render_tree_node(msg_id, messages_map, children_map, depth=0):
+    """ツリーノード 1 個を <details>/<summary> で HTML 化（再帰）。
+
+    depth ≥ 10 で打ち切り（循環 / 深過ぎる chain への安全対策）。
+    depth == 0 のルートノードは open 属性を付与して初期展開する。
+    """
+    if depth > 10:
+        return "<div class='tree-leaf' style='padding:4px 0;font-size:10px'>…（省略）</div>"
+    msg = messages_map.get(msg_id)
+    if not msg:
+        return ""
+
+    preview = msg["body"][:80] + "…" if len(msg["body"]) > 80 else msg["body"]
+    ts = msg["created_at"][:16].replace("T", " ") if msg.get("created_at") else ""
+    children = children_map.get(msg_id, [])
+
+    hdr = (
+        f"<span class='tree-sender'>{esc(msg['sender'])}</span>"
+        f" → <span class='tree-recipient'>{esc(msg['recipient'])}</span>"
+        f" &nbsp;<span class='tree-body'>{esc(preview)}</span>"
+        f"<span class='tree-time'>{esc(ts)}</span>"
+    )
+
+    if children:
+        n = len(children)
+        lbl = f"({n} repl{'ies' if n > 1 else 'y'})"
+        inner = "".join(
+            _render_tree_node(c, messages_map, children_map, depth + 1)
+            for c in children
+        )
+        open_attr = " open" if depth == 0 else ""
+        return (
+            f"<details class='tree-item'{open_attr}>"
+            f"<summary class='tree-node'>{hdr}"
+            f" <span class='dim' style='font-size:10px'>{lbl}</span></summary>"
+            f"<div class='tree-children'>{inner}</div>"
+            f"</details>"
+        )
+
+    return f"<div class='tree-node tree-leaf'>{hdr}</div>"
+
+
+def get_causal_tree_data(limit=30):
+    """caused_by ツリーデータを message_causes + messages テーブルから取得。
+
+    Returns:
+        dict: {
+          threads: list of {root_id, root_msg, thread_size,
+                            thread_start, thread_end,
+                            messages_map, children_map},
+          total_threads: int
+        }
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    # 全スレッド数
+    if TENANT is None:
+        cur.execute(
+            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes WHERE position = 0"
+        )
+    else:
+        cur.execute(
+            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes "
+            "WHERE position = 0 AND tenant_id = ?",
+            (TENANT,),
+        )
+    total_threads = (cur.fetchone() or (0,))[0]
+
+    # スレッドサイズ降順でルートを取得
+    if TENANT is None:
+        cur.execute(
+            """
+            SELECT mc.root_message_id,
+                   COUNT(*) AS thread_size,
+                   MIN(m.created_at) AS thread_start,
+                   MAX(m.created_at) AS thread_end
+            FROM message_causes mc
+            JOIN messages m ON m.id = mc.message_id
+            WHERE mc.position = 0
+            GROUP BY mc.root_message_id
+            ORDER BY thread_size DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT mc.root_message_id,
+                   COUNT(*) AS thread_size,
+                   MIN(m.created_at) AS thread_start,
+                   MAX(m.created_at) AS thread_end
+            FROM message_causes mc
+            JOIN messages m ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+            WHERE mc.position = 0 AND mc.tenant_id = ?
+            GROUP BY mc.root_message_id
+            ORDER BY thread_size DESC
+            LIMIT ?
+            """,
+            (TENANT, limit),
+        )
+
+    thread_meta = cur.fetchall()
+    threads = []
+
+    for root_id, thread_size, thread_start, thread_end in thread_meta:
+        # ルートメッセージ詳細
+        if TENANT is None:
+            cur.execute(
+                "SELECT id, sender, recipient, body, created_at "
+                "FROM messages WHERE id = ?",
+                (root_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT id, sender, recipient, body, created_at "
+                "FROM messages WHERE id = ? AND tenant_id = ?",
+                (root_id, TENANT),
+            )
+        root_row = cur.fetchone()
+        if not root_row:
+            continue  # ルート message が見つからない（孤立 cause entry）
+
+        root_msg = {
+            "id": root_row[0], "sender": root_row[1],
+            "recipient": root_row[2], "body": root_row[3],
+            "created_at": root_row[4],
+        }
+
+        # スレッド内全返信（parent 情報付き）
+        if TENANT is None:
+            cur.execute(
+                """
+                SELECT m.id, m.sender, m.recipient, m.body, m.created_at,
+                       mc.caused_by_id
+                FROM messages m
+                JOIN message_causes mc ON m.id = mc.message_id
+                WHERE mc.root_message_id = ? AND mc.position = 0
+                ORDER BY m.created_at ASC
+                """,
+                (root_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT m.id, m.sender, m.recipient, m.body, m.created_at,
+                       mc.caused_by_id
+                FROM messages m
+                JOIN message_causes mc
+                  ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+                WHERE mc.root_message_id = ? AND mc.position = 0
+                  AND mc.tenant_id = ?
+                ORDER BY m.created_at ASC
+                """,
+                (root_id, TENANT),
+            )
+
+        messages_map = {root_id: root_msg}
+        children_map: dict[str, list] = defaultdict(list)
+        for row in cur.fetchall():
+            mid, sender, recip, body, created_at, parent_id = row
+            messages_map[mid] = {
+                "id": mid, "sender": sender, "recipient": recip,
+                "body": body, "created_at": created_at,
+            }
+            if parent_id:
+                children_map[parent_id].append(mid)
+
+        threads.append({
+            "root_id":      root_id,
+            "root_msg":     root_msg,
+            "thread_size":  thread_size,
+            "thread_start": thread_start,
+            "thread_end":   thread_end,
+            "messages_map": messages_map,
+            "children_map": dict(children_map),
+        })
+
+    con.close()
+    return {"threads": threads, "total_threads": total_threads}
+
+
+def render_causal_tree():
+    """Causal Tree view (= /?view=causaltree) の body HTML を build。
+
+    caused_by チェーンを message_causes.root_message_id で O(1) に取得し、
+    <details>/<summary> でツリー展開表示する。
+    外部 JS 不要、stdlib のみ。
+    """
+    data = get_causal_tree_data(limit=30)
+    threads = data["threads"]
+    total = data["total_threads"]
+
+    if not threads:
+        return (
+            "<div class='view-content'><h2>📎 Causal Tree</h2>"
+            "<p class='dim'>まだ caused_by を持つメッセージがありません。</p>"
+            "<p class='dim health-note'>"
+            "send_message の <code>caused_by</code> パラメータを使うとスレッドが形成されます。"
+            "</p></div>"
+        )
+
+    items = []
+    for t in threads:
+        root = t["root_msg"]
+        preview = root["body"][:80] + "…" if len(root["body"]) > 80 else root["body"]
+        start_s = t["thread_start"][:16].replace("T", " ") if t["thread_start"] else ""
+
+        # ルートから全子孫を再帰展開
+        tree_html = _render_tree_node(
+            t["root_id"], t["messages_map"], t["children_map"]
+        )
+
+        items.append(
+            f"<details class='thread-item'>"
+            f"<summary style='cursor:pointer;list-style:none;display:flex;"
+            f"align-items:baseline;gap:8px;padding:10px 12px;"
+            f"background:var(--bg2);border:1px solid var(--border);"
+            f"border-radius:6px;margin-bottom:2px'>"
+            f"<span style='font-size:16px;font-weight:bold;color:var(--accent);"
+            f"min-width:2ch;text-align:right'>{t['thread_size']}</span>"
+            f"<span class='dim' style='font-size:10px'>msgs</span>"
+            f"<span class='tree-sender'>{esc(root['sender'])}</span>"
+            f"<span class='dim'>→</span>"
+            f"<span>{esc(root['recipient'])}</span>"
+            f"<span class='dim' style='flex:1;overflow:hidden;text-overflow:ellipsis;"
+            f"white-space:nowrap;font-size:11px'>{esc(preview)}</span>"
+            f"<span class='dim' style='font-size:10px;white-space:nowrap'>{esc(start_s)}</span>"
+            f"</summary>"
+            f"<div style='padding:10px 0 6px 28px;border-left:2px solid var(--border);"
+            f"margin:2px 0 10px 20px'>"
+            f"{tree_html}"
+            f"</div>"
+            f"</details>"
+        )
+
+    showing = len(threads)
+    more = f" (showing top {showing} of {total})" if total > showing else ""
+    stats_html = (
+        f"<div class='detail-stats' style='margin-bottom:20px'>"
+        f"<div class='stat-box'>"
+        f"<span class='stat-num'>{total}</span>"
+        f"<span class='stat-label'>total threads</span></div>"
+        f"<div class='stat-box'>"
+        f"<span class='stat-num'>{threads[0]['thread_size'] if threads else 0}</span>"
+        f"<span class='stat-label'>largest thread<br>"
+        f"<span style='font-size:9px'>messages</span></span></div>"
+        f"</div>"
+    )
+
+    return (
+        "<div class='view-content'>"
+        "<h2>📎 Causal Tree</h2>"
+        "<p class='dim health-note'>"
+        "caused_by チェーンから再構成したタスクスレッド。"
+        "<code>root_message_id</code> による O(1) スレッド取得（issue #166）。</p>"
+        + stats_html
+        + f"<h3 style='font-size:12px;color:var(--text2);text-transform:uppercase;"
+        f"letter-spacing:0.08em;margin-bottom:8px'>Threads (by size){esc(more)}</h3>"
+        + "".join(items)
+        + "</div>"
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # URL routing (= 5 view: mesh / matrix / timeline / links / agent)
@@ -1463,6 +2143,16 @@ class Handler(BaseHTTPRequestHandler):
                 view_body = render_link_list()
                 body = render_alt_view_layout(
                     "links", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            elif view == "health":
+                view_body = render_health()
+                body = render_alt_view_layout(
+                    "health", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            elif view == "causaltree":
+                view_body = render_causal_tree()
+                body = render_alt_view_layout(
+                    "causaltree", view_body, total_msgs, total_agents, total_links_for_header,
                 )
             else:
                 # default (= `/` or `?view=mesh`): Mesh-only (= force-graph 単独)
