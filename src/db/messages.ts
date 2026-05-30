@@ -58,38 +58,18 @@ export function sendMessage(
     }
   }
 
-  // caused_by バリデーション（DB write の前にすべて完了させ orphaned message を防ぐ）
-  const causedBy = input.caused_by ?? null;
+  // caused_by: 存在確認 → 無効な場合は null にフォールバック (サイレント degradation、issue #164)
+  // メッセージングは非同期なので caused_by が無効でも送信をブロックしない。
+  // 深さ上限チェック: 削除 (issue #164)。
+  //   メッセージは時系列順に送受信されるため、因果関係に循環は原理的に発生しない。
+  let causedBy = input.caused_by ?? null;
   if (causedBy !== null) {
-    // 1) 存在確認（FK エラーを日本語メッセージに変換、既存パターンと統一）
     const causedByExists = db
       .prepare('SELECT 1 FROM messages WHERE tenant_id = ? AND id = ?')
       .get(tenantId, causedBy);
     if (!causedByExists) {
-      throw new Error(`caused_by に指定されたメッセージ ${causedBy} は存在しません`);
-    }
-
-    // 2) 深さ上限チェック (loop prevention、issue #162)
-    // message_causes を再帰的に遡り 20 hop 以上で拒否。
-    // DFS サイクル検出はバッチ処理向けのため、ここでは深さ上限のみ検査する。
-    const depthRow = db
-      .prepare(
-        `WITH RECURSIVE chain(id, depth) AS (
-           SELECT ?, 0
-           UNION ALL
-           SELECT mc.caused_by_id, c.depth + 1
-           FROM message_causes mc
-           JOIN chain c ON mc.tenant_id = ? AND mc.message_id = c.id AND mc.position = 0
-           WHERE c.depth < 20
-         )
-         SELECT MAX(depth) AS max_depth FROM chain`
-      )
-      .get(causedBy, tenantId) as { max_depth: number | null };
-
-    if (depthRow?.max_depth !== null && depthRow.max_depth >= 20) {
-      throw new Error(
-        `caused_by チェーンが深さ上限 (20 hop) を超えています。ループが疑われます。`
-      );
+      // 存在しない ID は null にフォールバック（エラーにしない）
+      causedBy = null;
     }
   }
 

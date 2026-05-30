@@ -152,43 +152,34 @@ describe('messages.ts', () => {
         expect(reply.caused_by).toBe(root.id);
       });
 
-      it('存在しない caused_by を指定するとエラー', () => {
-        expect(() =>
-          sendMessage(
-            db,
-            'default',
-            { to: 'bob', message: 'bad ref', caused_by: 'non-existent-id' },
-            'alice'
-          )
-        ).toThrow('caused_by に指定されたメッセージ non-existent-id は存在しません');
+      it('存在しない caused_by を指定すると null にフォールバックして送信成功 (issue #164)', () => {
+        // 送信をブロックせず、caused_by だけ null に落とす（サイレント degradation）
+        const msg = sendMessage(
+          db,
+          'default',
+          { to: 'bob', message: 'bad ref', caused_by: 'non-existent-id' },
+          'alice'
+        );
+        expect(msg.caused_by ?? null).toBeNull();
+        expect(msg.body).toBe('bad ref');
       });
 
-      it('caused_by チェーンが 20 hop を超えるとエラー (境界値)', () => {
-        // hop 0: root (親なし)
+      it('caused_by を大量チェーンで指定しても送信をブロックしない (issue #164: 深さ上限チェック削除)', () => {
+        // 深さ上限チェックが削除されたため、長い因果チェーンも送信できる
         let prevId = sendMessage(db, 'default', { to: 'bob', message: 'hop 0' }, 'alice').id;
 
-        // hop 1 〜 hop 20: 20 リンクのチェーンを構築
-        // hop 20 の caused_by を遡ると root まで 20 hop = 拒否境界
-        for (let i = 1; i <= 20; i++) {
+        for (let i = 1; i <= 25; i++) {
           const sender = i % 2 === 1 ? 'bob' : 'alice';
           const recipient = i % 2 === 1 ? 'alice' : 'bob';
-          prevId = sendMessage(
+          const msg = sendMessage(
             db,
             'default',
             { to: recipient, message: `hop ${i}`, caused_by: prevId },
             sender
-          ).id;
+          );
+          expect(msg.caused_by).toBe(prevId);
+          prevId = msg.id;
         }
-
-        // hop 21 → hop 20: CTE で hop20 から root まで 20 hop を検出 → エラー
-        expect(() =>
-          sendMessage(
-            db,
-            'default',
-            { to: 'alice', message: 'hop 21', caused_by: prevId },
-            'bob'
-          )
-        ).toThrow('caused_by チェーンが深さ上限');
       });
 
       it('getMessage でも caused_by が返される', () => {
