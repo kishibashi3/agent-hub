@@ -64,7 +64,8 @@ PPD_WINDOW_HOURS = 4    # 同一セッションとみなす時間窓
 PPD_MIN_ROUNDS = 3      # 「ピンポン」とみなす最低往復回数
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
-OPERATOR_HANDLE = "@ope-ultp1635"
+# エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
+# 返答         = 同スレッド内の後続メッセージ (送信者不問)
 ESCALATION_SIGNALS = [
     "確認をお願い", "判断をお願い", "L1", "GO をお願い",
     "承認", "許可をください", "どうしますか", "判断してください",
@@ -1568,12 +1569,22 @@ def compute_ppd_from_db():
 def compute_eqs_from_db():
     """Escalation Quality Score (EQS) を messages テーブルから計算。
 
-    Algorithm:
-    1. OPERATOR_HANDLE 宛メッセージのうち ESCALATION_SIGNALS にマッチするものを抽出。
-    2. 各エスカレーションに対し、operator からの 24h 以内の返信を検索。
-    3. 返信本文を GO / 非 GO / unknown に分類。
-    4. overescalation_rate = GO数 / 全エスカレーション数 × 100
-       quality_score = 100 - |rate - 50| × 2  (50% が理想)
+    Algorithm (O(N) 版、 root_message_id によるスレッドグループ化):
+    1. messages と message_causes を LEFT JOIN して各メッセージの
+       effective_root (= COALESCE(mc.root_message_id, m.id)) を取得。
+       root message (= caused_by なし) は m.id が自分自身のスレッドルート。
+    2. thread_map = {root_id: [created_at ASC 順のメッセージリスト]} を構築 (O(N))。
+    3. エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)。
+    4. 各エスカレーションのスレッドを thread_map から O(1) で取得し、
+       エスカレーション後の最初のメッセージ（送信者不問）を返答とする。
+    5. 返答本文を GO / 非 GO / unknown に分類。
+    6. overescalation_rate = GO数 / 全エスカレーション数 × 100
+       quality_score = 100 - |rate - 50| × 2  (50% が理想、 設計書 §3.2.2)
+
+    旧実装の問題点 (PR #169 Minor):
+    - O(N²): 各エスカレーションに対し全メッセージを線形スキャン
+    - OPERATOR_HANDLE 宛 / 発信のみ対象 (特定 handle への依存)
+    - 24h 窓フィルタが thread 境界と無関係
 
     Returns:
         dict: {total_escalations, go_count, non_go_count, unknown_count,
@@ -1581,40 +1592,67 @@ def compute_eqs_from_db():
     """
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
+
+    # LEFT JOIN で effective_root を計算 (1 パス、 O(N log N) for sort)
+    # message_causes に存在するメッセージ: effective_root = mc.root_message_id
+    # 存在しない (= スレッドルート / standalone):  effective_root = m.id
     if TENANT is None:
         cur.execute(
-            "SELECT sender, recipient, body, created_at "
-            "FROM messages ORDER BY created_at ASC"
+            """
+            SELECT m.id, m.sender, m.recipient, m.body, m.created_at,
+                   COALESCE(mc.root_message_id, m.id) AS effective_root
+            FROM messages m
+            LEFT JOIN message_causes mc
+              ON m.id = mc.message_id AND mc.position = 0
+            ORDER BY m.created_at ASC
+            """
         )
     else:
         cur.execute(
-            "SELECT sender, recipient, body, created_at "
-            "FROM messages WHERE tenant_id = ? ORDER BY created_at ASC",
+            """
+            SELECT m.id, m.sender, m.recipient, m.body, m.created_at,
+                   COALESCE(mc.root_message_id, m.id) AS effective_root
+            FROM messages m
+            LEFT JOIN message_causes mc
+              ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+              AND mc.position = 0
+            WHERE m.tenant_id = ?
+            ORDER BY m.created_at ASC
+            """,
             (TENANT,),
         )
     rows = cur.fetchall()
     con.close()
 
-    all_msgs = [
-        {"sender": r[0], "recipient": r[1], "body": r[2], "created_at": r[3]}
-        for r in rows
-    ]
+    # thread_map 構築 (O(N))
+    # thread_map[root_id] は created_at ASC 順 (ORDER BY 済み)
+    thread_map: dict[str, list] = defaultdict(list)
+    msg_root:   dict[str, str]  = {}
+    all_msgs = []
 
-    # エスカレーション検出 (operator 宛 + シグナルキーワード)
+    for msg_id, sender, recipient, body, created_at, effective_root in rows:
+        msg = {
+            "id": msg_id, "sender": sender, "recipient": recipient,
+            "body": body, "created_at": created_at,
+        }
+        all_msgs.append(msg)
+        msg_root[msg_id]          = effective_root
+        thread_map[effective_root].append(msg)
+
+    # エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)
     escalations = [
         m for m in all_msgs
-        if m["recipient"] == OPERATOR_HANDLE
-        and any(sig in m["body"] for sig in ESCALATION_SIGNALS)
+        if any(sig in m["body"] for sig in ESCALATION_SIGNALS)
     ]
 
     if not escalations:
         return {
-            "total_escalations":  0,
-            "go_count":           0,
-            "non_go_count":       0,
-            "unknown_count":      0,
+            "total_escalations":   0,
+            "go_count":            0,
+            "non_go_count":        0,
+            "unknown_count":       0,
             "overescalation_rate": None,
-            "quality_score":      None,
+            "quality_score":       None,
         }
 
     go_count = non_go_count = unknown_count = 0
@@ -1625,34 +1663,32 @@ def compute_eqs_from_db():
             unknown_count += 1
             continue
 
-        response_found = False
-        for resp_msg in all_msgs:
-            # operator からの返信、かつエスカレーション送信者宛
-            if resp_msg["sender"] != OPERATOR_HANDLE:
-                continue
-            if resp_msg["recipient"] != esc_msg["sender"]:
-                continue
-            resp_ts = _parse_ts(resp_msg["created_at"])
-            if resp_ts is None or resp_ts <= esc_ts:
-                continue
-            if (resp_ts - esc_ts).total_seconds() > 24 * 3600:
-                continue
+        # スレッドを O(1) で取得し、エスカレーション後の最初のメッセージを返答とする
+        root_id = msg_root.get(esc_msg["id"], esc_msg["id"])
+        thread  = thread_map.get(root_id, [])
 
-            body = resp_msg["body"]
-            is_go     = any(sig in body for sig in GO_RESPONSE_SIGNALS)
-            is_non_go = any(sig in body for sig in NON_GO_RESPONSE_SIGNALS)
+        response = None
+        for msg in thread:                          # created_at ASC 順
+            if msg["id"] == esc_msg["id"]:
+                continue                           # エスカレーション自身はスキップ
+            msg_ts = _parse_ts(msg["created_at"])
+            if msg_ts and msg_ts > esc_ts:
+                response = msg
+                break                             # 最初の後続メッセージを返答とする
 
-            if is_non_go:
-                non_go_count += 1
-            elif is_go:
-                go_count += 1
-            else:
-                unknown_count += 1
+        if response is None:
+            unknown_count += 1
+            continue
 
-            response_found = True
-            break  # 最初の返信のみ使用
+        body      = response["body"]
+        is_go     = any(sig in body for sig in GO_RESPONSE_SIGNALS)
+        is_non_go = any(sig in body for sig in NON_GO_RESPONSE_SIGNALS)
 
-        if not response_found:
+        if is_non_go:
+            non_go_count += 1
+        elif is_go:
+            go_count += 1
+        else:
             unknown_count += 1
 
     total = len(escalations)
@@ -1804,7 +1840,7 @@ def render_health():
 <div class='health-section'>
   <h3>⬆ Escalation Quality Score (EQS)</h3>
   <p class='dim health-note'>
-    {esc(OPERATOR_HANDLE)} へのエスカレーション品質スコア。
+    エスカレーションシグナルを含むメッセージの品質スコア（宛先・送信者不問）。
     GO 系返答の割合（過剰 or 不足）を検出。
   </p>
   {eqs_html}
