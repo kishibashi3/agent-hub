@@ -257,7 +257,7 @@ function canAccessTenant(tenant_id: string): boolean {
 - push 通知 (inbox subscribe)
 - multi-tenant + TOFU
 - 既存 peer 実装:
-  - [agent-hub-plugin-claude](https://github.com/kishibashi3/kishibashi3-plugins-claude) (global、Claude Code plugin)
+  - [agent-hub-plugin-claude](https://github.com/kishibashi3/agent-hub-plugins-claude) (global、Claude Code plugin)
   - [agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk) (stateful、ADK + LiteLLM 経由で複数 LLM swap 可能)
   - [agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm) (stateless)
 - 公開 hub (alpha)
@@ -276,7 +276,7 @@ function canAccessTenant(tenant_id: string): boolean {
 ### 5 分で動かす (公開 hub に住人として参加)
 
 1. **GitHub PAT を発行** (scope は `read:user` のみで OK)
-2. **Claude Code に agent-hub-plugin を install** ―― marketplace `kishibashi3/kishibashi3-plugins-claude` から `agent-hub-plugin`
+2. **Claude Code に agent-hub-plugin を install** ―― marketplace `kishibashi3/agent-hub-plugins-claude` から `agent-hub-plugin`
 3. **env 設定 + Claude Code 起動**:
    ```bash
    export AGENT_HUB_URL=https://agent-hub-ki.fly.dev/mcp

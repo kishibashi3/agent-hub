@@ -58,10 +58,16 @@ function loadSchemaFile(): string {
  * コメントと空行を除去し、セミコロンで区切る
  */
 function parseSqlStatements(sql: string): string[] {
-  // コメント行を削除（-- で始まる行）
+  // 行頭コメント行を除去し、inline コメント (--) も切り詰める
+  // ※ inline コメント内に ';' が含まれると split(';') が壊れるため両方処理する
   const withoutLineComments = sql
     .split('\n')
-    .filter(line => !line.trim().startsWith('--'))
+    .map(line => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('--')) return ''; // 行全体がコメント
+      const inlineIdx = line.indexOf('--');
+      return inlineIdx >= 0 ? line.substring(0, inlineIdx) : line; // inline コメントを除去
+    })
     .join('\n');
 
   // ブロックコメントを削除（/* */ 形式）
@@ -134,7 +140,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 9;
+  const targetVersion = 10;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -336,6 +342,30 @@ export function applyMigrations(db: Database.Database): void {
         ALTER TABLE messages RENAME COLUMN sender_github_login TO sender_login;
         INSERT INTO schema_version (version, description)
         VALUES (9, 'rename messages.sender_github_login to sender_login (issue #127)');
+      `,
+    });
+  }
+
+  // v9 → v10: message_causes junction テーブル追加（メッセージ因果チェーン追跡、issue #162）
+  // V1: position=0 の成分のみ使用（単一 caused_by、Tree 構造）
+  // V2: position > 0 を追加して DAG に拡張可能。このテーブルは再作成不要。
+  if (currentVersion < 10) {
+    runMigration(db, {
+      version: 10,
+      description: 'add message_causes junction table for causal chain tracking (issue #162)',
+      sql: `
+        CREATE TABLE message_causes (
+          tenant_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          caused_by_id TEXT NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (tenant_id, message_id, caused_by_id),
+          FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id)
+        );
+        CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
+        INSERT INTO schema_version (version, description)
+        VALUES (10, 'add message_causes junction table for causal chain tracking (issue #162)');
       `,
     });
   }

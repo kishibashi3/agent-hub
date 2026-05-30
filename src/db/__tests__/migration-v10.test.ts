@@ -1,6 +1,6 @@
 /**
- * schema v8 → v9 migration test (issue #127)
- * messages.sender_github_login → sender_login rename
+ * schema v9 → v10 migration test (issue #162)
+ * message_causes junction テーブル追加（メッセージ因果チェーン追跡）
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
@@ -11,17 +11,17 @@ import {
 } from '../migrations.js';
 
 /**
- * v8 までの schema を fresh build する helper。
- * applyMigrations を v8 相当で止めるため、runMigration を直接使う。
+ * v9 までの schema を fresh build する helper。
+ * applyMigrations を v9 相当で止めるため、runMigration を直接使う。
  */
-function buildV8Schema(db: Database.Database): void {
+function buildV9Schema(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
   // v6 full DDL
   runMigration(db, {
     version: 6,
-    description: 'v6 fresh build for v9 migration test',
+    description: 'v6 fresh build for v10 migration test',
     sql: `
       CREATE TABLE schema_version (
         version INTEGER PRIMARY KEY,
@@ -115,9 +115,20 @@ function buildV8Schema(db: Database.Database): void {
       VALUES (8, 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
     `,
   });
+
+  // v9: sender_github_login → sender_login rename
+  runMigration(db, {
+    version: 9,
+    description: 'rename messages.sender_github_login to sender_login (issue #127)',
+    sql: `
+      ALTER TABLE messages RENAME COLUMN sender_github_login TO sender_login;
+      INSERT INTO schema_version (version, description)
+      VALUES (9, 'rename messages.sender_github_login to sender_login (issue #127)');
+    `,
+  });
 }
 
-describe('migration v8 → v9 (issue #127: messages.sender_github_login → sender_login)', () => {
+describe('migration v9 → v10 (issue #162: message_causes junction テーブル)', () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -128,76 +139,71 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
     db.close();
   });
 
-  it('v8 DB に applyMigrations を適用すると v10 になり sender_login が存在し sender_github_login は消える', () => {
-    buildV8Schema(db);
-    expect(getCurrentVersion(db)).toBe(8);
+  it('v9 DB に applyMigrations を適用すると v10 になり message_causes テーブルが存在する', () => {
+    buildV9Schema(db);
+    expect(getCurrentVersion(db)).toBe(9);
 
-    // v8 では sender_github_login が存在する
-    const v8Columns = db
-      .prepare(`PRAGMA table_info(messages)`)
+    // v9 では message_causes テーブルが存在しない
+    const v9Tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table'`)
       .all() as { name: string }[];
-    expect(v8Columns.map((c) => c.name)).toContain('sender_github_login');
-    expect(v8Columns.map((c) => c.name)).not.toContain('sender_login');
+    expect(v9Tables.map((t) => t.name)).not.toContain('message_causes');
 
-    // v9 → v10 migration 適用
+    // v10 migration 適用
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(10);
 
-    // sender_login に rename されている
-    const v9Columns = db
-      .prepare(`PRAGMA table_info(messages)`)
-      .all() as { name: string; type: string }[];
-    const col = v9Columns.find((c) => c.name === 'sender_login');
-    expect(col).toBeDefined();
-    expect(col!.type).toBe('TEXT');
+    // message_causes テーブルが作成されている
+    const v10Tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table'`)
+      .all() as { name: string }[];
+    expect(v10Tables.map((t) => t.name)).toContain('message_causes');
 
-    // sender_github_login は存在しない
-    expect(v9Columns.map((c) => c.name)).not.toContain('sender_github_login');
+    // インデックスも作成されている
+    const indexes = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_message_causes%'`)
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('idx_message_causes_caused_by');
   });
 
-  it('v8 の既存 row が sender_github_login に持っていた値は v9 後も sender_login で参照できる', () => {
-    buildV8Schema(db);
-
-    // v8 DB に participants と message を insert (sender_github_login あり)
-    db.prepare(`INSERT INTO participants (tenant_id, name) VALUES (?, ?)`).run('default', '@alice');
-    db.prepare(`INSERT INTO participants (tenant_id, name) VALUES (?, ?)`).run('default', '@bob');
-    const msgId = 'bbbbbbbb-0000-0000-0000-000000000002';
-    db.prepare(
-      `INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_github_login) VALUES (?, ?, ?, ?, ?, ?)`
-    ).run('default', msgId, '@alice', '@bob', 'v8 message', 'kishibashi3');
-
-    // migration 前の値確認
-    const beforeRow = db
-      .prepare(`SELECT sender_github_login FROM messages WHERE tenant_id = ? AND id = ?`)
-      .get('default', msgId) as { sender_github_login: string | null };
-    expect(beforeRow.sender_github_login).toBe('kishibashi3');
-
-    // v9 → v10 migration 適用
+  it('v9 → v10 後に message_causes テーブルに正しいカラムが存在する', () => {
+    buildV9Schema(db);
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(10);
 
-    // rename 後も値が保持されている
-    const afterRow = db
-      .prepare(`SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?`)
-      .get('default', msgId) as { sender_login: string | null };
-    expect(afterRow.sender_login).toBe('kishibashi3');
+    const columns = db
+      .prepare(`PRAGMA table_info(message_causes)`)
+      .all() as { name: string; type: string; notnull: number }[];
+    const colNames = columns.map((c) => c.name);
+
+    expect(colNames).toContain('tenant_id');
+    expect(colNames).toContain('message_id');
+    expect(colNames).toContain('caused_by_id');
+    expect(colNames).toContain('position');
+
+    // position のデフォルト値が 0
+    const posCol = columns.find((c) => c.name === 'position');
+    expect(posCol?.notnull).toBe(1); // NOT NULL
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v10 まで上がり sender_login column が存在する', () => {
+  it('v0 (= fresh install) では schema.sql から直接 v10 まで上がり message_causes が存在する', () => {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
-
     expect(getCurrentVersion(db)).toBe(10);
 
-    const columns = db
-      .prepare(`PRAGMA table_info(messages)`)
+    // message_causes テーブルが schema.sql 由来で存在する
+    const tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table'`)
       .all() as { name: string }[];
-    expect(columns.map((c) => c.name)).toContain('sender_login');
-    expect(columns.map((c) => c.name)).not.toContain('sender_github_login');
+    expect(tables.map((t) => t.name)).toContain('message_causes');
   });
 
-  it('v10 → v10 で no-op (= idempotent)', () => {
+  it('v10 → v10 で no-op (= idempotent)、v10 row は重複しない', () => {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(10);
 

@@ -90,7 +90,7 @@ graph TB
 ## 触ってみる (5 分)
 
 1. **GitHub PAT を発行** (scope は `read:user` のみで OK)
-2. **Claude Code に agent-hub-plugin を install** ―― marketplace `kishibashi3/kishibashi3-plugins-claude` から `agent-hub-plugin`
+2. **Claude Code に agent-hub-plugin を install** ―― marketplace `kishibashi3/agent-hub-plugins-claude` から `agent-hub-plugin`
 3. **env 設定 + Claude Code 起動**:
    ```bash
    export AGENT_HUB_URL=https://agent-hub-ki.fly.dev/mcp
