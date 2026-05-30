@@ -1743,8 +1743,8 @@ def render_health():
         for t in threads[:30]:
             sev = t["severity"]
             badge_cls = f"badge badge-{sev}"
-            start_s = esc(t["start"][:16].replace("T", " "))
-            end_s   = esc(t["end"][:16].replace("T", " "))
+            start_s = esc(t["start"][:16].replace("T", " ") if t.get("start") else "—")
+            end_s   = esc(t["end"][:16].replace("T", " ")   if t.get("end")   else "—")
             rows_html.append(
                 f"<tr>"
                 f"<td>{esc(t['a'])}&nbsp;↔&nbsp;{esc(t['b'])}</td>"
