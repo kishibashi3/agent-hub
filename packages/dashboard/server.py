@@ -356,6 +356,21 @@ table.link-list .bar { height:8px; background:var(--accent); border-radius:2px; 
 .health-section { margin-top:28px; }
 .health-section h3 { font-size:12px; color:var(--text2); margin:0 0 6px; text-transform:uppercase; letter-spacing:0.08em; }
 .health-note { font-size:11px; color:var(--text2); margin:4px 0 8px; }
+
+/* causal tree view */
+.tree-node { padding:5px 0; font-size:12px; }
+.tree-leaf { color:var(--text2); }
+.tree-children { padding-left:20px; border-left:2px solid var(--border2); margin-left:8px; }
+.tree-sender { color:var(--accent); }
+.tree-recipient { color:var(--text); }
+.tree-body { color:var(--text2); font-size:11px; }
+.tree-time { color:var(--text3); font-size:10px; margin-left:6px; }
+details.tree-item > summary { cursor:pointer; list-style:none; }
+details.tree-item > summary::-webkit-details-marker { display:none; }
+details.tree-item > summary::before { content:'▶ '; font-size:9px; color:var(--text3); margin-right:3px; }
+details.tree-item[open] > summary::before { content:'▼ '; }
+details.thread-item > summary::-webkit-details-marker { display:none; }
+details.thread-item > summary::marker { display:none; }
 </style>
 </head>
 <body class="BODY_CLASS">
@@ -1273,13 +1288,14 @@ def render_nav_bar(current_view, agent_handle=None):
     `aria-orientation="vertical"` を付与 (= screen reader 等 a11y tool に 「ここで
     視覚的 section break が起きている」 を伝える ARIA semantic)。
     """
-    # Overview group (= 全体構造を見る view 群、 5 link)
+    # Overview group (= 全体構造を見る view 群、 6 link)
     overview_items = [
-        ("mesh",    "Mesh",       "/"),
-        ("matrix",  "Matrix",     "/?view=matrix"),
-        ("timeline","Timeline",   "/?view=timeline"),
-        ("links",   "Link List",  "/?view=links"),
-        ("health",  "🔥 Health",  "/?view=health"),
+        ("mesh",       "Mesh",          "/"),
+        ("matrix",     "Matrix",        "/?view=matrix"),
+        ("timeline",   "Timeline",      "/?view=timeline"),
+        ("links",      "Link List",     "/?view=links"),
+        ("health",     "🔥 Health",     "/?view=health"),
+        ("causaltree", "📎 Causal Tree","/?view=causaltree"),
     ]
     # Drill-down group (= 個別 handle 観察 view)
     # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
@@ -1796,6 +1812,275 @@ def render_health():
 </div>"""
 
 
+# ============================================================
+# Causal Tree view: caused_by ツリー可視化 (= issue #166 活用)
+# ============================================================
+
+def _render_tree_node(msg_id, messages_map, children_map, depth=0):
+    """ツリーノード 1 個を <details>/<summary> で HTML 化（再帰）。
+
+    depth ≥ 10 で打ち切り（循環 / 深過ぎる chain への安全対策）。
+    depth == 0 のルートノードは open 属性を付与して初期展開する。
+    """
+    if depth > 10:
+        return "<div class='tree-leaf' style='padding:4px 0;font-size:10px'>…（省略）</div>"
+    msg = messages_map.get(msg_id)
+    if not msg:
+        return ""
+
+    preview = msg["body"][:80] + "…" if len(msg["body"]) > 80 else msg["body"]
+    ts = msg["created_at"][:16].replace("T", " ") if msg.get("created_at") else ""
+    children = children_map.get(msg_id, [])
+
+    hdr = (
+        f"<span class='tree-sender'>{esc(msg['sender'])}</span>"
+        f" → <span class='tree-recipient'>{esc(msg['recipient'])}</span>"
+        f" &nbsp;<span class='tree-body'>{esc(preview)}</span>"
+        f"<span class='tree-time'>{esc(ts)}</span>"
+    )
+
+    if children:
+        n = len(children)
+        lbl = f"({n} repl{'ies' if n > 1 else 'y'})"
+        inner = "".join(
+            _render_tree_node(c, messages_map, children_map, depth + 1)
+            for c in children
+        )
+        open_attr = " open" if depth == 0 else ""
+        return (
+            f"<details class='tree-item'{open_attr}>"
+            f"<summary class='tree-node'>{hdr}"
+            f" <span class='dim' style='font-size:10px'>{lbl}</span></summary>"
+            f"<div class='tree-children'>{inner}</div>"
+            f"</details>"
+        )
+
+    return f"<div class='tree-node tree-leaf'>{hdr}</div>"
+
+
+def get_causal_tree_data(limit=30):
+    """caused_by ツリーデータを message_causes + messages テーブルから取得。
+
+    Returns:
+        dict: {
+          threads: list of {root_id, root_msg, thread_size,
+                            thread_start, thread_end,
+                            messages_map, children_map},
+          total_threads: int
+        }
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    # 全スレッド数
+    if TENANT is None:
+        cur.execute(
+            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes WHERE position = 0"
+        )
+    else:
+        cur.execute(
+            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes "
+            "WHERE position = 0 AND tenant_id = ?",
+            (TENANT,),
+        )
+    total_threads = (cur.fetchone() or (0,))[0]
+
+    # スレッドサイズ降順でルートを取得
+    if TENANT is None:
+        cur.execute(
+            """
+            SELECT mc.root_message_id,
+                   COUNT(*) AS thread_size,
+                   MIN(m.created_at) AS thread_start,
+                   MAX(m.created_at) AS thread_end
+            FROM message_causes mc
+            JOIN messages m ON m.id = mc.message_id
+            WHERE mc.position = 0
+            GROUP BY mc.root_message_id
+            ORDER BY thread_size DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT mc.root_message_id,
+                   COUNT(*) AS thread_size,
+                   MIN(m.created_at) AS thread_start,
+                   MAX(m.created_at) AS thread_end
+            FROM message_causes mc
+            JOIN messages m ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+            WHERE mc.position = 0 AND mc.tenant_id = ?
+            GROUP BY mc.root_message_id
+            ORDER BY thread_size DESC
+            LIMIT ?
+            """,
+            (TENANT, limit),
+        )
+
+    thread_meta = cur.fetchall()
+    threads = []
+
+    for root_id, thread_size, thread_start, thread_end in thread_meta:
+        # ルートメッセージ詳細
+        if TENANT is None:
+            cur.execute(
+                "SELECT id, sender, recipient, body, created_at "
+                "FROM messages WHERE id = ?",
+                (root_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT id, sender, recipient, body, created_at "
+                "FROM messages WHERE id = ? AND tenant_id = ?",
+                (root_id, TENANT),
+            )
+        root_row = cur.fetchone()
+        if not root_row:
+            continue  # ルート message が見つからない（孤立 cause entry）
+
+        root_msg = {
+            "id": root_row[0], "sender": root_row[1],
+            "recipient": root_row[2], "body": root_row[3],
+            "created_at": root_row[4],
+        }
+
+        # スレッド内全返信（parent 情報付き）
+        if TENANT is None:
+            cur.execute(
+                """
+                SELECT m.id, m.sender, m.recipient, m.body, m.created_at,
+                       mc.caused_by_id
+                FROM messages m
+                JOIN message_causes mc ON m.id = mc.message_id
+                WHERE mc.root_message_id = ? AND mc.position = 0
+                ORDER BY m.created_at ASC
+                """,
+                (root_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT m.id, m.sender, m.recipient, m.body, m.created_at,
+                       mc.caused_by_id
+                FROM messages m
+                JOIN message_causes mc
+                  ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+                WHERE mc.root_message_id = ? AND mc.position = 0
+                  AND mc.tenant_id = ?
+                ORDER BY m.created_at ASC
+                """,
+                (root_id, TENANT),
+            )
+
+        messages_map = {root_id: root_msg}
+        children_map: dict[str, list] = defaultdict(list)
+        for row in cur.fetchall():
+            mid, sender, recip, body, created_at, parent_id = row
+            messages_map[mid] = {
+                "id": mid, "sender": sender, "recipient": recip,
+                "body": body, "created_at": created_at,
+            }
+            if parent_id:
+                children_map[parent_id].append(mid)
+
+        threads.append({
+            "root_id":      root_id,
+            "root_msg":     root_msg,
+            "thread_size":  thread_size,
+            "thread_start": thread_start,
+            "thread_end":   thread_end,
+            "messages_map": messages_map,
+            "children_map": dict(children_map),
+        })
+
+    con.close()
+    return {"threads": threads, "total_threads": total_threads}
+
+
+def render_causal_tree():
+    """Causal Tree view (= /?view=causaltree) の body HTML を build。
+
+    caused_by チェーンを message_causes.root_message_id で O(1) に取得し、
+    <details>/<summary> でツリー展開表示する。
+    外部 JS 不要、stdlib のみ。
+    """
+    data = get_causal_tree_data(limit=30)
+    threads = data["threads"]
+    total = data["total_threads"]
+
+    if not threads:
+        return (
+            "<div class='view-content'><h2>📎 Causal Tree</h2>"
+            "<p class='dim'>まだ caused_by を持つメッセージがありません。</p>"
+            "<p class='dim health-note'>"
+            "send_message の <code>caused_by</code> パラメータを使うとスレッドが形成されます。"
+            "</p></div>"
+        )
+
+    items = []
+    for t in threads:
+        root = t["root_msg"]
+        preview = root["body"][:80] + "…" if len(root["body"]) > 80 else root["body"]
+        start_s = t["thread_start"][:16].replace("T", " ") if t["thread_start"] else ""
+
+        # ルートから全子孫を再帰展開
+        tree_html = _render_tree_node(
+            t["root_id"], t["messages_map"], t["children_map"]
+        )
+
+        items.append(
+            f"<details class='thread-item'>"
+            f"<summary style='cursor:pointer;list-style:none;display:flex;"
+            f"align-items:baseline;gap:8px;padding:10px 12px;"
+            f"background:var(--bg2);border:1px solid var(--border);"
+            f"border-radius:6px;margin-bottom:2px'>"
+            f"<span style='font-size:16px;font-weight:bold;color:var(--accent);"
+            f"min-width:2ch;text-align:right'>{t['thread_size']}</span>"
+            f"<span class='dim' style='font-size:10px'>msgs</span>"
+            f"<span class='tree-sender'>{esc(root['sender'])}</span>"
+            f"<span class='dim'>→</span>"
+            f"<span>{esc(root['recipient'])}</span>"
+            f"<span class='dim' style='flex:1;overflow:hidden;text-overflow:ellipsis;"
+            f"white-space:nowrap;font-size:11px'>{esc(preview)}</span>"
+            f"<span class='dim' style='font-size:10px;white-space:nowrap'>{esc(start_s)}</span>"
+            f"</summary>"
+            f"<div style='padding:10px 0 6px 28px;border-left:2px solid var(--border);"
+            f"margin:2px 0 10px 20px'>"
+            f"{tree_html}"
+            f"</div>"
+            f"</details>"
+        )
+
+    showing = len(threads)
+    more = f" (showing top {showing} of {total})" if total > showing else ""
+    stats_html = (
+        f"<div class='detail-stats' style='margin-bottom:20px'>"
+        f"<div class='stat-box'>"
+        f"<span class='stat-num'>{total}</span>"
+        f"<span class='stat-label'>total threads</span></div>"
+        f"<div class='stat-box'>"
+        f"<span class='stat-num'>{threads[0]['thread_size'] if threads else 0}</span>"
+        f"<span class='stat-label'>largest thread<br>"
+        f"<span style='font-size:9px'>messages</span></span></div>"
+        f"</div>"
+    )
+
+    return (
+        "<div class='view-content'>"
+        "<h2>📎 Causal Tree</h2>"
+        "<p class='dim health-note'>"
+        "caused_by チェーンから再構成したタスクスレッド。"
+        "<code>root_message_id</code> による O(1) スレッド取得（issue #166）。</p>"
+        + stats_html
+        + f"<h3 style='font-size:12px;color:var(--text2);text-transform:uppercase;"
+        f"letter-spacing:0.08em;margin-bottom:8px'>Threads (by size){esc(more)}</h3>"
+        + "".join(items)
+        + "</div>"
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # URL routing (= 5 view: mesh / matrix / timeline / links / agent)
@@ -1863,6 +2148,11 @@ class Handler(BaseHTTPRequestHandler):
                 view_body = render_health()
                 body = render_alt_view_layout(
                     "health", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            elif view == "causaltree":
+                view_body = render_causal_tree()
+                body = render_alt_view_layout(
+                    "causaltree", view_body, total_msgs, total_agents, total_links_for_header,
                 )
             else:
                 # default (= `/` or `?view=mesh`): Mesh-only (= force-graph 単独)
