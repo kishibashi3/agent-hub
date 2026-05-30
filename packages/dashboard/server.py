@@ -60,8 +60,11 @@ PORT = int(os.environ.get("PORT", "8080"))
 # ============================================================
 
 # PPD: Ping-Pong Detection (= 劇場型燃焼の直接計測、 設計書 §3.2.1)
-PPD_WINDOW_HOURS = 4    # 同一セッションとみなす時間窓
-PPD_MIN_ROUNDS = 3      # 「ピンポン」とみなす最低往復回数
+PPD_WINDOW_HOURS   = 4  # 同一セッションとみなす時間窓
+# severity しきい値は環境変数で上書き可能 (デフォルト: Warning=5 / Critical=8 / Severe=12)
+PPD_WARN_ROUNDS     = int(os.environ.get("PPD_WARN_ROUNDS",     5))
+PPD_CRITICAL_ROUNDS = int(os.environ.get("PPD_CRITICAL_ROUNDS", 8))
+PPD_SEVERE_ROUNDS   = int(os.environ.get("PPD_SEVERE_ROUNDS",  12))
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
 # エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
@@ -1477,7 +1480,7 @@ def compute_ppd_from_db():
        セッション分割する。
     3. セッション内の送信者列を圧縮（連続同一 sender → 1 turn）し、
        双方の turn 数の min を「往復数 (rounds)」とする。
-    4. rounds >= PPD_MIN_ROUNDS ならピンポン判定。
+    4. rounds >= PPD_WARN_ROUNDS ならピンポン判定（Warning 以上）。
 
     Returns:
         dict: {threads, total_sessions, ping_pong_count}
@@ -1526,7 +1529,7 @@ def compute_ppd_from_db():
         total_sessions += len(sessions)
 
         for session in sessions:
-            if len(session) < PPD_MIN_ROUNDS * 2:
+            if len(session) < PPD_WARN_ROUNDS * 2:
                 continue  # 往復に必要な最低メッセージ数に満たない
 
             # 連続同一 sender を 1 turn に圧縮 → sender ごとの turn 数をカウント
@@ -1542,10 +1545,10 @@ def compute_ppd_from_db():
 
             rounds = min(turns.values())
 
-            if rounds >= PPD_MIN_ROUNDS:
+            if rounds >= PPD_WARN_ROUNDS:
                 sev = (
-                    "severe"   if rounds >= 7 else
-                    "critical" if rounds >= 5 else
+                    "severe"   if rounds >= PPD_SEVERE_ROUNDS   else
+                    "critical" if rounds >= PPD_CRITICAL_ROUNDS else
                     "warning"
                 )
                 ping_pong_threads.append({
@@ -1769,7 +1772,7 @@ def render_health():
     else:
         ppd_table = (
             f"<p class='dim' style='padding:12px 0'>"
-            f"⚑ ピンポンスレッド検出なし (min rounds: {PPD_MIN_ROUNDS})</p>"
+            f"⚑ ピンポンスレッド検出なし (min rounds: {PPD_WARN_ROUNDS})</p>"
         )
 
     # ── EQS セクション ────────────────────────────────────────────────────────
@@ -1836,7 +1839,7 @@ def render_health():
   </div>
   <div class='stat-box'>
     <span class='stat-num'>{ppd["ping_pong_count"]}</span>
-    <span class='stat-label'>ping-pong threads<br><span style='font-size:9px'>≥{PPD_MIN_ROUNDS} rounds detected</span></span>
+    <span class='stat-label'>ping-pong threads<br><span style='font-size:9px'>≥{PPD_WARN_ROUNDS} rounds detected</span></span>
   </div>
   <div class='stat-box'>
     <span class='stat-num'>{ppd["total_sessions"]}</span>
@@ -1847,8 +1850,8 @@ def render_health():
 <div class='health-section'>
   <h3>⚑ Ping-Pong Alerts (PPD)</h3>
   <p class='dim health-note'>
-    同一ペア間 {PPD_WINDOW_HOURS}h 窓内で往復 ≥{PPD_MIN_ROUNDS}回 を検出。
-    Warning(3〜4) / Critical(5〜6) / Severe(7+)。
+    同一ペア間 {PPD_WINDOW_HOURS}h 窓内で往復 ≥{PPD_WARN_ROUNDS}回 を検出。
+    Warning(≥{PPD_WARN_ROUNDS}) / Critical(≥{PPD_CRITICAL_ROUNDS}) / Severe(≥{PPD_SEVERE_ROUNDS})。
     Phase 1: artifact チェックなし（純メッセージ分析）。
   </p>
   {ppd_table}
