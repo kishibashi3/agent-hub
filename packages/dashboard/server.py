@@ -1573,13 +1573,23 @@ def compute_eqs_from_db():
     1. messages と message_causes を LEFT JOIN して各メッセージの
        effective_root (= COALESCE(mc.root_message_id, m.id)) を取得。
        root message (= caused_by なし) は m.id が自分自身のスレッドルート。
+       JOIN 条件に m.tenant_id = mc.tenant_id を含めてテナント境界を確保。
     2. thread_map = {root_id: [created_at ASC 順のメッセージリスト]} を構築 (O(N))。
+       各 msg dict に effective_root を含めるため msg_root dict は不要。
     3. エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)。
+       旧実装の OPERATOR_HANDLE 宛限定は廃止。全送受信メッセージを対象とする。
     4. 各エスカレーションのスレッドを thread_map から O(1) で取得し、
        エスカレーション後の最初のメッセージ（送信者不問）を返答とする。
     5. 返答本文を GO / 非 GO / unknown に分類。
     6. overescalation_rate = GO数 / 全エスカレーション数 × 100
        quality_score = 100 - |rate - 50| × 2  (50% が理想、 設計書 §3.2.2)
+
+    エスカレーション連鎖の挙動 (既知・意図した仕様):
+    [A → B: esc1] → [B → C: esc2] → [C → B: GO] のケースでは
+    - esc1 の返答 = esc2（GO/non-go 以外） → unknown にカウント
+    - esc2 の返答 = GO → go_count にカウント
+    esc1 の返答が unknown になるのは「中継エスカレーション」として許容する。
+    将来は "最初の非エスカレーション後続" を返答とするロジックで改善可能。
 
     旧実装の問題点 (PR #169 Minor):
     - O(N²): 各エスカレーションに対し全メッセージを線形スキャン
@@ -1596,6 +1606,8 @@ def compute_eqs_from_db():
     # LEFT JOIN で effective_root を計算 (1 パス、 O(N log N) for sort)
     # message_causes に存在するメッセージ: effective_root = mc.root_message_id
     # 存在しない (= スレッドルート / standalone):  effective_root = m.id
+    # JOIN 条件は TENANT 有無に関わらず m.tenant_id = mc.tenant_id を含める
+    # (= 複数テナント混在時に message_id 衝突で誤 JOIN しないよう保護)
     if TENANT is None:
         cur.execute(
             """
@@ -1603,7 +1615,8 @@ def compute_eqs_from_db():
                    COALESCE(mc.root_message_id, m.id) AS effective_root
             FROM messages m
             LEFT JOIN message_causes mc
-              ON m.id = mc.message_id AND mc.position = 0
+              ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+              AND mc.position = 0
             ORDER BY m.created_at ASC
             """
         )
@@ -1626,20 +1639,21 @@ def compute_eqs_from_db():
 
     # thread_map 構築 (O(N))
     # thread_map[root_id] は created_at ASC 順 (ORDER BY 済み)
+    # effective_root は msg dict に含めるため別途 msg_root dict は不要
     thread_map: dict[str, list] = defaultdict(list)
-    msg_root:   dict[str, str]  = {}
     all_msgs = []
 
     for msg_id, sender, recipient, body, created_at, effective_root in rows:
         msg = {
             "id": msg_id, "sender": sender, "recipient": recipient,
             "body": body, "created_at": created_at,
+            "effective_root": effective_root,
         }
         all_msgs.append(msg)
-        msg_root[msg_id]          = effective_root
         thread_map[effective_root].append(msg)
 
     # エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)
+    # 宛先不問: 旧実装の OPERATOR_HANDLE 宛限定を廃止し全メッセージ対象に変更
     escalations = [
         m for m in all_msgs
         if any(sig in m["body"] for sig in ESCALATION_SIGNALS)
@@ -1664,7 +1678,10 @@ def compute_eqs_from_db():
             continue
 
         # スレッドを O(1) で取得し、エスカレーション後の最初のメッセージを返答とする
-        root_id = msg_root.get(esc_msg["id"], esc_msg["id"])
+        # (送信者不問: エスカレーション元・先どちらの返答も対象)
+        # エスカレーション連鎖ケース: 返答が別エスカレーションの場合は unknown になる
+        # (= 仕様: エスカレーション連鎖挙動コメント参照)
+        root_id = esc_msg["effective_root"]
         thread  = thread_map.get(root_id, [])
 
         response = None
