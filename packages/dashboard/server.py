@@ -2449,17 +2449,20 @@ def _extract_span_usage(span):
             raw = {}
 
     # OTLP key-value list 形式 → flat dict に変換
+    # NOTE: `or` chain は 0 を falsy 評価するため `in` チェックで分岐する (reviewer Minor #1)
     if isinstance(raw, list):
         attrs = {}
         for item in raw:
             key = item.get("key", "")
             val_wrap = item.get("value", {})
-            val = (
-                val_wrap.get("intValue")
-                or val_wrap.get("doubleValue")
-                or val_wrap.get("stringValue")
-                or 0
-            )
+            if "intValue" in val_wrap:
+                val = val_wrap["intValue"]
+            elif "doubleValue" in val_wrap:
+                val = val_wrap["doubleValue"]
+            elif "stringValue" in val_wrap:
+                val = val_wrap["stringValue"]
+            else:
+                val = 0
             attrs[key] = val
         raw = attrs
 
