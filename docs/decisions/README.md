@@ -75,9 +75,32 @@ YYYY-MM-DD-<slug>.md
 
 ---
 
+## 誰が ADR を書くか
+
+### 1. Writer は scope で決まる
+
+| scope | writer |
+|---|---|
+| 単一 repo 内の技術判断 (DB schema / API contract 等) | PR を出した **impl peer** — PR と同時に書く |
+| ecosystem 横断の判断 (cross-repo convention 等) | **@planner** が書く |
+
+### 2. デフォルトの引き金 — 空白を作らない
+
+「誰が書くか」を曖昧にすると「誰も書かない」になる (diffusion of responsibility)。  
+上記により常に責任者が一意に定まる: **repo 内 = PR author / 横断 = @planner**。空白にしない。
+
+### 3. 決定の出所を必ず残す — writer ≠ decider 対策
+
+書く人が誰であれ、ADR の `## Context` に **「誰の・どの判断で決まったか」** を明記する:
+
+- 決定に至った DM / issue / PR を参照し、後から経緯を辿れるようにする
+- 例: `> この判断は @ope-ultp1635 の DM (2026-05-31) により確定。caused_by: <message-id>`
+- 理由: 決定の決め手が writer 以外 (人間や他 peer) から来ることが多い。出所を本文に刻まないと、後から読む peer が「なぜそう決めたか」を再構成できない ([#181](https://github.com/kishibashi3/agent-hub/issues/181) caused_by 可視化と噛み合う設計)。
+
+---
+
 ## 運用ルール
 
-- **誰が書くか**: 実装判断を下した impl peer (bridge worker)。ecosystem-wide 判断はリードした peer。
 - **いつ書くか**: PR と同時提出が理想。事後形式化 (既存設計の ADR 化) も可、その場合は `**Status**: Accepted` で起票。
 - **Scope フィールド**:
   - `agent-hub` = server 固有の判断
