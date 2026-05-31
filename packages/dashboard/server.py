@@ -386,6 +386,59 @@ details.tree-item > summary::before { content:'▶ '; font-size:9px; color:var(-
 details.tree-item[open] > summary::before { content:'▼ '; }
 details.thread-item > summary::-webkit-details-marker { display:none; }
 details.thread-item > summary::marker { display:none; }
+
+/* causal tree filter bar (issue #181) */
+.ct-filter-bar {
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  padding:10px 12px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; margin-bottom:14px; font-size:11px;
+}
+.ct-filter-bar label { color:var(--text2); }
+.ct-filter-bar input[type=text], .ct-filter-bar select, .ct-filter-bar input[type=date] {
+  padding:3px 7px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg); color:var(--text); font-family:monospace; font-size:11px;
+}
+.ct-filter-bar input[type=text]:focus, .ct-filter-bar select:focus,
+.ct-filter-bar input[type=date]:focus {
+  outline:none; border-color:var(--accent);
+}
+.ct-filter-apply {
+  padding:3px 12px; background:var(--accent); color:#fff; border:none;
+  border-radius:4px; cursor:pointer; font-family:monospace; font-size:11px;
+}
+.ct-filter-apply:hover { opacity:0.85; }
+.ct-filter-reset {
+  padding:3px 10px; background:none; border:1px solid var(--border);
+  color:var(--text2); border-radius:4px; cursor:pointer;
+  font-family:monospace; font-size:11px; text-decoration:none;
+}
+.ct-filter-reset:hover { border-color:var(--text2); }
+.ct-read-link {
+  font-size:10px; color:var(--accent); text-decoration:none;
+  padding:2px 7px; border:1px solid var(--border2); border-radius:3px;
+  white-space:nowrap; flex-shrink:0;
+}
+.ct-read-link:hover { border-color:var(--accent); }
+
+/* thread detail reading page (issue #181) */
+.thread-detail-header {
+  display:flex; align-items:center; gap:12px; margin-bottom:18px; flex-wrap:wrap;
+}
+.thread-detail-back {
+  font-size:11px; color:var(--accent); text-decoration:none;
+  padding:4px 10px; border:1px solid var(--border); border-radius:4px;
+}
+.thread-detail-back:hover { border-color:var(--accent); }
+.thread-msg-list { max-width:780px; }
+.thread-msg {
+  padding:12px 14px; border-left:3px solid var(--border2);
+  margin-bottom:8px; background:var(--bg2); border-radius:0 6px 6px 0;
+  font-size:12px; line-height:1.6;
+}
+.thread-msg.thread-root { border-left-color:var(--accent); }
+.thread-msg-meta { font-size:10px; color:var(--text3); margin-bottom:4px; display:flex; gap:10px; flex-wrap:wrap; }
+.thread-msg-cause { font-size:10px; color:var(--text3); font-style:italic; margin-bottom:4px; }
+.thread-msg-body { color:var(--text); white-space:pre-wrap; word-break:break-word; }
 </style>
 </head>
 <body class="BODY_CLASS">
@@ -1925,8 +1978,15 @@ def _render_tree_node(msg_id, messages_map, children_map, depth=0):
     return f"<div class='tree-node tree-leaf'>{hdr}</div>"
 
 
-def get_causal_tree_data(limit=30):
+def get_causal_tree_data(limit=30, agent=None, from_date=None, to_date=None, sort="size"):
     """caused_by ツリーデータを message_causes + messages テーブルから取得。
+
+    Args:
+        limit:     取得スレッド数 (最大 100)。
+        agent:     フィルタ: 指定 handle が sender/recipient のスレッドのみ。
+        from_date: フィルタ: thread_start >= from_date (ISO日付 e.g. "2026-05-01")。
+        to_date:   フィルタ: thread_start <= to_date (ISO日付)。
+        sort:      並び順: "size" (デフォルト) / "newest" / "oldest"。
 
     Returns:
         dict: {
@@ -1939,53 +1999,107 @@ def get_causal_tree_data(limit=30):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
 
-    # 全スレッド数
-    if TENANT is None:
-        cur.execute(
-            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes WHERE position = 0"
-        )
-    else:
-        cur.execute(
-            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes "
-            "WHERE position = 0 AND tenant_id = ?",
-            (TENANT,),
-        )
-    total_threads = (cur.fetchone() or (0,))[0]
+    # ------------------------------------------------------------------
+    # 動的 WHERE 句の構築 (SQLインジェクション防止: ? プレースホルダ使用)
+    # ------------------------------------------------------------------
+    tenant_cond = "" if TENANT is None else "AND mc.tenant_id = ?"
+    tenant_params: list = [] if TENANT is None else [TENANT]
 
-    # スレッドサイズ降順でルートを取得
-    if TENANT is None:
-        cur.execute(
-            """
-            SELECT mc.root_message_id,
-                   COUNT(*) AS thread_size,
-                   MIN(m.created_at) AS thread_start,
-                   MAX(m.created_at) AS thread_end
+    # agent フィルタ: そのスレッド内に sender/recipient として登場するか
+    agent_name = None
+    if agent:
+        agent_name = agent if agent.startswith("@") else f"@{agent}"
+    agent_cond = ""
+    agent_params: list = []
+    if agent_name:
+        agent_cond = (
+            """AND mc.root_message_id IN (
+               SELECT mc2.root_message_id
+               FROM message_causes mc2
+               JOIN messages m2 ON m2.id = mc2.message_id
+                 {tenant_join}
+               WHERE mc2.position = 0
+                 {tenant_cond2}
+                 AND (m2.sender = ? OR m2.recipient = ?)
+            )"""
+        )
+        if TENANT is None:
+            agent_cond = agent_cond.format(
+                tenant_join="",
+                tenant_cond2="",
+            )
+            agent_params = [agent_name, agent_name]
+        else:
+            agent_cond = agent_cond.format(
+                tenant_join="AND m2.tenant_id = mc2.tenant_id",
+                tenant_cond2="AND mc2.tenant_id = ?",
+            )
+            agent_params = [TENANT, agent_name, agent_name]
+
+    # ORDER BY 句
+    order_map = {
+        "newest": "thread_start DESC",
+        "oldest": "thread_start ASC",
+        "size":   "thread_size DESC",
+    }
+    order_clause = order_map.get(sort, "thread_size DESC")
+
+    # ------------------------------------------------------------------
+    # HAVING 句で日付範囲フィルタ (集計後に適用) — count / list 共通
+    # ------------------------------------------------------------------
+    having_parts = []
+    having_params: list = []
+    if from_date:
+        having_parts.append("thread_start >= ?")
+        having_params.append(from_date)
+    if to_date:
+        # to_date は末日の 23:59:59.999Z まで含める (ISO 準拠)
+        having_parts.append("thread_start <= ?")
+        having_params.append(to_date + "T23:59:59.999Z")
+    having_clause = ("HAVING " + " AND ".join(having_parts)) if having_parts else ""
+
+    # ------------------------------------------------------------------
+    # 全スレッド数 (日付フィルタを含む)
+    # ------------------------------------------------------------------
+    count_sql = f"""
+        SELECT COUNT(*) FROM (
+            SELECT mc.root_message_id, MIN(m.created_at) AS thread_start
             FROM message_causes mc
             JOIN messages m ON m.id = mc.message_id
+              {'AND m.tenant_id = mc.tenant_id' if TENANT else ''}
             WHERE mc.position = 0
+              {tenant_cond}
+              {agent_cond}
             GROUP BY mc.root_message_id
-            ORDER BY thread_size DESC
-            LIMIT ?
-            """,
-            (limit,),
+            {having_clause}
         )
-    else:
-        cur.execute(
-            """
-            SELECT mc.root_message_id,
-                   COUNT(*) AS thread_size,
-                   MIN(m.created_at) AS thread_start,
-                   MAX(m.created_at) AS thread_end
-            FROM message_causes mc
-            JOIN messages m ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
-            WHERE mc.position = 0 AND mc.tenant_id = ?
-            GROUP BY mc.root_message_id
-            ORDER BY thread_size DESC
-            LIMIT ?
-            """,
-            (TENANT, limit),
-        )
+    """
+    count_params = tenant_params + agent_params + having_params
+    cur.execute(count_sql, count_params)
+    total_threads = (cur.fetchone() or (0,))[0]
 
+    # ------------------------------------------------------------------
+    # スレッド一覧取得
+    # ------------------------------------------------------------------
+
+    list_sql = f"""
+        SELECT mc.root_message_id,
+               COUNT(*) AS thread_size,
+               MIN(m.created_at) AS thread_start,
+               MAX(m.created_at) AS thread_end
+        FROM message_causes mc
+        JOIN messages m ON m.id = mc.message_id
+          {'AND m.tenant_id = mc.tenant_id' if TENANT else ''}
+        WHERE mc.position = 0
+          {tenant_cond}
+          {agent_cond}
+        GROUP BY mc.root_message_id
+        {having_clause}
+        ORDER BY {order_clause}
+        LIMIT ?
+    """
+    list_params = tenant_params + agent_params + having_params + [limit]
+    cur.execute(list_sql, list_params)
     thread_meta = cur.fetchall()
     threads = []
 
@@ -2066,21 +2180,133 @@ def get_causal_tree_data(limit=30):
     return {"threads": threads, "total_threads": total_threads}
 
 
-def render_causal_tree():
+def get_thread_data(thread_id):
+    """1 スレッドの全メッセージを時系列フラットで取得 (issue #181 読みページ用)。
+
+    Args:
+        thread_id: root_message_id (= `?thread=<id>` の値)。
+            NOTE: child メッセージ ID を渡した場合はスレッドが見つからず None を返す。
+            MCP get_thread は root/child 両対応だが、dashboard は root ID のみ受け付ける
+            非対称仕様。UI リンクは常に root_id を使うため実運用上は問題ないが、
+            URL 手入力時はサイレント失敗する点に注意 (TODO: root 解決ロジック追加)。
+
+    Returns:
+        dict: {
+          root_msg: root message dict or None,
+          messages: list of dicts (root 含む、時系列昇順),
+          thread_size: int
+        }
+        スレッドが見つからない場合は None を返す。
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    # root message
+    if TENANT is None:
+        cur.execute(
+            "SELECT id, sender, recipient, body, created_at FROM messages WHERE id = ?",
+            (thread_id,),
+        )
+    else:
+        cur.execute(
+            "SELECT id, sender, recipient, body, created_at "
+            "FROM messages WHERE id = ? AND tenant_id = ?",
+            (thread_id, TENANT),
+        )
+    root_row = cur.fetchone()
+    if not root_row:
+        con.close()
+        return None
+
+    root_msg = {
+        "id": root_row[0], "sender": root_row[1], "recipient": root_row[2],
+        "body": root_row[3], "created_at": root_row[4], "caused_by": None,
+    }
+
+    # スレッド内全返信 (caused_by 付き)
+    if TENANT is None:
+        cur.execute(
+            """
+            SELECT m.id, m.sender, m.recipient, m.body, m.created_at, mc.caused_by_id
+            FROM messages m
+            JOIN message_causes mc ON m.id = mc.message_id
+            WHERE mc.root_message_id = ? AND mc.position = 0
+            ORDER BY m.created_at ASC
+            """,
+            (thread_id,),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT m.id, m.sender, m.recipient, m.body, m.created_at, mc.caused_by_id
+            FROM messages m
+            JOIN message_causes mc
+              ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+            WHERE mc.root_message_id = ? AND mc.position = 0 AND mc.tenant_id = ?
+            ORDER BY m.created_at ASC
+            """,
+            (thread_id, TENANT),
+        )
+    replies = [
+        {
+            "id": r[0], "sender": r[1], "recipient": r[2],
+            "body": r[3], "created_at": r[4], "caused_by": r[5],
+        }
+        for r in cur.fetchall()
+    ]
+    con.close()
+
+    all_msgs = [root_msg] + replies
+    return {"root_msg": root_msg, "messages": all_msgs, "thread_size": len(all_msgs)}
+
+
+def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", limit=30):
     """Causal Tree view (= /?view=causaltree) の body HTML を build。
 
     caused_by チェーンを message_causes.root_message_id で O(1) に取得し、
     <details>/<summary> でツリー展開表示する。
+    フィルタバー (agent / from / to / sort / limit) を先頭に表示。
+    各スレッド行に「Read →」リンクを追加 (= /?view=causaltree&thread=<id>)。
     外部 JS 不要、stdlib のみ。
+
+    issue #181: フィルタ対応 + 読みページリンク追加。
     """
-    data = get_causal_tree_data(limit=30)
+    data = get_causal_tree_data(
+        limit=limit, agent=agent, from_date=from_date, to_date=to_date, sort=sort
+    )
     threads = data["threads"]
     total = data["total_threads"]
+
+    # ------------------------------------------------------------------
+    # フィルタバー (GET フォーム)
+    # ------------------------------------------------------------------
+    sort_options = "".join(
+        f"<option value='{v}'{' selected' if sort == v else ''}>{lbl}</option>"
+        for v, lbl in [("size", "size ↓"), ("newest", "newest first"), ("oldest", "oldest first")]
+    )
+    limit_options = "".join(
+        f"<option value='{v}'{' selected' if str(limit) == str(v) else ''}>{v}</option>"
+        for v in [10, 20, 30, 50, 100]
+    )
+    filter_bar = (
+        "<form method='get' action='/' class='ct-filter-bar'>"
+        "<input type='hidden' name='view' value='causaltree'>"
+        f"<label>agent <input type='text' name='agent' value='{esc_attr(agent or '')}'"
+        f" placeholder='@alice' style='width:100px'></label>"
+        f"<label>from <input type='date' name='from' value='{esc_attr(from_date or '')}'></label>"
+        f"<label>to <input type='date' name='to' value='{esc_attr(to_date or '')}'></label>"
+        f"<label>sort <select name='sort'>{sort_options}</select></label>"
+        f"<label>limit <select name='limit'>{limit_options}</select></label>"
+        "<button type='submit' class='ct-filter-apply'>Apply</button>"
+        "<a href='/?view=causaltree' class='ct-filter-reset'>Reset</a>"
+        "</form>"
+    )
 
     if not threads:
         return (
             "<div class='view-content'><h2>📎 Causal Tree</h2>"
-            "<p class='dim'>まだ caused_by を持つメッセージがありません。</p>"
+            + filter_bar
+            + "<p class='dim' style='margin-top:12px'>該当するスレッドがありません。</p>"
             "<p class='dim health-note'>"
             "send_message の <code>caused_by</code> パラメータを使うとスレッドが形成されます。"
             "</p></div>"
@@ -2091,6 +2317,7 @@ def render_causal_tree():
         root = t["root_msg"]
         preview = root["body"][:80] + "…" if len(root["body"]) > 80 else root["body"]
         start_s = t["thread_start"][:16].replace("T", " ") if t["thread_start"] else ""
+        read_url = f"/?view=causaltree&thread={esc_attr(t['root_id'])}"
 
         # ルートから全子孫を再帰展開
         tree_html = _render_tree_node(
@@ -2112,6 +2339,7 @@ def render_causal_tree():
             f"<span class='dim' style='flex:1;overflow:hidden;text-overflow:ellipsis;"
             f"white-space:nowrap;font-size:11px'>{esc(preview)}</span>"
             f"<span class='dim' style='font-size:10px;white-space:nowrap'>{esc(start_s)}</span>"
+            f"<a href='{read_url}' class='ct-read-link' onclick='event.stopPropagation()'>Read →</a>"
             f"</summary>"
             f"<div style='padding:10px 0 6px 28px;border-left:2px solid var(--border);"
             f"margin:2px 0 10px 20px'>"
@@ -2121,7 +2349,7 @@ def render_causal_tree():
         )
 
     showing = len(threads)
-    more = f" (showing top {showing} of {total})" if total > showing else ""
+    more = f" (showing {showing} of {total})" if total > showing else f" ({total} threads)"
     stats_html = (
         f"<div class='detail-stats' style='margin-bottom:20px'>"
         f"<div class='stat-box'>"
@@ -2140,11 +2368,84 @@ def render_causal_tree():
         "<p class='dim health-note'>"
         "caused_by チェーンから再構成したタスクスレッド。"
         "<code>root_message_id</code> による O(1) スレッド取得（issue #166）。</p>"
+        + filter_bar
         + stats_html
         + f"<h3 style='font-size:12px;color:var(--text2);text-transform:uppercase;"
-        f"letter-spacing:0.08em;margin-bottom:8px'>Threads (by size){esc(more)}</h3>"
+        f"letter-spacing:0.08em;margin-bottom:8px'>Threads{esc(more)}</h3>"
         + "".join(items)
         + "</div>"
+    )
+
+
+def render_thread_detail(thread_id):
+    """スレッド詳細読みページ (= /?view=causaltree&thread=<id>) の body HTML。
+
+    全メッセージをフラット時系列で表示する最小読みページ (issue #181 MVP)。
+    M3 (Conversation Stream polished) の基礎となる。
+    外部 JS 不要、stdlib のみ。
+    """
+    data = get_thread_data(thread_id)
+
+    back_url = "/?view=causaltree"
+
+    if data is None:
+        return (
+            "<div class='view-content'>"
+            "<div class='thread-detail-header'>"
+            f"<a href='{back_url}' class='thread-detail-back'>← Causal Tree</a>"
+            "<h2 style='color:var(--accent)'>📎 Thread</h2>"
+            "</div>"
+            "<p class='dim'>スレッドが見つかりません。</p>"
+            "</div>"
+        )
+
+    root = data["root_msg"]
+    msgs = data["messages"]
+    thread_size = data["thread_size"]
+
+    # root の preview (header 用)
+    root_preview = root["body"][:60] + "…" if len(root["body"]) > 60 else root["body"]
+    start_ts = root["created_at"][:16].replace("T", " ") if root.get("created_at") else ""
+
+    # メッセージリスト HTML
+    msg_items = []
+    for i, msg in enumerate(msgs):
+        is_root = (msg["id"] == root["id"])
+        ts = msg["created_at"][:16].replace("T", " ") if msg.get("created_at") else ""
+        cause_html = ""
+        if msg.get("caused_by"):
+            cause_html = (
+                f"<div class='thread-msg-cause'>↳ caused by: "
+                f"<code style='font-size:10px'>{esc(msg['caused_by'][:16])}…</code></div>"
+            )
+        msg_items.append(
+            f"<div class='thread-msg{'  thread-root' if is_root else ''}'>"
+            f"<div class='thread-msg-meta'>"
+            f"<span class='tree-sender'>{esc(msg['sender'])}</span>"
+            f"<span class='dim'>→</span>"
+            f"<span>{esc(msg['recipient'])}</span>"
+            f"<span class='dim' style='margin-left:auto'>{esc(ts)}</span>"
+            f"</div>"
+            f"{cause_html}"
+            f"<div class='thread-msg-body'>{esc(msg['body'])}</div>"
+            f"</div>"
+        )
+
+    return (
+        "<div class='view-content'>"
+        "<div class='thread-detail-header'>"
+        f"<a href='{back_url}' class='thread-detail-back'>← Causal Tree</a>"
+        "<h2 style='color:var(--accent);margin:0'>📎 Thread</h2>"
+        f"<span class='dim' style='font-size:11px'>"
+        f"{thread_size} messages &nbsp;·&nbsp; started {esc(start_ts)}</span>"
+        "</div>"
+        f"<div class='dim health-note' style='margin-bottom:12px'>"
+        f"<strong>{esc(root['sender'])}</strong> → {esc(root['recipient'])}"
+        f" &nbsp;「{esc(root_preview)}」</div>"
+        "<div class='thread-msg-list'>"
+        + "".join(msg_items)
+        + "</div>"
+        "</div>"
     )
 
 
@@ -2217,7 +2518,23 @@ class Handler(BaseHTTPRequestHandler):
                     "health", view_body, total_msgs, total_agents, total_links_for_header,
                 )
             elif view == "causaltree":
-                view_body = render_causal_tree()
+                # issue #181: ?thread=<id> で詳細読みページ、なければ一覧
+                thread_id = qs.get("thread", [None])[0]
+                if thread_id:
+                    view_body = render_thread_detail(thread_id)
+                else:
+                    ct_agent     = qs.get("agent", [None])[0]
+                    ct_from      = qs.get("from",  [None])[0]
+                    ct_to        = qs.get("to",    [None])[0]
+                    ct_sort      = qs.get("sort",  ["size"])[0]
+                    try:
+                        ct_limit = min(max(int(qs.get("limit", ["30"])[0]), 1), 100)
+                    except (ValueError, TypeError):
+                        ct_limit = 30
+                    view_body = render_causal_tree(
+                        agent=ct_agent, from_date=ct_from, to_date=ct_to,
+                        sort=ct_sort, limit=ct_limit,
+                    )
                 body = render_alt_view_layout(
                     "causaltree", view_body, total_msgs, total_agents, total_links_for_header,
                 )

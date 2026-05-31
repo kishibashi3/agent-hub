@@ -7,6 +7,7 @@ import {
   getMessage,
   getUnreadMessages,
   getHistory,
+  getThread,
   markAsRead,
 } from '../messages';
 import type { SendMessageInput, GetHistoryInput } from '../../types/schema';
@@ -756,6 +757,106 @@ describe('messages.ts', () => {
       const message = getMessage(db, 'default', sent.id, 'bob');
 
       expect(message.id).toBe(sent.id);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getThread (issue #181)
+  // -----------------------------------------------------------------------
+  describe('getThread (issue #181)', () => {
+    it('root message ID でスレッド全体を取得できる', () => {
+      // alice -> bob (root)
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'start task' }, 'alice');
+      // bob -> alice (reply 1)
+      const reply1 = sendMessage(
+        db, 'default', { to: 'alice', message: 'acknowledged', caused_by: root.id }, 'bob'
+      );
+      // alice -> bob (reply 2)
+      const reply2 = sendMessage(
+        db, 'default', { to: 'bob', message: 'next step', caused_by: root.id }, 'alice'
+      );
+
+      const result = getThread(db, 'default', { message_id: root.id, limit: 100 }, 'alice');
+
+      expect(result.rootId).toBe(root.id);
+      expect(result.threadSize).toBe(3);
+      // 時系列昇順
+      expect(result.messages[0].id).toBe(root.id);
+      // root は caused_by なし — LEFT JOIN が NULL を返すため null
+      expect(result.messages[0].caused_by ?? null).toBeNull();
+    });
+
+    it('子メッセージ ID からでも同じスレッドを取得できる', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      const child = sendMessage(
+        db, 'default', { to: 'alice', message: 'reply', caused_by: root.id }, 'bob'
+      );
+
+      const fromRoot  = getThread(db, 'default', { message_id: root.id,  limit: 100 }, 'alice');
+      const fromChild = getThread(db, 'default', { message_id: child.id, limit: 100 }, 'alice');
+
+      expect(fromRoot.rootId).toBe(fromChild.rootId);
+      expect(fromRoot.threadSize).toBe(fromChild.threadSize);
+    });
+
+    it('caused_by が返信メッセージに付く', () => {
+      const root  = sendMessage(db, 'default', { to: 'bob', message: 'q' }, 'alice');
+      const reply = sendMessage(
+        db, 'default', { to: 'alice', message: 'a', caused_by: root.id }, 'bob'
+      );
+
+      const result = getThread(db, 'default', { message_id: root.id, limit: 100 }, 'alice');
+
+      const replyMsg = result.messages.find((m) => m.id === reply.id);
+      expect(replyMsg?.caused_by).toBe(root.id);
+    });
+
+    it('スレッドに参加していない requester はエラー', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'secret' }, 'alice');
+
+      // charlie はこのスレッドに参加していない
+      expect(() =>
+        getThread(db, 'default', { message_id: root.id, limit: 100 }, 'charlie')
+      ).toThrow('権限がありません');
+    });
+
+    it('存在しない message_id はエラー', () => {
+      expect(() =>
+        getThread(db, 'default', { message_id: 'nonexistent-id', limit: 100 }, 'alice')
+      ).toThrow('存在しません');
+    });
+
+    it('未登録 requester はエラー', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'test' }, 'alice');
+      expect(() =>
+        getThread(db, 'default', { message_id: root.id, limit: 100 }, 'unknown')
+      ).toThrow('@unknown は登録されていません');
+    });
+
+    it('limit でメッセージ数を制限できる', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      // 5 件の返信
+      for (let i = 0; i < 5; i++) {
+        sendMessage(
+          db, 'default', { to: 'alice', message: `reply${i}`, caused_by: root.id }, 'bob'
+        );
+      }
+
+      const result = getThread(db, 'default', { message_id: root.id, limit: 3 }, 'alice');
+
+      // root + limit=3 replies → 合計 4 件
+      // (root は別扱い、replies のみ limit)
+      expect(result.messages.length).toBeLessThanOrEqual(4);
+    });
+
+    it('caused_by のないメッセージ (= 単独メッセージ) も取得できる', () => {
+      const solo = sendMessage(db, 'default', { to: 'bob', message: 'standalone' }, 'alice');
+
+      const result = getThread(db, 'default', { message_id: solo.id, limit: 100 }, 'alice');
+
+      expect(result.rootId).toBe(solo.id);
+      expect(result.threadSize).toBe(1);
+      expect(result.messages[0].body).toBe('standalone');
     });
   });
 });

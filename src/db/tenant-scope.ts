@@ -9,6 +9,7 @@ import type {
   Message,
   SendMessageInput,
   GetHistoryInput,
+  GetThreadInput,
   Team,
   CreateTeamInput,
   UpdateTeamInput,
@@ -43,6 +44,7 @@ export interface TenantScope {
   getMessage(messageId: string, requester: string): Message;
   getUnreadMessages(reader: string): Message[];
   getHistory(input: GetHistoryInput, requester: string): Message[];
+  getThread(input: GetThreadInput, requester: string): { rootId: string; threadSize: number; messages: Message[] };
   markAsRead(messageId: string, reader: string): { read: true };
 
   // teams
@@ -89,6 +91,8 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
     getUnreadMessages: (reader) => M.getUnreadMessages(db, tenantId, reader),
     getHistory: (input, requester) =>
       M.getHistory(db, tenantId, input, requester),
+    getThread: (input, requester) =>
+      M.getThread(db, tenantId, input, requester),
     markAsRead: (messageId, reader) =>
       M.markAsRead(db, tenantId, messageId, reader),
 
