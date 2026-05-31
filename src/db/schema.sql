@@ -135,13 +135,15 @@ CREATE TABLE read_receipts (
   FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
 );
 
--- スレッドステータス (issue #202)
+-- dashboard スレッドステータス (issue #202)
+-- **dashboard internal only — MCP/API には公開しない。hub DB に同居するが MCP の concern とは無関係。**
 -- dashboard が causal tree 上の各スレッド（root_message_id で識別）に
 -- done / stash / running を mark するための管理テーブル。
+-- テーブル名の `dashboard_` prefix により「dashboard 専用テーブル」であることを明示する。
 -- running は NULL 扱い（DB に保存するのは done / stash / 明示的 running のみ）。
 -- stale は read-time 計算（DASHBOARD_STALE_HOURS env 経過 + 未 mark = stale）で導出し、DB に保存しない。
 -- FK なし: メッセージ削除後も status 行は残留して良い（orphan rows は許容、将来 cleanup 予定）。
-CREATE TABLE thread_status (
+CREATE TABLE dashboard_thread_status (
   root_message_id TEXT NOT NULL,
   tenant_id       TEXT NOT NULL DEFAULT 'default',
   status          TEXT NOT NULL,           -- 'done' | 'stash' | 'running'

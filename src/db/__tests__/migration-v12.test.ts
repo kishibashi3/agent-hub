@@ -1,6 +1,6 @@
 /**
  * schema v11 → v12 migration test (issue #202)
- * thread_status テーブル追加（dashboard スレッドステータス管理）
+ * dashboard_thread_status テーブル追加（dashboard スレッドステータス管理）
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
@@ -159,7 +159,7 @@ function buildV11Schema(db: Database.Database): void {
   });
 }
 
-describe('migration v11 → v12 (issue #202: thread_status table)', () => {
+describe('migration v11 → v12 (issue #202: dashboard_thread_status table)', () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -170,13 +170,13 @@ describe('migration v11 → v12 (issue #202: thread_status table)', () => {
     db.close();
   });
 
-  it('v11 DB に applyMigrations を適用すると v12 になり thread_status テーブルが存在する', () => {
+  it('v11 DB に applyMigrations を適用すると v12 になり dashboard_thread_status テーブルが存在する', () => {
     buildV11Schema(db);
     expect(getCurrentVersion(db)).toBe(11);
 
-    // v11 では thread_status テーブルが存在しない
+    // v11 では dashboard_thread_status テーブルが存在しない
     const v11Tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='thread_status'`)
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='dashboard_thread_status'`)
       .all() as { name: string }[];
     expect(v11Tables).toHaveLength(0);
 
@@ -184,19 +184,19 @@ describe('migration v11 → v12 (issue #202: thread_status table)', () => {
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(12);
 
-    // thread_status テーブルが作成されている
+    // dashboard_thread_status テーブルが作成されている
     const v12Tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='thread_status'`)
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='dashboard_thread_status'`)
       .all() as { name: string }[];
     expect(v12Tables).toHaveLength(1);
   });
 
-  it('thread_status テーブルのカラム構成が正しい', () => {
+  it('dashboard_thread_status テーブルのカラム構成が正しい', () => {
     buildV11Schema(db);
     applyMigrations(db);
 
     const columns = db
-      .prepare(`PRAGMA table_info(thread_status)`)
+      .prepare(`PRAGMA table_info(dashboard_thread_status)`)
       .all() as { name: string; type: string; notnull: number; pk: number }[];
     const colNames = columns.map((c) => c.name);
 
@@ -213,7 +213,7 @@ describe('migration v11 → v12 (issue #202: thread_status table)', () => {
     expect(pkCols).toContain('tenant_id');
   });
 
-  it('thread_status への UPSERT と SELECT が機能する', () => {
+  it('dashboard_thread_status への UPSERT と SELECT が機能する', () => {
     buildV11Schema(db);
     applyMigrations(db);
 
@@ -221,18 +221,18 @@ describe('migration v11 → v12 (issue #202: thread_status table)', () => {
 
     // INSERT
     db.prepare(`
-      INSERT INTO thread_status (root_message_id, tenant_id, status, updated_at)
+      INSERT INTO dashboard_thread_status (root_message_id, tenant_id, status, updated_at)
       VALUES (?, 'default', 'done', '2026-06-01T00:00:00.000Z')
     `).run(rootId);
 
     const row = db
-      .prepare(`SELECT * FROM thread_status WHERE root_message_id = ? AND tenant_id = 'default'`)
+      .prepare(`SELECT * FROM dashboard_thread_status WHERE root_message_id = ? AND tenant_id = 'default'`)
       .get(rootId) as { status: string; tenant_id: string } | undefined;
     expect(row?.status).toBe('done');
 
     // UPSERT (status 変更)
     db.prepare(`
-      INSERT INTO thread_status (root_message_id, tenant_id, status, updated_at)
+      INSERT INTO dashboard_thread_status (root_message_id, tenant_id, status, updated_at)
       VALUES (?, 'default', 'stash', '2026-06-01T01:00:00.000Z')
       ON CONFLICT (root_message_id, tenant_id) DO UPDATE SET
         status     = excluded.status,
@@ -240,12 +240,12 @@ describe('migration v11 → v12 (issue #202: thread_status table)', () => {
     `).run(rootId);
 
     const row2 = db
-      .prepare(`SELECT * FROM thread_status WHERE root_message_id = ? AND tenant_id = 'default'`)
+      .prepare(`SELECT * FROM dashboard_thread_status WHERE root_message_id = ? AND tenant_id = 'default'`)
       .get(rootId) as { status: string } | undefined;
     expect(row2?.status).toBe('stash');
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v12 まで上がり thread_status が存在する', () => {
+  it('v0 (= fresh install) では schema.sql から直接 v12 まで上がり dashboard_thread_status が存在する', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     expect(getCurrentVersion(db)).toBe(0);
@@ -254,7 +254,7 @@ describe('migration v11 → v12 (issue #202: thread_status table)', () => {
     expect(getCurrentVersion(db)).toBe(12);
 
     const tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='thread_status'`)
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='dashboard_thread_status'`)
       .all() as { name: string }[];
     expect(tables).toHaveLength(1);
   });

@@ -31,9 +31,9 @@ defense-in-depth) を HTML / HTML attribute 文脈に出す全箇所で `html.es
 
 ## DB access semantics
 
-- issue #202 以降: thread_status テーブルへの WRITE あり (read-mostly、write 頻度低)
+- issue #202 以降: dashboard_thread_status テーブルへの WRITE あり (read-mostly、write 頻度低)
 - docker-compose の dashboard service volume mount から `:ro` を除去 (issue #202)
-- SQLite WAL mode で agent-hub server (= writer) + dashboard (= thread_status writer) の
+- SQLite WAL mode で agent-hub server (= writer) + dashboard (= dashboard_thread_status writer) の
   マルチプロセス並行アクセスを安全に処理。それ以外は従来と同様 SELECT only。
 - `AGENT_HUB_TENANT` env: set → 当該 tenant filter、 unset → 全 tenant aggregate
   (= admin clarification、 multi-tenant 同名 handle は合算)
@@ -1576,7 +1576,7 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
 # ============================================================
 
 def ensure_thread_status_table():
-    """起動時: thread_status テーブルが未作成なら作成 (CREATE TABLE IF NOT EXISTS)。
+    """起動時: dashboard_thread_status テーブルが未作成なら作成 (CREATE TABLE IF NOT EXISTS)。
 
     hub migration v12 が先行して実行されていれば no-op。
     dashboard が hub より先に起動するレアケースや、v12 migration 前の既存 DB に対する
@@ -1586,7 +1586,7 @@ def ensure_thread_status_table():
     try:
         con = sqlite3.connect(DB_PATH)
         con.execute("""
-            CREATE TABLE IF NOT EXISTS thread_status (
+            CREATE TABLE IF NOT EXISTS dashboard_thread_status (
                 root_message_id TEXT NOT NULL,
                 tenant_id       TEXT NOT NULL DEFAULT 'default',
                 status          TEXT NOT NULL,
@@ -1600,14 +1600,14 @@ def ensure_thread_status_table():
         con.close()
     except Exception as e:
         print(
-            f"[dashboard] WARN: could not ensure thread_status table "
+            f"[dashboard] WARN: could not ensure dashboard_thread_status table "
             f"(DB_PATH={DB_PATH}): {e}",
             flush=True,
         )
 
 
 def load_thread_statuses():
-    """thread_status テーブルから全ステータスを一括取得して dict 化して返す。
+    """dashboard_thread_status テーブルから全ステータスを一括取得して dict 化して返す。
 
     Returns:
         dict: {(root_message_id, tenant_id): {status, updated_at, updated_by, note}}
@@ -1618,7 +1618,7 @@ def load_thread_statuses():
         cur = con.cursor()
         cur.execute(
             "SELECT root_message_id, tenant_id, status, updated_at, updated_by, note "
-            "FROM thread_status"
+            "FROM dashboard_thread_status"
         )
         result = {
             (row[0], row[1]): {
@@ -1638,7 +1638,7 @@ def effective_status(root_id, tenant_id, thread_end, status_map):
     """スレッドの実効ステータスを返す。
 
     優先順位:
-    1. thread_status テーブルに明示的 status あり → そのまま返す
+    1. dashboard_thread_status テーブルに明示的 status あり → そのまま返す
     2. 未設定 + thread_end が STALE_HOURS 超過 → 'stale'（read-time 計算）
     3. 未設定 + 最近活動あり → 'running'
 
@@ -1664,7 +1664,7 @@ def effective_status(root_id, tenant_id, thread_end, status_map):
 
 
 def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
-    """thread_status テーブルに UPSERT する。
+    """dashboard_thread_status テーブルに UPSERT する。
 
     Args:
         root_id:    スレッドルート message ID
@@ -1680,7 +1680,7 @@ def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
         con = sqlite3.connect(DB_PATH)
         con.execute(
             """
-            INSERT INTO thread_status (root_message_id, tenant_id, status, updated_at, note, updated_by)
+            INSERT INTO dashboard_thread_status (root_message_id, tenant_id, status, updated_at, note, updated_by)
             VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?, ?)
             ON CONFLICT (root_message_id, tenant_id) DO UPDATE SET
                 status     = excluded.status,

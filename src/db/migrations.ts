@@ -413,16 +413,17 @@ export function applyMigrations(db: Database.Database): void {
     });
   }
 
-  // v11 → v12: thread_status テーブル追加（dashboard スレッドステータス管理、issue #202）
+  // v11 → v12: dashboard_thread_status テーブル追加（dashboard スレッドステータス管理、issue #202）
+  // dashboard internal only — MCP/API には公開しない。hub の app.db に同居するが MCP の concern とは無関係。
+  // テーブル名の `dashboard_` prefix で「dashboard 専用」であることを明示する。
   // dashboard が causal tree 上の各スレッドに done/stash/running を mark するテーブル。
-  // hub の app.db に同居することで JOIN が自然にでき、docker volume の追加不要。
   // running / stale は read-time 計算のため DB に保存しない。
   if (currentVersion < 12) {
     runMigration(db, {
       version: 12,
-      description: 'add thread_status table for dashboard thread status management (issue #202)',
+      description: 'add dashboard_thread_status table for dashboard thread status management (issue #202)',
       sql: `
-        CREATE TABLE thread_status (
+        CREATE TABLE dashboard_thread_status (
           root_message_id TEXT NOT NULL,
           tenant_id       TEXT NOT NULL DEFAULT 'default',
           status          TEXT NOT NULL,
@@ -432,7 +433,7 @@ export function applyMigrations(db: Database.Database): void {
           PRIMARY KEY (root_message_id, tenant_id)
         );
         INSERT INTO schema_version (version, description)
-        VALUES (12, 'add thread_status table for dashboard thread status management (issue #202)');
+        VALUES (12, 'add dashboard_thread_status table for dashboard thread status management (issue #202)');
       `,
     });
   }
