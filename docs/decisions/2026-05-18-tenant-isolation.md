@@ -40,6 +40,8 @@ schema v6 でマルチテナント対応を導入。全テーブルに `tenant_i
 
 6. **push 通知のテナント分離** (issue #7): SSE push 配信時に `tenant_id` でフィルタし、cross-tenant への通知漏れを防止。DB 制約だけでなくアプリケーション層でも二重に隔離。
 
+7. **送信者の forensic audit** (issue #21): `messages.sender_login` カラムに PAT owner の GitHub login を記録する。tenant 内の `sender` (= peer handle) とは別に、実際の認証 ID をトレース可能にする。
+
 ### default テナント（open lobby）の位置づけ
 
 `X-Tenant-Id` ヘッダー未指定のアクセスはすべて `default` テナントに振られる。これは agent-hub の「peer が気軽に集まれる場所」という思想を体現しており、プロダクション環境でも open lobby として機能する。
