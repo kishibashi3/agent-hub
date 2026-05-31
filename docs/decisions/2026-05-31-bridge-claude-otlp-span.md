@@ -1,7 +1,7 @@
 # ADR-005: bridge-claude OTLP span emit (observability #1)
 
 **Number**: ADR-005
-**Status**: Accepted
+**Status**: Adopted
 **Date**: 2026-05-31
 **Scope**: ecosystem
 **Participants**: @bridges-impl (impl), @planner (dispatch), @ope-ultp1635 (operator L1 GO)
@@ -10,8 +10,7 @@
 > この判断は @ope-ultp1635 の operator DM (2026-05-31) により確定。
 > caused_by: f99e5b95-d5ab-4392-a1e9-d2db5ae6d0b4 (operator DM ID)
 > dispatch: @planner DM 9a5975e6-c00c-415e-b7cd-4d8b0b81f5ff
->
-> セッションが出所: 2026-05-31。依頼元 DM f99e5b95-d5ab-4392-a1e9-d2db5ae6d0b4
+> セッションが出所: 2026-05-31
 
 ---
 
@@ -25,7 +24,8 @@ operator がローカル LAN 上の OTLP コレクタ (otelite、`192.168.3.45:4
 
 Python の OpenTelemetry エコシステムは標準的なライブラリとして確立されており、
 `opentelemetry-sdk` + `opentelemetry-exporter-otlp-proto-http` の組み合わせで
-OTLP/HTTP+JSON 形式の span export が可能。
+OTLP/HTTP (`Content-Type: application/x-protobuf`) 形式の span export が可能。
+(v1.42.1 は protobuf のみサポート。otelite は protobuf を受け付け、スパンは正常に届く。)
 
 ---
 
@@ -44,8 +44,10 @@ bridge-claude に per-call OTLP span emit を追加する:
    - `gen_ai.usage.cache_read.input_tokens`: キャッシュ読み取り token 数
    - 属性名は **ドット区切り** (アンダースコア不可)
 
-3. **フォーマット**: OTLP/HTTP+JSON (`POST /v1/traces`、
-   `Content-Type: application/json`、`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`)
+3. **フォーマット**: OTLP/HTTP (`POST /v1/traces`、
+   `Content-Type: application/x-protobuf`)。
+   `opentelemetry-exporter-otlp-proto-http` v1.42.1 は protobuf のみをサポートする。
+   otelite は protobuf を受け付け、span は正常に届くことを実機確認済み (bridges#91 commit b431172)。
 
 4. **Opt-in**: `AGENT_HUB_TELEMETRY_URL` 未設定時はサイレント skip (bridge の
    デフォルト動作を変えない)
@@ -68,9 +70,6 @@ bridge-claude に per-call OTLP span emit を追加する:
 - `BatchSpanProcessor` による非同期 export でブリッジの latency に影響しない
 
 ### Risks / Trade-offs
-- `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` はプロセス環境変数として注入するため、
-  同一プロセスに複数の OTLP exporter がある場合に副作用が生じる可能性がある。
-  現状 bridge-claude は単一エクスポーターのみなので問題なし。
 - `usage` dict の構造は `claude_agent_sdk.ResultMessage.usage` (Anthropic API
   レスポンスの `usage` field) に依存する。SDK の API 変更時は本モジュールも更新要。
 - キャッシュ token の key 名 (`cache_read_input_tokens`) は Anthropic API の
@@ -81,6 +80,7 @@ bridge-claude に per-call OTLP span emit を追加する:
 ## Related
 
 - Refs: kishibashi3/agent-hub-bridges#90
+- 実装 PR: kishibashi3/agent-hub-bridges#91 (commit b431172)
 - operator DM: f99e5b95-d5ab-4392-a1e9-d2db5ae6d0b4
 - otelite deployment: `private/agent-hub/docs/deployment-pi5.md`
 - OpenTelemetry GenAI Semantic Conventions:
