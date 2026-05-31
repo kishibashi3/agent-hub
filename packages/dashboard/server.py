@@ -64,26 +64,8 @@ PORT = int(os.environ.get("PORT", "8080"))
 TELEMETRY_URL = os.environ.get("AGENT_HUB_TELEMETRY_URL") or None
 
 # ============================================================
-# Health view constants (= Phase 1: PPD + EQS)
+# Health view constants (= Phase 1: EQS)
 # ============================================================
-
-# PPD: Ping-Pong Detection (= 劇場型燃焼の直接計測、 設計書 §3.2.1)
-PPD_WINDOW_HOURS   = 4  # 同一セッションとみなす時間窓
-# severity しきい値は環境変数で上書き可能 (デフォルト: Warning=5 / Critical=10 / Severe=20)
-# デフォルト根拠: 旧実装 (3/5/7) は低すぎる誤検知が多発。
-#   @ope-ultp1635 指示 (2026-05-30) で Warning=5 / Critical=10 / Severe=20 に調整。
-#   現行 agent 数規模では 20 往復超が実質的な「無限ループ型」の閾値として妥当。
-PPD_WARN_ROUNDS     = int(os.environ.get("PPD_WARN_ROUNDS",      5))
-PPD_CRITICAL_ROUNDS = int(os.environ.get("PPD_CRITICAL_ROUNDS", 10))
-PPD_SEVERE_ROUNDS   = int(os.environ.get("PPD_SEVERE_ROUNDS",   20))
-# 順序整合性チェック: WARN < CRITICAL < SEVERE でない場合は起動時に即座に失敗させる
-if not (PPD_WARN_ROUNDS < PPD_CRITICAL_ROUNDS < PPD_SEVERE_ROUNDS):
-    raise ValueError(
-        f"PPD threshold order violation: "
-        f"PPD_WARN_ROUNDS={PPD_WARN_ROUNDS} must be < "
-        f"PPD_CRITICAL_ROUNDS={PPD_CRITICAL_ROUNDS} must be < "
-        f"PPD_SEVERE_ROUNDS={PPD_SEVERE_ROUNDS}"
-    )
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
 # エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
@@ -1570,7 +1552,7 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
 
 
 # ============================================================
-# Health view: PPD + EQS data layer (= Phase 1 SHS dashboard)
+# Health view: EQS data layer (= Phase 1 SHS dashboard)
 # ============================================================
 
 def _parse_ts(ts_str):
@@ -1582,104 +1564,6 @@ def _parse_ts(ts_str):
     if not ts_str:
         return None
     return datetime.fromisoformat(ts_str.rstrip("Z"))
-
-
-def compute_ppd_from_db():
-    """Ping-Pong Detection (PPD) を messages テーブルから計算。
-
-    Algorithm:
-    1. 全メッセージを (sender, recipient) ペア（= 正規化済み min/max）で grouping。
-    2. 各ペア内でメッセージを時刻順に並べ、前後の gap > PPD_WINDOW_HOURS で
-       セッション分割する。
-    3. セッション内の送信者列を圧縮（連続同一 sender → 1 turn）し、
-       双方の turn 数の min を「往復数 (rounds)」とする。
-    4. rounds >= PPD_WARN_ROUNDS ならピンポン判定（Warning 以上）。
-
-    Returns:
-        dict: {threads, total_sessions, ping_pong_count}
-          threads: list of {pair, a, b, rounds, msg_count, start, end, severity}
-    """
-    con = sqlite3.connect(DB_PATH)
-    cur = con.cursor()
-    if TENANT is None:
-        cur.execute(
-            "SELECT sender, recipient, created_at FROM messages ORDER BY created_at ASC"
-        )
-    else:
-        cur.execute(
-            "SELECT sender, recipient, created_at FROM messages "
-            "WHERE tenant_id = ? ORDER BY created_at ASC",
-            (TENANT,),
-        )
-    rows = cur.fetchall()
-    con.close()
-
-    # (min, max) ペアでグループ化
-    pair_messages = defaultdict(list)
-    for sender, recipient, created_at in rows:
-        pair = (min(sender, recipient), max(sender, recipient))
-        if sender != recipient:  # self-message は除外
-            pair_messages[pair].append((sender, recipient, created_at))
-
-    ping_pong_threads = []
-    total_sessions = 0
-
-    for pair, msgs in pair_messages.items():
-        # セッション分割: gap > PPD_WINDOW_HOURS で新セッション
-        sessions = []
-        current_session = [msgs[0]]
-        for i in range(1, len(msgs)):
-            prev_ts = _parse_ts(msgs[i - 1][2])
-            curr_ts = _parse_ts(msgs[i][2])
-            if prev_ts and curr_ts:
-                gap_h = (curr_ts - prev_ts).total_seconds() / 3600
-                if gap_h > PPD_WINDOW_HOURS:
-                    sessions.append(current_session)
-                    current_session = [msgs[i]]
-                    continue
-            current_session.append(msgs[i])
-        sessions.append(current_session)
-        total_sessions += len(sessions)
-
-        for session in sessions:
-            if len(session) < PPD_WARN_ROUNDS * 2:
-                continue  # 往復に必要な最低メッセージ数に満たない
-
-            # 連続同一 sender を 1 turn に圧縮 → sender ごとの turn 数をカウント
-            turns: dict[str, int] = {}
-            prev_sender = None
-            for sender, _, _ in session:
-                if sender != prev_sender:
-                    turns[sender] = turns.get(sender, 0) + 1
-                    prev_sender = sender
-
-            if len(turns) < 2:
-                continue  # 一方通行セッション
-
-            rounds = min(turns.values())
-
-            if rounds >= PPD_WARN_ROUNDS:
-                sev = (
-                    "severe"   if rounds >= PPD_SEVERE_ROUNDS   else
-                    "critical" if rounds >= PPD_CRITICAL_ROUNDS else
-                    "warning"
-                )
-                ping_pong_threads.append({
-                    "pair":      f"{pair[0]} ↔ {pair[1]}",
-                    "a":         pair[0],
-                    "b":         pair[1],
-                    "rounds":    rounds,
-                    "msg_count": len(session),
-                    "start":     session[0][2],
-                    "end":       session[-1][2],
-                    "severity":  sev,
-                })
-
-    return {
-        "threads":          sorted(ping_pong_threads, key=lambda x: -x["rounds"]),
-        "total_sessions":   total_sessions,
-        "ping_pong_count":  len(ping_pong_threads),
-    }
 
 
 def compute_eqs_from_db():
@@ -1839,54 +1723,8 @@ def compute_eqs_from_db():
 
 
 def render_health():
-    """Health view (= Phase 1 SHS: PPD + EQS) の body HTML を build。"""
-    ppd = compute_ppd_from_db()
+    """Health view (= Phase 1 SHS: EQS) の body HTML を build。"""
     eqs = compute_eqs_from_db()
-
-    # ── PPD サマリー ──────────────────────────────────────────────────────────
-    total_sessions = max(ppd["total_sessions"], 1)
-    ppd_rate = round(ppd["ping_pong_count"] / total_sessions * 100, 1)
-    ppd_color = (
-        "#39d353" if ppd_rate < 10 else
-        "#ffa657" if ppd_rate < 25 else
-        "#f78166"
-    )
-
-    # PPD アラートテーブル
-    threads = ppd["threads"]
-    if threads:
-        rows_html = []
-        for t in threads[:30]:
-            sev = t["severity"]
-            badge_cls = f"badge badge-{sev}"
-            start_s = esc(t["start"][:16].replace("T", " ") if t.get("start") else "—")
-            end_s   = esc(t["end"][:16].replace("T", " ")   if t.get("end")   else "—")
-            rows_html.append(
-                f"<tr>"
-                f"<td>{esc(t['a'])}&nbsp;↔&nbsp;{esc(t['b'])}</td>"
-                f"<td style='text-align:right'>{t['rounds']}</td>"
-                f"<td style='text-align:right'>{t['msg_count']}</td>"
-                f"<td><span class='{badge_cls}'>{sev.upper()}</span></td>"
-                f"<td style='font-size:10px;color:var(--text2)'>{start_s} → {end_s}</td>"
-                f"</tr>"
-            )
-        ppd_table = (
-            "<table class='link-list' style='max-width:100%'>"
-            "<thead><tr>"
-            "<th>pair</th>"
-            "<th style='text-align:right'>rounds</th>"
-            "<th style='text-align:right'>msgs</th>"
-            "<th>severity</th>"
-            "<th>window</th>"
-            "</tr></thead>"
-            "<tbody>" + "".join(rows_html) + "</tbody>"
-            "</table>"
-        )
-    else:
-        ppd_table = (
-            f"<p class='dim' style='padding:12px 0'>"
-            f"⚑ ピンポンスレッド検出なし (min rounds: {PPD_WARN_ROUNDS})</p>"
-        )
 
     # ── EQS セクション ────────────────────────────────────────────────────────
     if eqs["total_escalations"] == 0:
@@ -1941,34 +1779,9 @@ def render_health():
     return f"""<div class='view-content'>
 <h2>🔥 Structural Health — Phase 1 MVP</h2>
 <p class='dim health-note'>
-  Phase 1 計測指標: PPD（ピンポン検出）+ EQS（エスカレーション品質）<br>
-  燃焼類型対応: 劇場型(2)・合議過多型(6)・無限ループ型(9)
+  Phase 1 計測指標: EQS（エスカレーション品質）<br>
+  燃焼類型対応: 合議過多型(6)
 </p>
-
-<div class='detail-stats' style='margin-bottom:24px'>
-  <div class='stat-box'>
-    <span class='stat-num' style='color:{ppd_color}'>{ppd_rate}%</span>
-    <span class='stat-label'>PPD rate<br><span style='font-size:9px'>ping-pong sessions / total</span></span>
-  </div>
-  <div class='stat-box'>
-    <span class='stat-num'>{ppd["ping_pong_count"]}</span>
-    <span class='stat-label'>ping-pong threads<br><span style='font-size:9px'>≥{PPD_WARN_ROUNDS} rounds detected</span></span>
-  </div>
-  <div class='stat-box'>
-    <span class='stat-num'>{ppd["total_sessions"]}</span>
-    <span class='stat-label'>total sessions<br><span style='font-size:9px'>({PPD_WINDOW_HOURS}h window)</span></span>
-  </div>
-</div>
-
-<div class='health-section'>
-  <h3>⚑ Ping-Pong Alerts (PPD)</h3>
-  <p class='dim health-note'>
-    同一ペア間 {PPD_WINDOW_HOURS}h 窓内で往復 ≥{PPD_WARN_ROUNDS}回 を検出。
-    Warning(≥{PPD_WARN_ROUNDS}) / Critical(≥{PPD_CRITICAL_ROUNDS}) / Severe(≥{PPD_SEVERE_ROUNDS})。
-    Phase 1: artifact チェックなし（純メッセージ分析）。
-  </p>
-  {ppd_table}
-</div>
 
 <div class='health-section'>
   <h3>⬆ Escalation Quality Score (EQS)</h3>
