@@ -49,9 +49,9 @@ import sqlite3
 import urllib.request
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse, unquote
+from urllib.parse import parse_qs, urlparse
 
 # admin spec (= 2026-05-20): env 化 3 fields
 DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
@@ -69,7 +69,11 @@ TELEMETRY_URL = os.environ.get("AGENT_HUB_TELEMETRY_URL") or None
 # Thread status management (issue #202)
 # DASHBOARD_STALE_HOURS: スレッドの最終メッセージからこの時間が経過すると
 # 明示的 status が未設定の場合に 'stale' と判定する。デフォルト 24 時間。
-STALE_HOURS = int(os.environ.get("DASHBOARD_STALE_HOURS", "24"))
+# 非整数値が渡された場合は ValueError を catch してデフォルト値にフォールバックする。
+try:
+    STALE_HOURS = int(os.environ.get("DASHBOARD_STALE_HOURS") or "24")
+except ValueError:
+    STALE_HOURS = 24  # invalid env var (non-integer) → fallback to 24 hours
 # DASHBOARD_DB_PATH: dashboard 専用 RW SQLite ファイル (= thread status 管理)。
 # hub の app.db とは別ファイルにすることで hub DB への write 権限を持たない設計を維持。
 # docker-compose への volume 追加は別 PR (L1 GO 対象、issue #202)。
@@ -1671,7 +1675,7 @@ def effective_status(root_id, tenant_id, thread_end, status_map):
     # 未設定 → stale 自動判定
     if thread_end:
         last = _parse_ts(thread_end)
-        if last and (datetime.utcnow() - last) > timedelta(hours=STALE_HOURS):
+        if last and (datetime.now(timezone.utc).replace(tzinfo=None) - last) > timedelta(hours=STALE_HOURS):
             return "stale"
     return "running"
 
@@ -2892,7 +2896,8 @@ class Handler(BaseHTTPRequestHandler):
 
         セキュリティ:
         - status 値は許可リスト (done / stash / running) で検証、それ以外は 400
-        - redirect 先は '/' 始まりの相対 URL のみ許容（open redirect 防止）
+        - redirect 先は scheme/netloc なし + '/' 始まりの相対 URL のみ許容（open redirect 防止）
+          '//evil.com' バイパスを urlparse で二重チェック
         - root_id / tenant_id は SQL injection を ? プレースホルダで防止
         """
         try:
@@ -2916,8 +2921,11 @@ class Handler(BaseHTTPRequestHandler):
             tenant_id  = (params.get("tenant_id",  [TENANT or "default"])[0] or "default").strip()
             redirect   = (params.get("redirect",   ["/?view=causaltree"])[0] or "/?view=causaltree").strip()
 
-            # redirect 先 sanitize: 相対 URL ('/' 始まり) のみ許容
-            if not redirect.startswith("/"):
+            # redirect 先 sanitize: scheme/netloc のない相対 URL のみ許容 (open redirect 防止)
+            # '//evil.com/path' は startswith('/') を通過するが urlparse で netloc=evil.com と解釈され
+            # ブラウザがプロトコル相対 URL として絶対リダイレクトするため urlparse で二重チェックする
+            _rp = urlparse(redirect)
+            if _rp.scheme or _rp.netloc or not redirect.startswith("/"):
                 redirect = "/?view=causaltree"
 
             # status 許可リスト
