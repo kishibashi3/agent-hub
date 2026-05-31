@@ -1,4 +1,4 @@
--- agent-hub スキーマ v10
+-- agent-hub スキーマ v11
 -- MCP Server 用。参加者・チーム・メッセージ・既読管理 (multi-tenant)。
 -- v3: participants に owner 列を追加（PAT 認証下のハンドル所有者を記録）
 -- v4: participants に mode 列を追加（peer の worker type: stateful/stateless/global）
@@ -130,3 +130,4 @@ CREATE TABLE read_receipts (
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
   FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
 );
+
