@@ -43,7 +43,9 @@ import html
 import json
 import os
 import sqlite3
+import urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -54,6 +56,12 @@ DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
 # set されていれば当該 tenant のみ filter。
 TENANT = os.environ.get("AGENT_HUB_TENANT") or None
 PORT = int(os.environ.get("PORT", "8080"))
+
+# Observability: OTLP cost join (issue #195)
+# AGENT_HUB_TELEMETRY_URL 設定時のみ有効 (opt-in)。
+# 未設定時はコスト表示なし (caused tree のみ、従来動作を維持)。
+# 例: http://192.168.3.45:4318
+TELEMETRY_URL = os.environ.get("AGENT_HUB_TELEMETRY_URL") or None
 
 # ============================================================
 # Health view constants (= Phase 1: PPD + EQS)
@@ -438,6 +446,35 @@ details.thread-item > summary::marker { display:none; }
 .thread-msg-meta { font-size:10px; color:var(--text3); margin-bottom:4px; display:flex; gap:10px; flex-wrap:wrap; }
 .thread-msg-cause { font-size:10px; color:var(--text3); font-style:italic; margin-bottom:4px; }
 .thread-msg-body { color:var(--text); white-space:pre-wrap; word-break:break-word; }
+
+/* thread cost overlay (issue #195) */
+.thread-cost-panel {
+  max-width:780px; margin-bottom:16px; padding:12px 14px;
+  background:var(--bg2); border:1px solid var(--border2);
+  border-radius:6px; font-size:11px;
+}
+.thread-cost-title {
+  font-weight:600; color:var(--text2); margin-bottom:8px; font-size:12px;
+}
+.thread-cost-row {
+  display:flex; align-items:baseline; gap:4px; padding:3px 0;
+  border-top:1px solid var(--border);
+}
+.thread-cost-row:first-of-type { border-top:none; }
+.thread-cost-sender {
+  min-width:130px; color:var(--accent); font-family:monospace; font-size:11px;
+  flex-shrink:0;
+}
+.thread-cost-num {
+  font-family:monospace; color:var(--text); min-width:55px;
+  text-align:right; flex-shrink:0;
+}
+.thread-cost-label {
+  color:var(--text3); font-size:9px; min-width:32px; flex-shrink:0;
+}
+.thread-cost-total { margin-top:4px; border-top:1px solid var(--text3) !important; }
+.thread-cost-total .thread-cost-sender { color:var(--text2); font-weight:600; }
+.thread-cost-total .thread-cost-num { font-weight:600; }
 </style>
 </head>
 <body class="BODY_CLASS">
@@ -2389,6 +2426,143 @@ def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", li
     )
 
 
+# ============================================================
+# OTLP cost join helpers (issue #195)
+# ============================================================
+
+def _extract_span_usage(span):
+    """span dict から gen_ai.usage.* トークン数を抽出する。
+
+    otelite が返す attributes の形式は以下を許容:
+      - dict (flat): {"gen_ai.usage.input_tokens": 100, ...}
+      - str  (JSON): '{"gen_ai.usage.input_tokens": 100, ...}'
+      - list (OTLP key-value): [{"key": "...", "value": {"intValue": 100}}, ...]
+
+    Returns:
+        dict: {input_tokens, output_tokens, cache_read_tokens} (全て int、欠損は 0)
+    """
+    raw = span.get("attributes", {})
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+
+    # OTLP key-value list 形式 → flat dict に変換
+    if isinstance(raw, list):
+        attrs = {}
+        for item in raw:
+            key = item.get("key", "")
+            val_wrap = item.get("value", {})
+            val = (
+                val_wrap.get("intValue")
+                or val_wrap.get("doubleValue")
+                or val_wrap.get("stringValue")
+                or 0
+            )
+            attrs[key] = val
+        raw = attrs
+
+    def _int(v):
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "input_tokens":      _int(raw.get("gen_ai.usage.input_tokens")),
+        "output_tokens":     _int(raw.get("gen_ai.usage.output_tokens")),
+        "cache_read_tokens": _int(raw.get("gen_ai.usage.cache_read.input_tokens")),
+    }
+
+
+def _fetch_trace(msg_id):
+    """otelite から単一 trace の全 span を取得する (issue #195)。
+
+    GET {TELEMETRY_URL}/api/traces/{msg_id} を呼び出し span のリストを返す。
+    TELEMETRY_URL 未設定、接続失敗、または 404 の場合は [] を返す。
+
+    NOTE: bridges#91 により trace_id = msg_id (UUID 形式) で emit される。
+    タイムアウトは 3 秒。例外はサイレント skip (コスト取得失敗で page をブロックしない)。
+    """
+    if not TELEMETRY_URL:
+        return []
+    try:
+        url = f"{TELEMETRY_URL.rstrip('/')}/api/traces/{msg_id}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("spans", [data])
+    except Exception:
+        pass
+    return []
+
+
+def fetch_thread_cost_rollup(messages):
+    """スレッド全メッセージの OTLP cost を並列取得して per-sender でロールアップ。
+
+    AGENT_HUB_TELEMETRY_URL 未設定時は None を返す (コスト表示なし)。
+    message 数だけ並列 GET を発行する (max 10 workers、3秒/request)。
+
+    Args:
+        messages: list of message dicts (各要素に "id" と "sender" が必要)
+
+    Returns:
+        dict | None: {
+          "per_sender": {sender: {"input": int, "output": int, "cache_read": int}},
+          "total": {"input": int, "output": int, "cache_read": int},
+        }
+        or None if TELEMETRY_URL is not set or no trace data found.
+    """
+    if not TELEMETRY_URL or not messages:
+        return None
+
+    id_to_sender = {msg["id"]: msg["sender"] for msg in messages if msg.get("id")}
+    msg_ids = list(id_to_sender.keys())
+    if not msg_ids:
+        return None
+
+    # 並列 fetch (ThreadPoolExecutor、__exit__ で全完了を待つ)
+    future_to_mid = {}
+    with ThreadPoolExecutor(max_workers=min(len(msg_ids), 10)) as pool:
+        for mid in msg_ids:
+            future_to_mid[pool.submit(_fetch_trace, mid)] = mid
+
+    # 結果収集
+    span_map = {}
+    for fut, mid in future_to_mid.items():
+        try:
+            spans = fut.result()
+            if spans:
+                span_map[mid] = spans
+        except Exception:
+            pass
+
+    if not span_map:
+        return None
+
+    per_sender = {}
+    total = {"input": 0, "output": 0, "cache_read": 0}
+
+    for mid, spans in span_map.items():
+        sender = id_to_sender.get(mid, "?")
+        if sender not in per_sender:
+            per_sender[sender] = {"input": 0, "output": 0, "cache_read": 0}
+        for span in spans:
+            usage = _extract_span_usage(span)
+            per_sender[sender]["input"]      += usage["input_tokens"]
+            per_sender[sender]["output"]     += usage["output_tokens"]
+            per_sender[sender]["cache_read"] += usage["cache_read_tokens"]
+            total["input"]      += usage["input_tokens"]
+            total["output"]     += usage["output_tokens"]
+            total["cache_read"] += usage["cache_read_tokens"]
+
+    return {"per_sender": per_sender, "total": total}
+
+
 def render_thread_detail(thread_id):
     """スレッド詳細読みページ (= /?view=causaltree&thread=<id>) の body HTML。
 
@@ -2418,6 +2592,43 @@ def render_thread_detail(thread_id):
     # root の preview (header 用)
     root_preview = root["body"][:60] + "…" if len(root["body"]) > 60 else root["body"]
     start_ts = root["created_at"][:16].replace("T", " ") if root.get("created_at") else ""
+
+    # --- issue #195: OTLP cost rollup (opt-in — AGENT_HUB_TELEMETRY_URL で有効化) ---
+    cost = fetch_thread_cost_rollup(msgs)
+    cost_html = ""
+    if cost:
+        rows = []
+        for sender in sorted(cost["per_sender"]):
+            c = cost["per_sender"][sender]
+            rows.append(
+                f"<div class='thread-cost-row'>"
+                f"<span class='thread-cost-sender'>{esc(sender)}</span>"
+                f"<span class='thread-cost-num'>{c['input']:,}</span>"
+                f"<span class='thread-cost-label'>in</span>"
+                f"<span class='thread-cost-num'>{c['output']:,}</span>"
+                f"<span class='thread-cost-label'>out</span>"
+                f"<span class='thread-cost-num'>{c['cache_read']:,}</span>"
+                f"<span class='thread-cost-label'>cache</span>"
+                f"</div>"
+            )
+        tot = cost["total"]
+        rows.append(
+            f"<div class='thread-cost-row thread-cost-total'>"
+            f"<span class='thread-cost-sender'>total</span>"
+            f"<span class='thread-cost-num'>{tot['input']:,}</span>"
+            f"<span class='thread-cost-label'>in</span>"
+            f"<span class='thread-cost-num'>{tot['output']:,}</span>"
+            f"<span class='thread-cost-label'>out</span>"
+            f"<span class='thread-cost-num'>{tot['cache_read']:,}</span>"
+            f"<span class='thread-cost-label'>cache</span>"
+            f"</div>"
+        )
+        cost_html = (
+            "<div class='thread-cost-panel'>"
+            "<div class='thread-cost-title'>💰 OTLP Cost (tokens)</div>"
+            + "".join(rows)
+            + "</div>"
+        )
 
     # メッセージリスト HTML
     msg_items = []
@@ -2454,6 +2665,7 @@ def render_thread_detail(thread_id):
         f"<div class='dim health-note' style='margin-bottom:12px'>"
         f"<strong>{esc(root['sender'])}</strong> → {esc(root['recipient'])}"
         f" &nbsp;「{esc(root_preview)}」</div>"
+        f"{cost_html}"
         "<div class='thread-msg-list'>"
         + "".join(msg_items)
         + "</div>"
