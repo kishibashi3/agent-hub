@@ -290,6 +290,75 @@ describe('messages.ts', () => {
         }
       });
     });
+
+    // トランザクション アトミック性テスト (issue #168: in-flight transaction persistence)
+    describe('transaction atomicity (issue #168)', () => {
+      it('caused_by 付き sendMessage は messages と message_causes が同時にコミットされる', () => {
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+        const reply = sendMessage(
+          db,
+          'default',
+          { to: 'alice', message: 'reply', caused_by: root.id },
+          'bob'
+        );
+
+        // messages テーブルに行が存在する
+        const msgRow = db
+          .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+          .get('default', reply.id);
+        expect(msgRow).toBeDefined();
+
+        // message_causes テーブルに行が存在する（両 INSERT が同一トランザクションでコミットされた証拠）
+        const causeRow = db
+          .prepare(
+            'SELECT caused_by_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0'
+          )
+          .get('default', reply.id) as { caused_by_id: string } | undefined;
+        expect(causeRow).toBeDefined();
+        expect(causeRow?.caused_by_id).toBe(root.id);
+      });
+
+      it('caused_by なし sendMessage は messages のみに行が存在し message_causes は空', () => {
+        const msg = sendMessage(db, 'default', { to: 'bob', message: 'standalone' }, 'alice');
+
+        // messages テーブルに行が存在する
+        const msgRow = db
+          .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+          .get('default', msg.id);
+        expect(msgRow).toBeDefined();
+
+        // caused_by なしの場合は message_causes に行がない
+        const causeRow = db
+          .prepare('SELECT * FROM message_causes WHERE tenant_id = ? AND message_id = ?')
+          .get('default', msg.id);
+        expect(causeRow).toBeUndefined();
+      });
+
+      it('mark_as_read まで messages テーブルにメッセージが保持される', () => {
+        const msg = sendMessage(db, 'default', { to: 'bob', message: 'persistent' }, 'alice');
+
+        // 送信直後: messages に存在する
+        const beforeRead = db
+          .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+          .get('default', msg.id);
+        expect(beforeRead).toBeDefined();
+
+        // mark_as_read 後も messages テーブルから削除されない（read_receipts に記録されるだけ）
+        markAsRead(db, 'default', msg.id, 'bob');
+        const afterRead = db
+          .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+          .get('default', msg.id);
+        expect(afterRead).toBeDefined();
+
+        // read_receipts に記録されている
+        const receipt = db
+          .prepare(
+            'SELECT reader FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?'
+          )
+          .get('default', msg.id, '@bob');
+        expect(receipt).toBeDefined();
+      });
+    });
   });
 
   describe('getMessage', () => {

@@ -73,42 +73,48 @@ export function sendMessage(
     }
   }
 
-  // メッセージを作成（バリデーション完了後に DB write）
+  // メッセージID・タイムスタンプをトランザクション外で生成（副作用なし）
   const messageId = randomUUID();
   const now = new Date().toISOString();
   const login = senderLogin ?? null;
 
-  db.prepare(
-    'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_login, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(tenantId, messageId, senderName, recipientName, input.message, login, now);
-
-  // 因果リンクを message_causes に記録 (issue #162)
-  // V1: position=0 のみ（単一 caused_by、Tree 構造）
-  // root_message_id: caused_by の root_message_id を1回参照して計算 (issue #166)
-  //   caused_by に root_message_id があればそれを引き継ぐ、なければ caused_by 自身がルート。
-  //   挿入時1回で解決できるため WITH RECURSIVE 不要。
-  if (causedBy !== null) {
-    const parentCause = db
-      .prepare(
-        'SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0'
-      )
-      .get(tenantId, causedBy) as { root_message_id: string | null } | undefined;
-    const rootMessageId = parentCause?.root_message_id ?? causedBy;
-
+  // DB 書き込み: messages + message_causes をアトミックにコミット (issue #168)
+  // messages INSERT と message_causes INSERT を同一トランザクションに包む。
+  // hub クラッシュ時に「messages あり・message_causes なし」の中間状態が残らないことを保証する。
+  // WAL モード + synchronous=NORMAL により、コミット後は hub プロセスのクラッシュから保護される。
+  const message = db.transaction((): Message => {
     db.prepare(
-      'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position, root_message_id) VALUES (?, ?, ?, 0, ?)'
-    ).run(tenantId, messageId, causedBy, rootMessageId);
-  }
+      'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_login, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(tenantId, messageId, senderName, recipientName, input.message, login, now);
 
-  const message = db
-    .prepare(
-      `SELECT m.*, mc.caused_by_id AS caused_by
-       FROM messages m
-       LEFT JOIN message_causes mc
-         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
-       WHERE m.tenant_id = ? AND m.id = ?`
-    )
-    .get(tenantId, messageId) as Message;
+    // 因果リンクを message_causes に記録 (issue #162)
+    // V1: position=0 のみ（単一 caused_by、Tree 構造）
+    // root_message_id: caused_by の root_message_id を1回参照して計算 (issue #166)
+    //   caused_by に root_message_id があればそれを引き継ぐ、なければ caused_by 自身がルート。
+    //   挿入時1回で解決できるため WITH RECURSIVE 不要。
+    if (causedBy !== null) {
+      const parentCause = db
+        .prepare(
+          'SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0'
+        )
+        .get(tenantId, causedBy) as { root_message_id: string | null } | undefined;
+      const rootMessageId = parentCause?.root_message_id ?? causedBy;
+
+      db.prepare(
+        'INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position, root_message_id) VALUES (?, ?, ?, 0, ?)'
+      ).run(tenantId, messageId, causedBy, rootMessageId);
+    }
+
+    return db
+      .prepare(
+        `SELECT m.*, mc.caused_by_id AS caused_by
+         FROM messages m
+         LEFT JOIN message_causes mc
+           ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+         WHERE m.tenant_id = ? AND m.id = ?`
+      )
+      .get(tenantId, messageId) as Message;
+  })();
 
   return message;
 }

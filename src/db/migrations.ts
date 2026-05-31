@@ -428,7 +428,15 @@ export function initDatabase(db: Database.Database): void {
   try {
     // WAL モードを有効化（並行アクセス性能向上）
     db.pragma('journal_mode = WAL');
-    
+
+    // WAL モードでの synchronous 設定 (issue #168: in-flight transaction persistence)
+    // NORMAL: コミット済みトランザクションは hub プロセスのクラッシュから保護される。
+    //   WAL ファイルがディスクに残るため、次回起動時に SQLite が自動 replay する。
+    //   WAL モードには SQLite 推奨設定（FULL より高速）。
+    // FULL:   OS クラッシュ・電源断からも保護（書き込みレイテンシが増加）。
+    //   電源断保護が必要な環境では FULL に変更すること。
+    db.pragma('synchronous = NORMAL');
+
     // 外部キー制約を有効化
     db.pragma('foreign_keys = ON');
 
