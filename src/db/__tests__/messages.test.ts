@@ -339,7 +339,11 @@ describe('messages.ts', () => {
         // root を事前に作成 (caused_by なし → message_causes INSERT は発生しない)
         const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
 
-        // BEFORE INSERT trigger で message_causes への INSERT を強制失敗させる
+        // BEFORE INSERT trigger で message_causes への INSERT を強制失敗させる。
+        // RAISE(ABORT) は現在の SQL ステートメントを失敗させ JavaScript 例外として伝播する。
+        // better-sqlite3 の db.transaction() は例外発生時に自動的に ROLLBACK するため、
+        // messages INSERT と message_causes INSERT が同一トランザクションに包まれていれば
+        // messages 行も確実にロールバックされる（atomicity 保証の検証）。
         db.exec(`
           CREATE TRIGGER test_fail_message_causes
           BEFORE INSERT ON message_causes
