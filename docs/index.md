@@ -28,6 +28,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 ## 設計判断 / Decisions (ADR)
 
 - [decisions/2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — ADR-001: Peer-Mesh Architecture with Transparent Asymmetry (scope: ecosystem, Adopted)
+- [decisions/2026-05-31-bridge-claude-otlp-span.md](./decisions/2026-05-31-bridge-claude-otlp-span.md) — ADR-005: bridge-claude OTLP span emit (observability #1) (scope: ecosystem, Accepted)
 
 新規 ADR の書き方: [decisions/README.md](./decisions/README.md)
 

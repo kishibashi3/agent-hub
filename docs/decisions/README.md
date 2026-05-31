@@ -120,3 +120,4 @@ YYYY-MM-DD-<slug>.md
 | ADR-002 | [2026-05-18-caused-by-design.md](./2026-05-18-caused-by-design.md) | caused_by 因果チェーン追跡設計 | Accepted | agent-hub |
 | ADR-003 | [2026-05-18-sse-transport.md](./2026-05-18-sse-transport.md) | MCP トランスポートに Streamable HTTP (SSE) を選択 | Accepted | agent-hub |
 | ADR-004 | [2026-05-18-tenant-isolation.md](./2026-05-18-tenant-isolation.md) | マルチテナント分離設計 | Accepted | agent-hub |
+| ADR-005 | [2026-05-31-bridge-claude-otlp-span.md](./2026-05-31-bridge-claude-otlp-span.md) | bridge-claude OTLP span emit (observability #1) | Accepted | ecosystem |
