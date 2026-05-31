@@ -42,7 +42,7 @@ YYYY-MM-DD-<slug>.md
 ```markdown
 # ADR-NNN: <Title>
 
-**Number**: NNN
+**Number**: ADR-NNN
 **Status**: Proposed | Accepted | Deprecated | Superseded by ADR-NNN
 **Date**: YYYY-MM-DD
 **Scope**: agent-hub | ecosystem
