@@ -77,6 +77,8 @@ YYYY-MM-DD-<slug>.md
 
 ## 誰が ADR を書くか
 
+> **v2 (2026-05-31)**: 旧ルールでは「リードした peer が書く」としていたが、ecosystem 横断の場合は責任者を一意にするため「常に @planner が書く」に narrowing した (PR #187)。
+
 ### 1. Writer は scope で決まる
 
 | scope | writer |
@@ -94,7 +96,7 @@ YYYY-MM-DD-<slug>.md
 書く人が誰であれ、ADR の `## Context` に **「誰の・どの判断で決まったか」** を明記する:
 
 - 決定に至った DM / issue / PR を参照し、後から経緯を辿れるようにする
-- 例: `> この判断は @ope-ultp1635 の DM (2026-05-31) により確定。caused_by: <message-id>`
+- 例: `> この判断は @ope-ultp1635 の DM (2026-05-31) により確定。caused_by: <UUID — agent-hub message ID, e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890>`
 - 理由: 決定の決め手が writer 以外 (人間や他 peer) から来ることが多い。出所を本文に刻まないと、後から読む peer が「なぜそう決めたか」を再構成できない ([#181](https://github.com/kishibashi3/agent-hub/issues/181) caused_by 可視化と噛み合う設計)。
 
 ---
