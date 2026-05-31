@@ -1,4 +1,4 @@
--- agent-hub スキーマ v10
+-- agent-hub スキーマ v12
 -- MCP Server 用。参加者・チーム・メッセージ・既読管理 (multi-tenant)。
 -- v3: participants に owner 列を追加（PAT 認証下のハンドル所有者を記録）
 -- v4: participants に mode 列を追加（peer の worker type: stateful/stateless/global）
@@ -19,6 +19,10 @@
 --      - V2: position > 0 で DAG（複数親）に拡張可能。migration 不要。
 -- v11: message_causes に root_message_id カラム追加（O(1) スレッド検索、issue #166）
 --      - 挿入時に caused_by.root_message_id ?? caused_by で計算して保存。WITH RECURSIVE 不要。
+-- v12: thread_status テーブル追加（dashboard スレッドステータス管理、issue #202）
+--      - dashboard が causal tree 上のスレッドに done/stash/running を mark できる
+--      - hub の app.db に同居することで JOIN が自然にでき、docker volume 追加不要
+--      - running / stale は read-time 計算（DB 保存は done / stash / running 明示のみ）
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -28,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (11, 'agent-hub v11: add root_message_id to message_causes for O(1) thread search (issue #166)');
+VALUES (12, 'agent-hub v12: add thread_status table for dashboard thread status management (issue #202)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -129,4 +133,20 @@ CREATE TABLE read_receipts (
   PRIMARY KEY (tenant_id, message_id, reader),
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
   FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
+);
+
+-- スレッドステータス (issue #202)
+-- dashboard が causal tree 上の各スレッド（root_message_id で識別）に
+-- done / stash / running を mark するための管理テーブル。
+-- running は NULL 扱い（DB に保存するのは done / stash / 明示的 running のみ）。
+-- stale は read-time 計算（DASHBOARD_STALE_HOURS env 経過 + 未 mark = stale）で導出し、DB に保存しない。
+-- FK なし: メッセージ削除後も status 行は残留して良い（orphan rows は許容、将来 cleanup 予定）。
+CREATE TABLE thread_status (
+  root_message_id TEXT NOT NULL,
+  tenant_id       TEXT NOT NULL DEFAULT 'default',
+  status          TEXT NOT NULL,           -- 'done' | 'stash' | 'running'
+  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  updated_by      TEXT,                    -- mark した操作者（任意、HTTP クライアント識別用）
+  note            TEXT,                    -- メモ（任意）
+  PRIMARY KEY (root_message_id, tenant_id)
 );

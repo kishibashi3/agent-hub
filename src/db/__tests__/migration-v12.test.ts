@@ -1,6 +1,6 @@
 /**
- * schema v10 → v11 migration test (issue #166)
- * message_causes に root_message_id カラム追加（O(1) スレッド検索）
+ * schema v11 → v12 migration test (issue #202)
+ * thread_status テーブル追加（dashboard スレッドステータス管理）
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
@@ -11,17 +11,16 @@ import {
 } from '../migrations.js';
 
 /**
- * v10 までの schema を fresh build する helper。
- * applyMigrations を v10 相当で止めるため、runMigration を直接使う。
+ * v11 までの schema を fresh build する helper。
  */
-function buildV10Schema(db: Database.Database): void {
+function buildV11Schema(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
   // v6 full DDL
   runMigration(db, {
     version: 6,
-    description: 'v6 fresh build for v11 migration test',
+    description: 'v6 fresh build for v12 migration test',
     sql: `
       CREATE TABLE schema_version (
         version INTEGER PRIMARY KEY,
@@ -94,7 +93,7 @@ function buildV10Schema(db: Database.Database): void {
     `,
   });
 
-  // v7: last_active_at を participants に追加
+  // v7: last_active_at
   runMigration(db, {
     version: 7,
     description: 'add last_active_at column to participants for activity precision',
@@ -105,7 +104,7 @@ function buildV10Schema(db: Database.Database): void {
     `,
   });
 
-  // v8: sender_github_login を messages に追加
+  // v8: sender_github_login
   runMigration(db, {
     version: 8,
     description: 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)',
@@ -116,7 +115,7 @@ function buildV10Schema(db: Database.Database): void {
     `,
   });
 
-  // v9: sender_github_login → sender_login rename
+  // v9: rename sender_github_login → sender_login
   runMigration(db, {
     version: 9,
     description: 'rename messages.sender_github_login to sender_login (issue #127)',
@@ -127,7 +126,7 @@ function buildV10Schema(db: Database.Database): void {
     `,
   });
 
-  // v10: message_causes junction テーブル追加 (issue #162)
+  // v10: message_causes
   runMigration(db, {
     version: 10,
     description: 'add message_causes junction table for causal chain tracking (issue #162)',
@@ -146,9 +145,21 @@ function buildV10Schema(db: Database.Database): void {
       VALUES (10, 'add message_causes junction table for causal chain tracking (issue #162)');
     `,
   });
+
+  // v11: root_message_id
+  runMigration(db, {
+    version: 11,
+    description: 'add root_message_id to message_causes for O(1) thread search (issue #166)',
+    sql: `
+      ALTER TABLE message_causes ADD COLUMN root_message_id TEXT;
+      CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
+      INSERT INTO schema_version (version, description)
+      VALUES (11, 'add root_message_id to message_causes for O(1) thread search (issue #166)');
+    `,
+  });
 }
 
-describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', () => {
+describe('migration v11 → v12 (issue #202: thread_status table)', () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -159,79 +170,82 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     db.close();
   });
 
-  it('v10 DB に applyMigrations を適用すると v11 になり root_message_id カラムが存在する', () => {
-    buildV10Schema(db);
-    expect(getCurrentVersion(db)).toBe(10);
+  it('v11 DB に applyMigrations を適用すると v12 になり thread_status テーブルが存在する', () => {
+    buildV11Schema(db);
+    expect(getCurrentVersion(db)).toBe(11);
 
-    // v10 では root_message_id カラムが存在しない
-    const v10Columns = db
-      .prepare(`PRAGMA table_info(message_causes)`)
+    // v11 では thread_status テーブルが存在しない
+    const v11Tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='thread_status'`)
       .all() as { name: string }[];
-    expect(v10Columns.map((c) => c.name)).not.toContain('root_message_id');
+    expect(v11Tables).toHaveLength(0);
 
-    // v11 migration 適用
+    // v12 migration 適用
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(12);
 
-    // root_message_id カラムが追加されている
-    const v11Columns = db
-      .prepare(`PRAGMA table_info(message_causes)`)
+    // thread_status テーブルが作成されている
+    const v12Tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='thread_status'`)
       .all() as { name: string }[];
-    expect(v11Columns.map((c) => c.name)).toContain('root_message_id');
-
-    // idx_message_causes_root インデックスが作成されている
-    const indexes = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_message_causes%'`)
-      .all() as { name: string }[];
-    expect(indexes.map((i) => i.name)).toContain('idx_message_causes_root');
+    expect(v12Tables).toHaveLength(1);
   });
 
-  it('v10 の既存 message_causes rows が migration 後に root_message_id をバックフィルされる', () => {
-    buildV10Schema(db);
-
-    // v10 DB にテストデータを挿入 (root → reply1 → reply2 の 2 hop チェーン)
-    db.prepare(`INSERT INTO participants (tenant_id, name) VALUES (?, ?)`).run('default', '@alice');
-    db.prepare(`INSERT INTO participants (tenant_id, name) VALUES (?, ?)`).run('default', '@bob');
-    const rootId = 'root-0000-0000-0000-000000000001';
-    const reply1Id = 'rpl1-0000-0000-0000-000000000002';
-    const reply2Id = 'rpl2-0000-0000-0000-000000000003';
-
-    db.prepare(
-      `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
-    ).run('default', rootId, '@alice', '@bob', 'root');
-    db.prepare(
-      `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
-    ).run('default', reply1Id, '@bob', '@alice', 'reply1');
-    db.prepare(
-      `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
-    ).run('default', reply2Id, '@alice', '@bob', 'reply2');
-
-    // v10 形式 (root_message_id なし) で message_causes を挿入
-    db.prepare(
-      `INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)`
-    ).run('default', reply1Id, rootId);
-    db.prepare(
-      `INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)`
-    ).run('default', reply2Id, reply1Id);
-
-    // v11 migration 適用
+  it('thread_status テーブルのカラム構成が正しい', () => {
+    buildV11Schema(db);
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
 
-    // reply1 の root_message_id = rootId (直接の親がルート)
-    const r1 = db
-      .prepare(`SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ?`)
-      .get('default', reply1Id) as { root_message_id: string | null };
-    expect(r1.root_message_id).toBe(rootId);
+    const columns = db
+      .prepare(`PRAGMA table_info(thread_status)`)
+      .all() as { name: string; type: string; notnull: number; pk: number }[];
+    const colNames = columns.map((c) => c.name);
 
-    // reply2 の root_message_id = rootId (2 hop: reply2 → reply1 → root)
-    const r2 = db
-      .prepare(`SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ?`)
-      .get('default', reply2Id) as { root_message_id: string | null };
-    expect(r2.root_message_id).toBe(rootId);
+    expect(colNames).toContain('root_message_id');
+    expect(colNames).toContain('tenant_id');
+    expect(colNames).toContain('status');
+    expect(colNames).toContain('updated_at');
+    expect(colNames).toContain('updated_by');
+    expect(colNames).toContain('note');
+
+    // 複合 PK は (root_message_id, tenant_id)
+    const pkCols = columns.filter((c) => c.pk > 0).map((c) => c.name);
+    expect(pkCols).toContain('root_message_id');
+    expect(pkCols).toContain('tenant_id');
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v12 まで上がり root_message_id が存在する', () => {
+  it('thread_status への UPSERT と SELECT が機能する', () => {
+    buildV11Schema(db);
+    applyMigrations(db);
+
+    const rootId = 'test-root-0000-0000-0000-000000000001';
+
+    // INSERT
+    db.prepare(`
+      INSERT INTO thread_status (root_message_id, tenant_id, status, updated_at)
+      VALUES (?, 'default', 'done', '2026-06-01T00:00:00.000Z')
+    `).run(rootId);
+
+    const row = db
+      .prepare(`SELECT * FROM thread_status WHERE root_message_id = ? AND tenant_id = 'default'`)
+      .get(rootId) as { status: string; tenant_id: string } | undefined;
+    expect(row?.status).toBe('done');
+
+    // UPSERT (status 変更)
+    db.prepare(`
+      INSERT INTO thread_status (root_message_id, tenant_id, status, updated_at)
+      VALUES (?, 'default', 'stash', '2026-06-01T01:00:00.000Z')
+      ON CONFLICT (root_message_id, tenant_id) DO UPDATE SET
+        status     = excluded.status,
+        updated_at = excluded.updated_at
+    `).run(rootId);
+
+    const row2 = db
+      .prepare(`SELECT * FROM thread_status WHERE root_message_id = ? AND tenant_id = 'default'`)
+      .get(rootId) as { status: string } | undefined;
+    expect(row2?.status).toBe('stash');
+  });
+
+  it('v0 (= fresh install) では schema.sql から直接 v12 まで上がり thread_status が存在する', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     expect(getCurrentVersion(db)).toBe(0);
@@ -239,25 +253,22 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(12);
 
-    // message_causes テーブルに root_message_id カラムが存在する
-    const columns = db
-      .prepare(`PRAGMA table_info(message_causes)`)
+    const tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='thread_status'`)
       .all() as { name: string }[];
-    expect(columns.map((c) => c.name)).toContain('root_message_id');
+    expect(tables).toHaveLength(1);
   });
 
-  it('v12 → v12 で no-op (= idempotent)、v11 row は重複しない', () => {
+  it('v12 → v12 で no-op (= idempotent)、v12 row は重複しない', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
 
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(12);
 
-    // 再適用しても version は 12 のまま
     applyMigrations(db);
     expect(getCurrentVersion(db)).toBe(12);
 
-    // schema_version table は v11 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
       .all(12) as { version: number }[];

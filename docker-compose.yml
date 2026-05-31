@@ -58,8 +58,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # agent-hub と同 host path を **read-only** で共有 (= WAL mode で並行 read 安全)
-      - ./data:/app/data:ro
+      # agent-hub と同 host path を共有 (WAL mode で並行 read/write 安全)
+      # issue #202: dashboard が thread_status テーブルに書き込むため :ro を除去
+      - ./data:/app/data
     environment:
       DB_PATH: /app/data/app.db
       PORT: "8080"

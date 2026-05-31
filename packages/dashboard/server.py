@@ -31,8 +31,10 @@ defense-in-depth) を HTML / HTML attribute 文脈に出す全箇所で `html.es
 
 ## DB access semantics
 
-- SELECT only、 SQLite WAL mode で agent-hub server (= writer) と並行 read 安全
-- docker-compose 側で `:ro` (read-only) mount を強制
+- issue #202 以降: thread_status テーブルへの WRITE あり (read-mostly、write 頻度低)
+- docker-compose の dashboard service volume mount から `:ro` を除去 (issue #202)
+- SQLite WAL mode で agent-hub server (= writer) + dashboard (= thread_status writer) の
+  マルチプロセス並行アクセスを安全に処理。それ以外は従来と同様 SELECT only。
 - `AGENT_HUB_TENANT` env: set → 当該 tenant filter、 unset → 全 tenant aggregate
   (= admin clarification、 multi-tenant 同名 handle は合算)
 - MVP scale: 10-20 peer 想定 (= operator 設計判断)。 100+ peer / 大規模 query は
@@ -48,7 +50,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote
 
 # admin spec (= 2026-05-20): env 化 3 fields
 DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
@@ -62,6 +64,11 @@ PORT = int(os.environ.get("PORT", "8080"))
 # 未設定時はコスト表示なし (caused tree のみ、従来動作を維持)。
 # 例: http://192.168.3.45:4318
 TELEMETRY_URL = os.environ.get("AGENT_HUB_TELEMETRY_URL") or None
+
+# Thread status management (issue #202)
+# DASHBOARD_STALE_HOURS: スレッドの最終メッセージからこの時間が経過すると
+# 明示的 status が未設定の場合に 'stale' と判定する。デフォルト 24 時間。
+STALE_HOURS = int(os.environ.get("DASHBOARD_STALE_HOURS", "24"))
 
 # ============================================================
 # Health view constants (= Phase 1: EQS)
@@ -357,6 +364,19 @@ table.link-list .bar { height:8px; background:var(--accent); border-radius:2px; 
 .badge-warning  { background:#ffa657; color:#000; }
 .badge-critical { background:#f78166; color:#fff; }
 .badge-severe   { background:#da3633; color:#fff; }
+/* thread status badges (issue #202) */
+.badge-running  { background:var(--accent); color:#fff; }
+.badge-stale    { background:#ffa657; color:#000; }
+.badge-done     { background:#39d353; color:#000; }
+.badge-stash    { background:#6e7681; color:#fff; }
+/* thread status mark buttons (issue #202) */
+.ts-mark-form { display:inline-flex; gap:4px; margin-left:6px; }
+.ts-mark-btn {
+  padding:1px 7px; font-size:10px; font-family:monospace; cursor:pointer;
+  border:1px solid var(--border); border-radius:3px; background:var(--bg2);
+  color:var(--text2); transition:border-color 0.1s, color 0.1s;
+}
+.ts-mark-btn:hover { border-color:var(--accent); color:var(--accent); }
 .health-section { margin-top:28px; }
 .health-section h3 { font-size:12px; color:var(--text2); margin:0 0 6px; text-transform:uppercase; letter-spacing:0.08em; }
 .health-note { font-size:11px; color:var(--text2); margin:4px 0 8px; }
@@ -1552,6 +1572,189 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
 
 
 # ============================================================
+# Thread status management (issue #202)
+# ============================================================
+
+def ensure_thread_status_table():
+    """起動時: thread_status テーブルが未作成なら作成 (CREATE TABLE IF NOT EXISTS)。
+
+    hub migration v12 が先行して実行されていれば no-op。
+    dashboard が hub より先に起動するレアケースや、v12 migration 前の既存 DB に対する
+    フォールバックとして機能する。
+    DB_PATH が read-only の場合（:ro mount が残っている等）は警告ログを出して続行。
+    """
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS thread_status (
+                root_message_id TEXT NOT NULL,
+                tenant_id       TEXT NOT NULL DEFAULT 'default',
+                status          TEXT NOT NULL,
+                updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+                updated_by      TEXT,
+                note            TEXT,
+                PRIMARY KEY (root_message_id, tenant_id)
+            )
+        """)
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(
+            f"[dashboard] WARN: could not ensure thread_status table "
+            f"(DB_PATH={DB_PATH}): {e}",
+            flush=True,
+        )
+
+
+def load_thread_statuses():
+    """thread_status テーブルから全ステータスを一括取得して dict 化して返す。
+
+    Returns:
+        dict: {(root_message_id, tenant_id): {status, updated_at, updated_by, note}}
+        テーブルが存在しない場合は空 dict を返す。
+    """
+    try:
+        con = sqlite3.connect(DB_PATH)
+        cur = con.cursor()
+        cur.execute(
+            "SELECT root_message_id, tenant_id, status, updated_at, updated_by, note "
+            "FROM thread_status"
+        )
+        result = {
+            (row[0], row[1]): {
+                "status": row[2], "updated_at": row[3],
+                "updated_by": row[4], "note": row[5],
+            }
+            for row in cur.fetchall()
+        }
+        con.close()
+        return result
+    except sqlite3.OperationalError:
+        # テーブル未作成（hub migration v12 未適用）の場合は空 dict で続行
+        return {}
+
+
+def effective_status(root_id, tenant_id, thread_end, status_map):
+    """スレッドの実効ステータスを返す。
+
+    優先順位:
+    1. thread_status テーブルに明示的 status あり → そのまま返す
+    2. 未設定 + thread_end が STALE_HOURS 超過 → 'stale'（read-time 計算）
+    3. 未設定 + 最近活動あり → 'running'
+
+    Args:
+        root_id:    スレッドのルート message ID
+        tenant_id:  テナント ID（None の場合は 'default' で lookup）
+        thread_end: スレッドの最終メッセージ created_at (ISO 8601 文字列)
+        status_map: load_thread_statuses() の返り値
+
+    Returns:
+        str: 'running' | 'stale' | 'done' | 'stash'
+    """
+    key = (root_id, tenant_id or "default")
+    row = status_map.get(key)
+    if row:
+        return row["status"]
+    # 未設定 → stale 自動判定
+    if thread_end:
+        last = _parse_ts(thread_end)
+        if last and (datetime.utcnow() - last) > timedelta(hours=STALE_HOURS):
+            return "stale"
+    return "running"
+
+
+def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
+    """thread_status テーブルに UPSERT する。
+
+    Args:
+        root_id:    スレッドルート message ID
+        tenant_id:  テナント ID
+        status:     'done' | 'stash' | 'running'
+        note:       任意のメモ
+        updated_by: mark した操作者（任意）
+
+    Returns:
+        True on success, False on error.
+    """
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute(
+            """
+            INSERT INTO thread_status (root_message_id, tenant_id, status, updated_at, note, updated_by)
+            VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?, ?)
+            ON CONFLICT (root_message_id, tenant_id) DO UPDATE SET
+                status     = excluded.status,
+                updated_at = excluded.updated_at,
+                note       = excluded.note,
+                updated_by = excluded.updated_by
+            """,
+            (root_id, tenant_id or "default", status, note or None, updated_by or None),
+        )
+        con.commit()
+        con.close()
+        return True
+    except Exception as e:
+        print(f"[dashboard] WARN: set_thread_status failed: {e}", flush=True)
+        return False
+
+
+def _status_badge(status):
+    """status 文字列を HTML badge に変換。"""
+    label_map = {
+        "running": "▶ running",
+        "stale":   "⚠ stale",
+        "done":    "✓ done",
+        "stash":   "📌 stash",
+    }
+    label = label_map.get(status, esc(status))
+    return f"<span class='badge badge-{esc(status)}'>{label}</span>"
+
+
+def _status_mark_form(root_id, current_status, redirect_url):
+    """スレッドの status を変更するための inline POST form HTML を返す。
+
+    Args:
+        root_id:        スレッドルート message ID
+        current_status: 現在の effective_status
+        redirect_url:   mark 後にリダイレクトする URL
+
+    Returns:
+        HTML string
+    """
+    root_id_safe = esc_attr(root_id)
+    redirect_safe = esc_attr(redirect_url)
+    tenant_safe = esc_attr(TENANT or "default")
+
+    buttons = []
+    if current_status != "done":
+        buttons.append(
+            f"<button class='ts-mark-btn' name='status' value='done'>✓ done</button>"
+        )
+    if current_status != "stash":
+        buttons.append(
+            f"<button class='ts-mark-btn' name='status' value='stash'>📌 stash</button>"
+        )
+    if current_status in ("done", "stash"):
+        buttons.append(
+            f"<button class='ts-mark-btn' name='status' value='running'>↺ reopen</button>"
+        )
+
+    if not buttons:
+        return ""
+
+    btns_html = "".join(buttons)
+    return (
+        f"<form method='post' action='/?action=set_thread_status' "
+        f"class='ts-mark-form' onsubmit='event.stopPropagation()'>"
+        f"<input type='hidden' name='root_id' value='{root_id_safe}'>"
+        f"<input type='hidden' name='tenant_id' value='{tenant_safe}'>"
+        f"<input type='hidden' name='redirect' value='{redirect_safe}'>"
+        f"{btns_html}"
+        f"</form>"
+    )
+
+
+# ============================================================
 # Health view: EQS data layer (= Phase 1 SHS dashboard)
 # ============================================================
 
@@ -2122,22 +2325,43 @@ def get_thread_data(thread_id):
     return {"root_msg": root_msg, "messages": all_msgs, "thread_size": len(all_msgs)}
 
 
-def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", limit=30):
+def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size",
+                       limit=30, status_filter=None):
     """Causal Tree view (= /?view=causaltree) の body HTML を build。
 
     caused_by チェーンを message_causes.root_message_id で O(1) に取得し、
     <details>/<summary> でツリー展開表示する。
-    フィルタバー (agent / from / to / sort / limit) を先頭に表示。
-    各スレッド行に「Read →」リンクを追加 (= /?view=causaltree&thread=<id>)。
+    フィルタバー (agent / from / to / sort / limit / status) を先頭に表示。
+    各スレッド行に status badge + mark ボタン +「Read →」リンクを追加。
     外部 JS 不要、stdlib のみ。
 
     issue #181: フィルタ対応 + 読みページリンク追加。
+    issue #202: スレッドステータス管理 (done/stash/stale/running)。
+
+    status_filter が指定された場合は SQL limit を拡大してから Python 側でフィルタし、
+    フィルタ後に user 指定 limit を適用する。
     """
+    # status_filter が指定された場合: SQL レベルでは大きめに取得してから Python でフィルタ
+    # MVP scale (< 1000 threads) では全件取得して問題なし
+    sql_limit = 1000 if status_filter else limit
     data = get_causal_tree_data(
-        limit=limit, agent=agent, from_date=from_date, to_date=to_date, sort=sort
+        limit=sql_limit, agent=agent, from_date=from_date, to_date=to_date, sort=sort
     )
-    threads = data["threads"]
-    total = data["total_threads"]
+    all_threads = data["threads"]
+    total_sql = data["total_threads"]  # SQL カウント (status filter 前)
+
+    # status を各スレッドに付与 (load_thread_statuses は一括取得 O(1))
+    status_map = load_thread_statuses()
+    for t in all_threads:
+        t["status"] = effective_status(
+            t["root_id"], TENANT, t["thread_end"], status_map
+        )
+
+    # status フィルタ適用 (Python 側)
+    if status_filter:
+        all_threads = [t for t in all_threads if t["status"] == status_filter]
+    filtered_total = len(all_threads)
+    threads = all_threads[:limit]
 
     # ------------------------------------------------------------------
     # フィルタバー (GET フォーム)
@@ -2150,6 +2374,16 @@ def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", li
         f"<option value='{v}'{' selected' if str(limit) == str(v) else ''}>{v}</option>"
         for v in [10, 20, 30, 50, 100]
     )
+    status_options = "".join(
+        f"<option value='{v}'{' selected' if status_filter == v else ''}>{lbl}</option>"
+        for v, lbl in [
+            ("", "all"),
+            ("running", "▶ running"),
+            ("stale", "⚠ stale"),
+            ("done", "✓ done"),
+            ("stash", "📌 stash"),
+        ]
+    )
     filter_bar = (
         "<form method='get' action='/' class='ct-filter-bar'>"
         "<input type='hidden' name='view' value='causaltree'>"
@@ -2159,6 +2393,7 @@ def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", li
         f"<label>to <input type='date' name='to' value='{esc_attr(to_date or '')}'></label>"
         f"<label>sort <select name='sort'>{sort_options}</select></label>"
         f"<label>limit <select name='limit'>{limit_options}</select></label>"
+        f"<label>status <select name='status'>{status_options}</select></label>"
         "<button type='submit' class='ct-filter-apply'>Apply</button>"
         "<a href='/?view=causaltree' class='ct-filter-reset'>Reset</a>"
         "</form>"
@@ -2175,11 +2410,24 @@ def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", li
         )
 
     items = []
+    # current URL (フィルタ維持したリダイレクト先)
+    current_ct_url = (
+        "/?view=causaltree"
+        + (f"&agent={esc_attr(agent)}" if agent else "")
+        + (f"&from={esc_attr(from_date)}" if from_date else "")
+        + (f"&to={esc_attr(to_date)}" if to_date else "")
+        + f"&sort={esc_attr(sort)}&limit={limit}"
+        + (f"&status={esc_attr(status_filter)}" if status_filter else "")
+    )
+
     for t in threads:
         root = t["root_msg"]
         preview = root["body"][:80] + "…" if len(root["body"]) > 80 else root["body"]
         start_s = t["thread_start"][:16].replace("T", " ") if t["thread_start"] else ""
         read_url = f"/?view=causaltree&thread={esc_attr(t['root_id'])}"
+        status = t["status"]
+        badge_html = _status_badge(status)
+        mark_html = _status_mark_form(t["root_id"], status, current_ct_url)
 
         # ルートから全子孫を再帰展開
         tree_html = _render_tree_node(
@@ -2189,18 +2437,20 @@ def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", li
         items.append(
             f"<details class='thread-item'>"
             f"<summary style='cursor:pointer;list-style:none;display:flex;"
-            f"align-items:baseline;gap:8px;padding:10px 12px;"
+            f"align-items:center;gap:8px;padding:10px 12px;"
             f"background:var(--bg2);border:1px solid var(--border);"
             f"border-radius:6px;margin-bottom:2px'>"
             f"<span style='font-size:16px;font-weight:bold;color:var(--accent);"
             f"min-width:2ch;text-align:right'>{t['thread_size']}</span>"
             f"<span class='dim' style='font-size:10px'>msgs</span>"
+            f"{badge_html}"
             f"<span class='tree-sender'>{esc(root['sender'])}</span>"
             f"<span class='dim'>→</span>"
             f"<span>{esc(root['recipient'])}</span>"
             f"<span class='dim' style='flex:1;overflow:hidden;text-overflow:ellipsis;"
             f"white-space:nowrap;font-size:11px'>{esc(preview)}</span>"
             f"<span class='dim' style='font-size:10px;white-space:nowrap'>{esc(start_s)}</span>"
+            f"{mark_html}"
             f"<a href='{read_url}' class='ct-read-link' onclick='event.stopPropagation()'>Read →</a>"
             f"</summary>"
             f"<div style='padding:10px 0 6px 28px;border-left:2px solid var(--border);"
@@ -2211,11 +2461,17 @@ def render_causal_tree(agent=None, from_date=None, to_date=None, sort="size", li
         )
 
     showing = len(threads)
-    more = f" (showing {showing} of {total})" if total > showing else f" ({total} threads)"
+    if status_filter:
+        more = (
+            f" ({filtered_total} filtered / {total_sql} total"
+            f"{', showing ' + str(showing) if showing < filtered_total else ''})"
+        )
+    else:
+        more = f" (showing {showing} of {total_sql})" if total_sql > showing else f" ({total_sql} threads)"
     stats_html = (
         f"<div class='detail-stats' style='margin-bottom:20px'>"
         f"<div class='stat-box'>"
-        f"<span class='stat-num'>{total}</span>"
+        f"<span class='stat-num'>{total_sql}</span>"
         f"<span class='stat-label'>total threads</span></div>"
         f"<div class='stat-box'>"
         f"<span class='stat-num'>{threads[0]['thread_size'] if threads else 0}</span>"
@@ -2409,6 +2665,16 @@ def render_thread_detail(thread_id):
     root_preview = root["body"][:60] + "…" if len(root["body"]) > 60 else root["body"]
     start_ts = root["created_at"][:16].replace("T", " ") if root.get("created_at") else ""
 
+    # --- issue #202: status badge + mark form ---
+    status_map = load_thread_statuses()
+    # スレッドの thread_end = 最後のメッセージの created_at
+    thread_end = msgs[-1]["created_at"] if msgs else None
+    current_status = effective_status(thread_id, TENANT, thread_end, status_map)
+    status_badge_html = _status_badge(current_status)
+    mark_form_html = _status_mark_form(
+        thread_id, current_status, f"/?view=causaltree&thread={esc_attr(thread_id)}"
+    )
+
     # --- issue #195: OTLP cost rollup (opt-in — AGENT_HUB_TELEMETRY_URL で有効化) ---
     cost = fetch_thread_cost_rollup(msgs)
     cost_html = ""
@@ -2477,6 +2743,8 @@ def render_thread_detail(thread_id):
         "<h2 style='color:var(--accent);margin:0'>📎 Thread</h2>"
         f"<span class='dim' style='font-size:11px'>"
         f"{thread_size} messages &nbsp;·&nbsp; started {esc(start_ts)}</span>"
+        f"{status_badge_html}"
+        f"{mark_form_html}"
         "</div>"
         f"<div class='dim health-note' style='margin-bottom:12px'>"
         f"<strong>{esc(root['sender'])}</strong> → {esc(root['recipient'])}"
@@ -2571,9 +2839,12 @@ class Handler(BaseHTTPRequestHandler):
                         ct_limit = min(max(int(qs.get("limit", ["30"])[0]), 1), 100)
                     except (ValueError, TypeError):
                         ct_limit = 30
+                    ct_status = qs.get("status", [None])[0] or None
+                    if ct_status not in (None, "running", "stale", "done", "stash"):
+                        ct_status = None
                     view_body = render_causal_tree(
                         agent=ct_agent, from_date=ct_from, to_date=ct_to,
-                        sort=ct_sort, limit=ct_limit,
+                        sort=ct_sort, limit=ct_limit, status_filter=ct_status,
                     )
                 body = render_alt_view_layout(
                     "causaltree", view_body, total_msgs, total_agents, total_links_for_header,
@@ -2599,6 +2870,63 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        """スレッドステータス変更 POST ハンドラ (issue #202)。
+
+        `POST /?action=set_thread_status` を受け付けて thread_status テーブルを
+        UPSERT し、`redirect` パラメータの URL (デフォルト: /?view=causaltree) に
+        302 リダイレクトする。
+
+        セキュリティ:
+        - status 値は許可リスト (done / stash / running) で検証、それ以外は 400
+        - redirect 先は '/' 始まりの相対 URL のみ許容（open redirect 防止）
+        - root_id / tenant_id は SQL injection を ? プレースホルダで防止
+        """
+        try:
+            parsed = urlparse(self.path)
+            qs = parse_qs(parsed.query)
+            action = qs.get("action", [None])[0]
+
+            if action != "set_thread_status":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            # body を読む
+            content_length = int(self.headers.get("Content-Length", 0))
+            body_bytes = self.rfile.read(content_length)
+            params = parse_qs(body_bytes.decode("utf-8"))
+
+            root_id    = (params.get("root_id",    [None])[0] or "").strip()
+            status     = (params.get("status",     [None])[0] or "").strip()
+            note       = (params.get("note",       [""])[0]   or "").strip() or None
+            tenant_id  = (params.get("tenant_id",  [TENANT or "default"])[0] or "default").strip()
+            redirect   = (params.get("redirect",   ["/?view=causaltree"])[0] or "/?view=causaltree").strip()
+
+            # redirect 先 sanitize: 相対 URL ('/' 始まり) のみ許容
+            if not redirect.startswith("/"):
+                redirect = "/?view=causaltree"
+
+            # status 許可リスト
+            if not root_id or status not in ("done", "stash", "running"):
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"invalid root_id or status")
+                return
+
+            set_thread_status(root_id, tenant_id, status, note=note)
+
+            self.send_response(302)
+            self.send_header("Location", redirect)
+            self.end_headers()
+
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(f"set_thread_status error: {e}".encode("utf-8"))
+
     def log_message(self, fmt, *args):
         # default は stderr に noisy log を出すので suppress (= docker logs を clean に)
         pass
@@ -2608,8 +2936,11 @@ if __name__ == "__main__":
     print(
         f"[dashboard] serving on http://0.0.0.0:{PORT} "
         f"(DB_PATH={DB_PATH}, "
-        f"AGENT_HUB_TENANT={TENANT if TENANT is not None else '(unset → all tenants)'})",
+        f"AGENT_HUB_TENANT={TENANT if TENANT is not None else '(unset → all tenants)'}, "
+        f"DASHBOARD_STALE_HOURS={STALE_HOURS})",
         flush=True,
     )
+    # issue #202: thread_status テーブルを確保（hub migration v12 のフォールバック）
+    ensure_thread_status_table()
     srv = HTTPServer(("0.0.0.0", PORT), Handler)
     srv.serve_forever()

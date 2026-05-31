@@ -140,7 +140,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 11;
+  const targetVersion = 12;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -409,6 +409,30 @@ export function applyMigrations(db: Database.Database): void {
         WHERE root_message_id IS NULL AND position = 0;
         INSERT INTO schema_version (version, description)
         VALUES (11, 'add root_message_id to message_causes for O(1) thread search (issue #166)');
+      `,
+    });
+  }
+
+  // v11 → v12: thread_status テーブル追加（dashboard スレッドステータス管理、issue #202）
+  // dashboard が causal tree 上の各スレッドに done/stash/running を mark するテーブル。
+  // hub の app.db に同居することで JOIN が自然にでき、docker volume の追加不要。
+  // running / stale は read-time 計算のため DB に保存しない。
+  if (currentVersion < 12) {
+    runMigration(db, {
+      version: 12,
+      description: 'add thread_status table for dashboard thread status management (issue #202)',
+      sql: `
+        CREATE TABLE thread_status (
+          root_message_id TEXT NOT NULL,
+          tenant_id       TEXT NOT NULL DEFAULT 'default',
+          status          TEXT NOT NULL,
+          updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          updated_by      TEXT,
+          note            TEXT,
+          PRIMARY KEY (root_message_id, tenant_id)
+        );
+        INSERT INTO schema_version (version, description)
+        VALUES (12, 'add thread_status table for dashboard thread status management (issue #202)');
       `,
     });
   }
