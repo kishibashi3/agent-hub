@@ -199,13 +199,9 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>agent-hub dashboard</title>
-<!-- D3.js を <head> で先行 load (= 2026-05-20 timeline bug fix):
-     旧位置 (= body 末尾、 mesh JS の直前) では alt view (= timeline) の inline <script>
-     が D3 script tag より前に位置するため `ReferenceError: d3 is not defined` で chart
-     が描画されない。 head に移動して全 view で D3 が available な状態を保証。
-     defer 不要 (= mesh JS は body 末尾で `<script>` 直書きなので、 head の同期 load
-     完了後にしか到達しない)。 -->
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<!-- D3.js ESM CDN 個別 import (issue #180: ~80kB gz → ~25-35kB gz に削減)
+     type="module" script は常に defer 扱いのため <head> / body 末尾 どちらに置いても
+     DOM ready 後に実行される。全 view の <script type="module"> が各自 import する。 -->
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -482,8 +478,14 @@ NAV_BAR_HTML
 
 <div id="tooltip"></div>
 
-<!-- D3.js は <head> で先行 load 済 (= 2026-05-20 timeline bug fix、 旧 location)。 -->
-<script>
+<script type="module">
+import { select, selectAll } from 'https://cdn.jsdelivr.net/npm/d3-selection@3/+esm';
+import { zoom } from 'https://cdn.jsdelivr.net/npm/d3-zoom@3/+esm';
+import { drag } from 'https://cdn.jsdelivr.net/npm/d3-drag@3/+esm';
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'https://cdn.jsdelivr.net/npm/d3-force@3/+esm';
+import { scaleSqrt, scaleLinear } from 'https://cdn.jsdelivr.net/npm/d3-scale@4/+esm';
+import { max } from 'https://cdn.jsdelivr.net/npm/d3-array@3/+esm';
+import { color } from 'https://cdn.jsdelivr.net/npm/d3-color@3/+esm';
 const roleColor = id => {
   if (id.includes('planner'))    return '#f78166';
   if (id.includes('reviewer'))   return '#ffa657';
@@ -506,7 +508,7 @@ const allNodesRaw = NODES_JSON;
 const allLinksRaw = LINKS_JSON;
 
 const w = pane.offsetWidth, h = pane.offsetHeight;
-const svg = d3.select('#svg').attr('viewBox', [0, 0, w, h]);
+const svg = select('#svg').attr('viewBox', [0, 0, w, h]);
 
 // ── SVG defs: glow filters (one-time setup) ──────────────────────────────
 const defs = svg.append('defs');
@@ -527,7 +529,7 @@ egMerge.append('feMergeNode').attr('in','SourceGraphic');
 
 const g = svg.append('g');
 
-svg.call(d3.zoom().scaleExtent([0.3, 4])
+svg.call(zoom().scaleExtent([0.3, 4])
   .on('zoom', e => g.attr('transform', e.transform)));
 
 let currentSim = null;
@@ -553,20 +555,20 @@ function redraw(topN) {
       .attr('cx','35%').attr('cy','35%').attr('r','65%');
     grad.append('stop').attr('offset','0%').attr('stop-color','#fff').attr('stop-opacity','0.35');
     grad.append('stop').attr('offset','50%').attr('stop-color', c).attr('stop-opacity','1');
-    grad.append('stop').attr('offset','100%').attr('stop-color', d3.color(c).darker(1.2)).attr('stop-opacity','1');
+    grad.append('stop').attr('offset','100%').attr('stop-color', color(c).darker(1.2)).attr('stop-opacity','1');
   });
 
-  const maxTotal = d3.max(ns, d => d.total);
-  const maxVal   = d3.max(ls, d => d.value);
-  const rScale = d3.scaleSqrt().domain([0, maxTotal || 1]).range([6, 32]);
-  const wScale = d3.scaleSqrt().domain([0, maxVal || 1]).range([0.8, 6]);
-  const opacityScale = d3.scaleLinear().domain([0, maxVal || 1]).range([0.25, 0.85]);
+  const maxTotal = max(ns, d => d.total);
+  const maxVal   = max(ls, d => d.value);
+  const rScale = scaleSqrt().domain([0, maxTotal || 1]).range([6, 32]);
+  const wScale = scaleSqrt().domain([0, maxVal || 1]).range([0.8, 6]);
+  const opacityScale = scaleLinear().domain([0, maxVal || 1]).range([0.25, 0.85]);
 
-  currentSim = d3.forceSimulation(ns)
-    .force('link', d3.forceLink(ls).id(d => d.id).distance(d => 120 - wScale(d.value) * 3).strength(0.35))
-    .force('charge', d3.forceManyBody().strength(-380))
-    .force('center', d3.forceCenter(w / 2, h / 2))
-    .force('collision', d3.forceCollide().radius(d => rScale(d.total) + 12));
+  currentSim = forceSimulation(ns)
+    .force('link', forceLink(ls).id(d => d.id).distance(d => 120 - wScale(d.value) * 3).strength(0.35))
+    .force('charge', forceManyBody().strength(-380))
+    .force('center', forceCenter(w / 2, h / 2))
+    .force('collision', forceCollide().radius(d => rScale(d.total) + 12));
 
   // curved edges as <path>
   const link = g.append('g').selectAll('path').data(ls).join('path')
@@ -577,7 +579,7 @@ function redraw(topN) {
     .attr('filter', 'url(#edge-glow)');
 
   const node = g.append('g').selectAll('g').data(ns).join('g')
-    .call(d3.drag()
+    .call(drag()
       .on('start', (e, d) => { if (!e.active) currentSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
       .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
       .on('end',   (e, d) => { if (!e.active) currentSim.alphaTarget(0); d.fx = null; d.fy = null; }));
@@ -587,7 +589,7 @@ function redraw(topN) {
 
   function addInteraction(sel) {
     sel.on('mouseover', (e, d) => {
-        d3.select(e.currentTarget).attr('stroke-opacity', 1).attr('stroke-width', 2);
+        select(e.currentTarget).attr('stroke-opacity', 1).attr('stroke-width', 2);
         const tip = document.getElementById('tooltip');
         const myLinks = ls.filter(l => l.source.id === d.id || l.target.id === d.id);
         const rows = myLinks.sort((a,b) => b.value - a.value).slice(0,6)
@@ -607,7 +609,7 @@ function redraw(topN) {
         tip.style.top  = (e.pageY - 10) + 'px';
       })
       .on('mouseout', e => {
-        d3.select(e.currentTarget).attr('stroke-opacity', 0.6).attr('stroke-width', 1);
+        select(e.currentTarget).attr('stroke-opacity', 0.6).attr('stroke-width', 1);
         document.getElementById('tooltip').style.display = 'none';
       });
   }
@@ -722,13 +724,15 @@ redraw(parseInt(topNSlider.value, 10));
 })();
 
 // theme toggle
+// window に公開: type="module" スコープ外から onclick="toggleTheme()" で呼ぶため
 function toggleTheme() {
   const dark = document.body.classList.toggle('dark');
   document.getElementById('theme-btn').textContent = dark ? '☀️ light' : '🌙 dark';
   // update edge + node text colors
   const nc = getComputedStyle(document.documentElement).getPropertyValue('--node-text').trim();
-  d3.selectAll('.node text').attr('fill', nc);
+  selectAll('.node text').attr('fill', nc);
 }
+window.toggleTheme = toggleTheme;
 
 // heatmap tooltip
 document.querySelectorAll('td[data-n]').forEach(td => {
@@ -1102,7 +1106,11 @@ def render_timeline(range_label="7d"):
   <span class='dim' style='margin-left:20px'>total: <strong>{d['total']}</strong> messages in last {d['range_label']}</span>
 </div>
 <div id='timeline-chart' style='width:100%; height:400px; margin-top:16px'></div>
-<script>
+<script type="module">
+import {{ select }} from 'https://cdn.jsdelivr.net/npm/d3-selection@3/+esm';
+import {{ scaleBand, scaleLinear }} from 'https://cdn.jsdelivr.net/npm/d3-scale@4/+esm';
+import {{ max }} from 'https://cdn.jsdelivr.net/npm/d3-array@3/+esm';
+import {{ axisLeft, axisBottom }} from 'https://cdn.jsdelivr.net/npm/d3-axis@3/+esm';
 const tlBuckets = {buckets_json};
 const tlContainer = document.getElementById('timeline-chart');
 const tlW = tlContainer.offsetWidth, tlH = tlContainer.offsetHeight;
@@ -1110,7 +1118,7 @@ const tlMargin = {{top: 20, right: 30, bottom: 60, left: 50}};
 const tlIW = tlW - tlMargin.left - tlMargin.right;
 const tlIH = tlH - tlMargin.top - tlMargin.bottom;
 
-const tlSvg = d3.select('#timeline-chart').append('svg')
+const tlSvg = select('#timeline-chart').append('svg')
   .attr('width', tlW).attr('height', tlH)
   .append('g').attr('transform', `translate(${{tlMargin.left}},${{tlMargin.top}})`);
 
@@ -1119,8 +1127,8 @@ if (tlBuckets.length === 0) {{
     .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
     .text('No messages in selected range');
 }} else {{
-  const tlX = d3.scaleBand().domain(tlBuckets.map(d => d.time)).range([0, tlIW]).padding(0.1);
-  const tlY = d3.scaleLinear().domain([0, d3.max(tlBuckets, d => d.count) || 1]).range([tlIH, 0]).nice();
+  const tlX = scaleBand().domain(tlBuckets.map(d => d.time)).range([0, tlIW]).padding(0.1);
+  const tlY = scaleLinear().domain([0, max(tlBuckets, d => d.count) || 1]).range([tlIH, 0]).nice();
 
   const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
   tlSvg.selectAll('.bar').data(tlBuckets).join('rect')
@@ -1134,11 +1142,11 @@ if (tlBuckets.length === 0) {{
     .text(d => `${{d.time}}: ${{d.count}} msgs`);
 
   // Y axis
-  tlSvg.append('g').call(d3.axisLeft(tlY).ticks(5));
+  tlSvg.append('g').call(axisLeft(tlY).ticks(5));
 
   // X axis with rotated labels (subset)
   const tickEvery = Math.max(1, Math.floor(tlBuckets.length / 12));
-  const tlXAxis = d3.axisBottom(tlX).tickValues(tlBuckets.filter((_, i) => i % tickEvery === 0).map(d => d.time));
+  const tlXAxis = axisBottom(tlX).tickValues(tlBuckets.filter((_, i) => i % tickEvery === 0).map(d => d.time));
   tlSvg.append('g').attr('transform', `translate(0,${{tlIH}})`).call(tlXAxis)
     .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end').attr('dx', '-0.5em').attr('dy', '0.5em')
     .attr('font-size', '10px');
@@ -1162,80 +1170,83 @@ if (tlBuckets.length === 0) {{
   ※ is_online は runtime 非永続のため、"active" = そのバケット内に送信した distinct agent 数で近似
 </p>
 <div id='agent-activity-chart' style='width:100%; height:320px; margin-top:8px'></div>
-<script>
-(function() {{
-  const agBuckets = {agent_buckets_json};
-  const agRegistered = {registered};
-  const agContainer = document.getElementById('agent-activity-chart');
-  const agW = agContainer.offsetWidth, agH = agContainer.offsetHeight;
-  const agMargin = {{top: 20, right: 30, bottom: 60, left: 50}};
-  const agIW = agW - agMargin.left - agMargin.right;
-  const agIH = agH - agMargin.top - agMargin.bottom;
+<script type="module">
+import {{ select }} from 'https://cdn.jsdelivr.net/npm/d3-selection@3/+esm';
+import {{ scaleBand, scaleLinear }} from 'https://cdn.jsdelivr.net/npm/d3-scale@4/+esm';
+import {{ max }} from 'https://cdn.jsdelivr.net/npm/d3-array@3/+esm';
+import {{ axisLeft, axisBottom }} from 'https://cdn.jsdelivr.net/npm/d3-axis@3/+esm';
+import {{ format }} from 'https://cdn.jsdelivr.net/npm/d3-format@3/+esm';
+const agBuckets = {agent_buckets_json};
+const agRegistered = {registered};
+const agContainer = document.getElementById('agent-activity-chart');
+const agW = agContainer.offsetWidth, agH = agContainer.offsetHeight;
+const agMargin = {{top: 20, right: 30, bottom: 60, left: 50}};
+const agIW = agW - agMargin.left - agMargin.right;
+const agIH = agH - agMargin.top - agMargin.bottom;
 
-  const agSvg = d3.select('#agent-activity-chart').append('svg')
-    .attr('width', agW).attr('height', agH)
-    .append('g').attr('transform', `translate(${{agMargin.left}},${{agMargin.top}})`);
+const agSvg = select('#agent-activity-chart').append('svg')
+  .attr('width', agW).attr('height', agH)
+  .append('g').attr('transform', `translate(${{agMargin.left}},${{agMargin.top}})`);
 
-  if (agBuckets.length === 0) {{
-    agSvg.append('text').attr('x', agIW/2).attr('y', agIH/2).attr('text-anchor', 'middle')
+if (agBuckets.length === 0) {{
+  agSvg.append('text').attr('x', agIW/2).attr('y', agIH/2).attr('text-anchor', 'middle')
+    .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
+    .text('No agent activity in selected range');
+}} else {{
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  const agX = scaleBand().domain(agBuckets.map(d => d.time)).range([0, agIW]).padding(0.1);
+  const yMax = Math.max(agRegistered, max(agBuckets, d => d.active + d.idle) || 1);
+  const agY = scaleLinear().domain([0, yMax]).range([agIH, 0]).nice();
+
+  // stacked bars: active (bottom, accent) + idle (top, grey)
+  // active bars start from the axis baseline
+  agSvg.selectAll('.bar-active').data(agBuckets).join('rect')
+    .attr('class', 'bar-active')
+    .attr('x', d => agX(d.time))
+    .attr('y', d => agY(d.active))
+    .attr('width', agX.bandwidth())
+    .attr('height', d => agIH - agY(d.active))
+    .attr('fill', accent).attr('opacity', 0.85);
+
+  // idle bars stacked on top of active (from active to active+idle = registered)
+  agSvg.selectAll('.bar-idle').data(agBuckets).join('rect')
+    .attr('class', 'bar-idle')
+    .attr('x', d => agX(d.time))
+    .attr('y', d => agY(d.idle + d.active))
+    .attr('width', agX.bandwidth())
+    .attr('height', d => agY(d.active) - agY(d.idle + d.active))
+    .attr('fill', '#888').attr('opacity', 0.35);
+
+  // tooltips
+  agSvg.selectAll('.bar-active').append('title')
+    .text(d => `${{d.time}}\nactive: ${{d.active}}\nidle: ${{d.idle}}`);
+  agSvg.selectAll('.bar-idle').append('title')
+    .text(d => `${{d.time}}\nactive: ${{d.active}}\nidle: ${{d.idle}}`);
+
+  // dashed reference line at registered count
+  if (agRegistered > 0) {{
+    agSvg.append('line')
+      .attr('x1', 0).attr('x2', agIW)
+      .attr('y1', agY(agRegistered)).attr('y2', agY(agRegistered))
+      .attr('stroke', '#aaa').attr('stroke-dasharray', '4,3').attr('stroke-width', 1);
+    agSvg.append('text')
+      .attr('x', agIW + 4).attr('y', agY(agRegistered) + 4)
+      .attr('font-size', '10px')
       .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
-      .text('No agent activity in selected range');
-  }} else {{
-    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-    const agX = d3.scaleBand().domain(agBuckets.map(d => d.time)).range([0, agIW]).padding(0.1);
-    const yMax = Math.max(agRegistered, d3.max(agBuckets, d => d.active + d.idle) || 1);
-    const agY = d3.scaleLinear().domain([0, yMax]).range([agIH, 0]).nice();
-
-    // stacked bars: active (bottom, accent) + idle (top, grey)
-    // active bars start from the axis baseline
-    agSvg.selectAll('.bar-active').data(agBuckets).join('rect')
-      .attr('class', 'bar-active')
-      .attr('x', d => agX(d.time))
-      .attr('y', d => agY(d.active))
-      .attr('width', agX.bandwidth())
-      .attr('height', d => agIH - agY(d.active))
-      .attr('fill', accent).attr('opacity', 0.85);
-
-    // idle bars stacked on top of active (from active to active+idle = registered)
-    agSvg.selectAll('.bar-idle').data(agBuckets).join('rect')
-      .attr('class', 'bar-idle')
-      .attr('x', d => agX(d.time))
-      .attr('y', d => agY(d.idle + d.active))
-      .attr('width', agX.bandwidth())
-      .attr('height', d => agY(d.active) - agY(d.idle + d.active))
-      .attr('fill', '#888').attr('opacity', 0.35);
-
-    // tooltips
-    agSvg.selectAll('.bar-active').append('title')
-      .text(d => `${{d.time}}\nactive: ${{d.active}}\nidle: ${{d.idle}}`);
-    agSvg.selectAll('.bar-idle').append('title')
-      .text(d => `${{d.time}}\nactive: ${{d.active}}\nidle: ${{d.idle}}`);
-
-    // dashed reference line at registered count
-    if (agRegistered > 0) {{
-      agSvg.append('line')
-        .attr('x1', 0).attr('x2', agIW)
-        .attr('y1', agY(agRegistered)).attr('y2', agY(agRegistered))
-        .attr('stroke', '#aaa').attr('stroke-dasharray', '4,3').attr('stroke-width', 1);
-      agSvg.append('text')
-        .attr('x', agIW + 4).attr('y', agY(agRegistered) + 4)
-        .attr('font-size', '10px')
-        .attr('fill', getComputedStyle(document.documentElement).getPropertyValue('--text2').trim())
-        .text(`registered (${{agRegistered}})`);
-    }}
-
-    // Y axis (integer ticks)
-    agSvg.append('g').call(d3.axisLeft(agY).ticks(Math.min(yMax, 6)).tickFormat(d3.format('d')));
-
-    // X axis
-    const agTickEvery = Math.max(1, Math.floor(agBuckets.length / 12));
-    const agXAxis = d3.axisBottom(agX)
-      .tickValues(agBuckets.filter((_, i) => i % agTickEvery === 0).map(d => d.time));
-    agSvg.append('g').attr('transform', `translate(0,${{agIH}})`).call(agXAxis)
-      .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end')
-      .attr('dx', '-0.5em').attr('dy', '0.5em').attr('font-size', '10px');
+      .text(`registered (${{agRegistered}})`);
   }}
-}})();
+
+  // Y axis (integer ticks)
+  agSvg.append('g').call(axisLeft(agY).ticks(Math.min(yMax, 6)).tickFormat(format('d')));
+
+  // X axis
+  const agTickEvery = Math.max(1, Math.floor(agBuckets.length / 12));
+  const agXAxis = axisBottom(agX)
+    .tickValues(agBuckets.filter((_, i) => i % agTickEvery === 0).map(d => d.time));
+  agSvg.append('g').attr('transform', `translate(0,${{agIH}})`).call(agXAxis)
+    .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end')
+    .attr('dx', '-0.5em').attr('dy', '0.5em').attr('font-size', '10px');
+}}
 </script>
 </div>"""
 
