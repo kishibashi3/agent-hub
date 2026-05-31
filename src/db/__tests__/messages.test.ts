@@ -9,6 +9,9 @@ import {
   getHistory,
   getThread,
   markAsRead,
+  getThreadSize,
+  checkAndAlertPPD,
+  PPD_THREAD_THRESHOLD,
 } from '../messages';
 import type { SendMessageInput, GetHistoryInput } from '../../types/schema';
 
@@ -897,6 +900,137 @@ describe('messages.ts', () => {
       expect(result.rootId).toBe(solo.id);
       expect(result.threadSize).toBe(1);
       expect(result.messages[0].body).toBe('standalone');
+    });
+  });
+
+  // ============================================================
+  // PPD (Ping-Pong Detection) — issue #198
+  // ============================================================
+
+  describe('getThreadSize (PPD)', () => {
+    it('root のみのスレッドのサイズは 1', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      expect(getThreadSize(db, 'default', root.id)).toBe(1);
+    });
+
+    it('返信が 4 件あれば thread_size は 5 (root + 4 replies)', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      for (let i = 0; i < 4; i++) {
+        sendMessage(
+          db, 'default',
+          { to: 'alice', message: `reply${i}`, caused_by: root.id },
+          'bob'
+        );
+      }
+      expect(getThreadSize(db, 'default', root.id)).toBe(5);
+    });
+
+    it('返信を追加するたびに 1 ずつ増加する', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      expect(getThreadSize(db, 'default', root.id)).toBe(1);
+
+      const r1 = sendMessage(db, 'default', { to: 'alice', message: 'r1', caused_by: root.id }, 'bob');
+      expect(getThreadSize(db, 'default', root.id)).toBe(2);
+
+      sendMessage(db, 'default', { to: 'bob', message: 'r2', caused_by: r1.id }, 'alice');
+      expect(getThreadSize(db, 'default', root.id)).toBe(3);
+    });
+  });
+
+  describe('checkAndAlertPPD (PPD)', () => {
+    it('caused_by なし (root message) → null を返す', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      expect(checkAndAlertPPD(db, 'default', root.id)).toBeNull();
+    });
+
+    it('thread_size < PPD_THREAD_THRESHOLD → null を返す', () => {
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      for (let i = 0; i < PPD_THREAD_THRESHOLD - 2; i++) {
+        const msg = sendMessage(
+          db, 'default',
+          { to: 'alice', message: `r${i}`, caused_by: root.id },
+          'bob'
+        );
+        expect(checkAndAlertPPD(db, 'default', msg.id)).toBeNull();
+      }
+    });
+
+    it('@operator 未登録 → threshold 到達でも null を返す (サイレント degradation)', () => {
+      // @operator は setupTestData で登録されていない
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      let lastMsg = root;
+      for (let i = 0; i < PPD_THREAD_THRESHOLD - 1; i++) {
+        lastMsg = sendMessage(
+          db, 'default',
+          { to: i % 2 === 0 ? 'alice' : 'bob', message: `r${i}`, caused_by: root.id },
+          i % 2 === 0 ? 'bob' : 'alice'
+        );
+      }
+      // thread_size === PPD_THREAD_THRESHOLD だが @operator 未登録なのでスキップ
+      expect(checkAndAlertPPD(db, 'default', lastMsg.id)).toBeNull();
+      // @hub からのアラートが存在しないことを確認
+      const alerts = db.prepare(
+        "SELECT * FROM messages WHERE tenant_id = 'default' AND sender = '@hub'"
+      ).all();
+      expect(alerts.length).toBe(0);
+    });
+
+    it('@operator 登録済み → threshold 到達時にアラートを送り recipient を返す', () => {
+      // @operator を登録
+      db.prepare('INSERT INTO participants (tenant_id, name) VALUES (?, ?)').run('default', '@operator');
+
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      let lastMsg = root;
+      // PPD_THREAD_THRESHOLD - 1 件の返信 → thread_size = PPD_THREAD_THRESHOLD
+      for (let i = 0; i < PPD_THREAD_THRESHOLD - 1; i++) {
+        lastMsg = sendMessage(
+          db, 'default',
+          { to: i % 2 === 0 ? 'alice' : 'bob', message: `r${i}`, caused_by: root.id },
+          i % 2 === 0 ? 'bob' : 'alice'
+        );
+      }
+      const result = checkAndAlertPPD(db, 'default', lastMsg.id);
+      expect(result).toBe('@operator');
+
+      // アラートメッセージが DB に挿入されているか確認
+      const alert = db.prepare(
+        "SELECT * FROM messages WHERE tenant_id = 'default' AND sender = '@hub' AND recipient = '@operator'"
+      ).get() as { body: string } | undefined;
+      expect(alert).toBeDefined();
+      expect(alert?.body).toContain('[PPD]');
+      expect(alert?.body).toContain('root_message_id');
+    });
+
+    it('threshold 超過後の追加メッセージは再通知しない', () => {
+      // @operator を登録
+      db.prepare('INSERT INTO participants (tenant_id, name) VALUES (?, ?)').run('default', '@operator');
+
+      const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
+      const results: (string | null)[] = [];
+
+      // PPD_THREAD_THRESHOLD + 2 件の返信を送り、各メッセージで PPD チェック
+      for (let i = 0; i < PPD_THREAD_THRESHOLD + 2; i++) {
+        const msg = sendMessage(
+          db, 'default',
+          { to: i % 2 === 0 ? 'alice' : 'bob', message: `r${i}`, caused_by: root.id },
+          i % 2 === 0 ? 'bob' : 'alice'
+        );
+        results.push(checkAndAlertPPD(db, 'default', msg.id));
+      }
+
+      // threshold - 1 番目 (0-indexed) のメッセージのみアラートが返る
+      const alertIndex = PPD_THREAD_THRESHOLD - 2; // root=1 + replies up to alertIndex+1 = threshold
+      expect(results[alertIndex]).toBe('@operator');
+      // 他はすべて null
+      results.forEach((r, i) => {
+        if (i !== alertIndex) expect(r).toBeNull();
+      });
+
+      // @hub からのアラートは 1 件のみ
+      const alerts = db.prepare(
+        "SELECT * FROM messages WHERE tenant_id = 'default' AND sender = '@hub'"
+      ).all();
+      expect(alerts.length).toBe(1);
     });
   });
 });

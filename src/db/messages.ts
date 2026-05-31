@@ -412,6 +412,104 @@ export function getThread(
   };
 }
 
+// ============================================================
+// PPD (Ping-Pong Detection) — issue #198
+// caused_by root の long-running スレッド判定に改善。
+// peer 間の往復カウント（旧方式）に代わり、同一 root_message_id の
+// スレッドが閾値に達したら operator に通知する。
+// ============================================================
+
+/** PPD 閾値 (issue #198): 同一 root_message_id のメッセージ数がこれに達したら operator に通知 */
+export const PPD_THREAD_THRESHOLD = 5;
+
+/**
+ * スレッドの現在のメッセージ数を返す (issue #198 PPD 用)。
+ *
+ * root message (message_causes entry なし) + replies を合算。
+ * message_causes.COUNT(root_message_id) + 1 (root 1 件) で O(1) に計算する。
+ *
+ * @param rootMessageId - スレッドのルートメッセージ ID
+ */
+export function getThreadSize(db: Database, tenantId: string, rootMessageId: string): number {
+  const row = db
+    .prepare(
+      'SELECT COUNT(*) AS cnt FROM message_causes ' +
+      'WHERE tenant_id = ? AND root_message_id = ? AND position = 0'
+    )
+    .get(tenantId, rootMessageId) as { cnt: number } | undefined;
+  return (row?.cnt ?? 0) + 1; // replies + root 1 件
+}
+
+/**
+ * PPD チェック: 新しいメッセージが属するスレッドが閾値に達したら operator にアラートを送る (issue #198)。
+ *
+ * 閾値到達時に 1 回だけ通知する (threadSize === PPD_THREAD_THRESHOLD)。
+ * それ以降のメッセージでは重複通知しない。
+ *
+ * アラート送信者: '@hub' (participants 登録不要のシステム予約ハンドル、直接 INSERT)。
+ * アラート受信者: `PPD_ALERT_RECIPIENT` 環境変数 (default: '@operator')。
+ *   受信者が未登録の場合はサイレント skip (= サイレント degradation 原則)。
+ *
+ * @param newMessageId - 直前に挿入された新規メッセージの ID
+ * @returns 通知を送った場合は alertRecipient (e.g. '@operator')、スキップした場合は null
+ */
+export function checkAndAlertPPD(
+  db: Database,
+  tenantId: string,
+  newMessageId: string
+): string | null {
+  // caused_by なし (root message) はスレッドサイズ 1 → 閾値以下 → スキップ
+  const causeRow = db
+    .prepare(
+      'SELECT root_message_id FROM message_causes ' +
+      'WHERE tenant_id = ? AND message_id = ? AND position = 0'
+    )
+    .get(tenantId, newMessageId) as { root_message_id: string } | undefined;
+  if (!causeRow) return null;
+
+  const rootMessageId = causeRow.root_message_id;
+  const threadSize = getThreadSize(db, tenantId, rootMessageId);
+
+  // 閾値に初めて達した瞬間 (=== threshold) のみ通知。超過後は重複送信しない。
+  if (threadSize !== PPD_THREAD_THRESHOLD) return null;
+
+  const rawRecipient = process.env['PPD_ALERT_RECIPIENT'] ?? '@operator';
+  const alertRecipient = rawRecipient.startsWith('@') ? rawRecipient : `@${rawRecipient}`;
+
+  // 受信者未登録 → サイレント skip (サイレント degradation 原則)
+  const recipientExists = db
+    .prepare('SELECT 1 FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, alertRecipient);
+  if (!recipientExists) return null;
+
+  // root メッセージの送受信者を取得してアラート本文を構成
+  const rootMsg = db
+    .prepare('SELECT sender, recipient FROM messages WHERE tenant_id = ? AND id = ?')
+    .get(tenantId, rootMessageId) as { sender: string; recipient: string } | undefined;
+
+  const alertId = randomUUID();
+  const now = new Date().toISOString();
+  const shortRoot = rootMessageId.slice(0, 8);
+  const body =
+    `⚠️ [PPD] スレッド ${shortRoot}... が ${PPD_THREAD_THRESHOLD} 往復に達しました。\n` +
+    `thread_size=${threadSize}  root: ${rootMsg?.sender ?? '?'} → ${rootMsg?.recipient ?? '?'}\n` +
+    `root_message_id: ${rootMessageId}`;
+
+  // '@hub' をシステム予約ハンドルとして participants に auto-register (INSERT OR IGNORE で冪等)。
+  // FK (tenant_id, sender) → participants(tenant_id, name) を満たすために必要。
+  db.prepare(
+    'INSERT OR IGNORE INTO participants (tenant_id, name) VALUES (?, ?)'
+  ).run(tenantId, '@hub');
+
+  db.prepare(
+    'INSERT INTO messages (tenant_id, id, sender, recipient, body, sender_login, created_at) ' +
+    'VALUES (?, ?, ?, ?, ?, NULL, ?)'
+  ).run(tenantId, alertId, '@hub', alertRecipient, body, now);
+  // caused_by なし (hub 自発のシステム通知)
+
+  return alertRecipient;
+}
+
 /**
  * メッセージを既読にする
  */

@@ -46,6 +46,8 @@ export interface TenantScope {
   getHistory(input: GetHistoryInput, requester: string): Message[];
   getThread(input: GetThreadInput, requester: string): { rootId: string; threadSize: number; messages: Message[] };
   markAsRead(messageId: string, reader: string): { read: true };
+  // PPD (issue #198)
+  checkAndAlertPPD(newMessageId: string): string | null;
 
   // teams
   createTeam(input: CreateTeamInput, requester: string): Team;
@@ -95,6 +97,8 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
       M.getThread(db, tenantId, input, requester),
     markAsRead: (messageId, reader) =>
       M.markAsRead(db, tenantId, messageId, reader),
+    checkAndAlertPPD: (newMessageId) =>
+      M.checkAndAlertPPD(db, tenantId, newMessageId),
 
     // teams
     createTeam: (input, requester) => T.createTeam(db, tenantId, input, requester),
