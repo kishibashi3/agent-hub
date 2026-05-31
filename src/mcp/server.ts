@@ -34,6 +34,7 @@ import {
   type GithubUser,
 } from '../auth/github-oauth.js';
 import { getHistoryTool, handleGetHistory } from './tools/get_history.js';
+import { getThreadTool, handleGetThread } from './tools/get_thread.js';
 import { sendMessageTool, handleSendMessage } from './tools/send_message.js';
 import { getMessagesTool, handleGetMessages } from './tools/get_messages.js';
 import { markAsReadTool, handleMarkAsRead } from './tools/mark_as_read.js';
@@ -1279,6 +1280,7 @@ export function getAvailableTools(editionConfig: EditionConfig): Array<unknown> 
     sendMessageTool,
     getMessagesTool,
     getHistoryTool,
+    getThreadTool,
     markAsReadTool,
     // admin tools (only callable by @admin)
     deleteUserTool,
@@ -1362,6 +1364,8 @@ function createMcpServer(): Server {
         return await handleGetMessages(scope, args, userId);
       case 'get_history':
         return await handleGetHistory(scope, args, userId);
+      case 'get_thread':
+        return await handleGetThread(scope, args, userId);
       case 'mark_as_read':
         return await handleMarkAsRead(scope, args, userId);
       case 'delete_user':

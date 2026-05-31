@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import type { Message, SendMessageInput, GetHistoryInput } from '../types/schema.js';
+import type { Message, SendMessageInput, GetHistoryInput, GetThreadInput } from '../types/schema.js';
 import { randomUUID } from 'crypto';
 
 /**
@@ -294,6 +294,122 @@ export function getHistory(
   const messages = db.prepare(query).all(...params) as Message[];
 
   return messages;
+}
+
+/**
+ * スレッドの全メッセージを取得する (issue #181)
+ *
+ * 任意のメッセージ ID (root / 子どちらでも可) を受け取り、
+ * message_causes.root_message_id を経由してスレッド全体を返す。
+ *
+ * 権限: 自分が sender または recipient のメッセージを含むスレッドのみ取得可能。
+ * （スレッド内に1件でも自分のメッセージがあれば全件返す — agent-hub の
+ *  原則「同一スレッド参加者は文脈共有」に合致する）
+ * admin (@admin) は全スレッドを取得可能。
+ *
+ * @returns { rootId, threadSize, messages }
+ */
+export function getThread(
+  db: Database,
+  tenantId: string,
+  input: GetThreadInput,
+  requester: string
+): { rootId: string; threadSize: number; messages: Message[] } {
+  const requesterName = requester.startsWith('@') ? requester : `@${requester}`;
+
+  // requester の存在確認
+  const requesterExists = db
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, requesterName);
+  if (!requesterExists) {
+    throw new Error(`${requesterName} は登録されていません`);
+  }
+
+  // message_id から root_message_id を解決する
+  // (1) message_causes に entry があれば root_message_id を取得
+  // (2) なければ message_id 自体が root (= caused_by を持たない)
+  let rootId: string;
+
+  const causeRow = db
+    .prepare(
+      'SELECT root_message_id FROM message_causes WHERE tenant_id = ? AND message_id = ? AND position = 0'
+    )
+    .get(tenantId, input.message_id) as { root_message_id: string } | undefined;
+
+  if (causeRow) {
+    rootId = causeRow.root_message_id;
+  } else {
+    // message_id 自体が root candidate — messages テーブルに存在するか確認
+    const rootMsg = db
+      .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+      .get(tenantId, input.message_id);
+    if (!rootMsg) {
+      throw new Error(`メッセージ ${input.message_id} は存在しません`);
+    }
+    // root message 自体は message_causes に entry を持たないため、
+    // root message の子孫が存在するかを確認してスレッド有無を判断する。
+    // 子なし = スレッドでなく単独メッセージ → 単件を返す。
+    rootId = input.message_id;
+  }
+
+  // 権限チェック: requester がスレッドに参加しているか
+  // (@admin は全スレッドにアクセス可能)
+  const isAdmin = requesterName === '@admin';
+  if (!isAdmin) {
+    const participates = db
+      .prepare(
+        `SELECT 1 FROM messages
+         WHERE tenant_id = ?
+           AND (id = ? OR id IN (
+             SELECT message_id FROM message_causes
+             WHERE tenant_id = ? AND root_message_id = ? AND position = 0
+           ))
+           AND (sender = ? OR recipient = ?)
+         LIMIT 1`
+      )
+      .get(tenantId, rootId, tenantId, rootId, requesterName, requesterName);
+    if (!participates) {
+      throw new Error(`スレッド ${rootId} を閲覧する権限がありません`);
+    }
+  }
+
+  // root message を取得
+  const rootMsg = db
+    .prepare(
+      `SELECT m.*, mc.caused_by_id AS caused_by
+       FROM messages m
+       LEFT JOIN message_causes mc
+         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+       WHERE m.tenant_id = ? AND m.id = ?`
+    )
+    .get(tenantId, rootId) as Message | undefined;
+
+  if (!rootMsg) {
+    throw new Error(`スレッドのルートメッセージ ${rootId} が見つかりません`);
+  }
+
+  // スレッド内全メッセージ (root 以外) を時系列で取得
+  const replies = db
+    .prepare(
+      `SELECT m.*, mc.caused_by_id AS caused_by
+       FROM message_causes mc
+       JOIN messages m ON m.id = mc.message_id AND m.tenant_id = mc.tenant_id
+       WHERE mc.tenant_id = ? AND mc.root_message_id = ? AND mc.position = 0
+       ORDER BY m.created_at ASC
+       LIMIT ?`
+    )
+    .all(tenantId, rootId, input.limit) as Message[];
+
+  // root + replies を時系列でマージ
+  const allMessages: Message[] = [rootMsg, ...replies].sort((a, b) =>
+    a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0
+  );
+
+  return {
+    rootId,
+    threadSize: allMessages.length,
+    messages: allMessages,
+  };
 }
 
 /**
