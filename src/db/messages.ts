@@ -446,8 +446,8 @@ export function getThreadSize(db: Database, tenantId: string, rootMessageId: str
  * 閾値到達時に 1 回だけ通知する (threadSize === PPD_THREAD_THRESHOLD)。
  * それ以降のメッセージでは重複通知しない。
  *
- * アラート送信者: '@hub' (participants 登録不要のシステム予約ハンドル、直接 INSERT)。
- * アラート受信者: `PPD_ALERT_RECIPIENT` 環境変数 (default: '@operator')。
+ * アラート送信者: '@hub' (participants auto-register 後に INSERT)。
+ * アラート受信者: `AGENT_HUB_PPD_ALERT_RECIPIENT` 環境変数 (optional with documented default: '@operator')。
  *   受信者が未登録の場合はサイレント skip (= サイレント degradation 原則)。
  *
  * @param newMessageId - 直前に挿入された新規メッセージの ID
@@ -471,9 +471,13 @@ export function checkAndAlertPPD(
   const threadSize = getThreadSize(db, tenantId, rootMessageId);
 
   // 閾値に初めて達した瞬間 (=== threshold) のみ通知。超過後は重複送信しない。
+  // NOTE: SQLite は single-writer なので concurrent write による 4→6 飛び越しは
+  //       現時点では発生しない。将来 concurrent write を導入する場合は >= に変更を検討。
   if (threadSize !== PPD_THREAD_THRESHOLD) return null;
 
-  const rawRecipient = process.env['PPD_ALERT_RECIPIENT'] ?? '@operator';
+  // optional with documented default — .env.example 参照
+  // AGENT_HUB_PPD_ALERT_RECIPIENT 未設定時は '@operator' を使用する。
+  const rawRecipient = process.env['AGENT_HUB_PPD_ALERT_RECIPIENT'] ?? '@operator';
   const alertRecipient = rawRecipient.startsWith('@') ? rawRecipient : `@${rawRecipient}`;
 
   // 受信者未登録 → サイレント skip (サイレント degradation 原則)
