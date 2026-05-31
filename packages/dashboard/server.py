@@ -199,6 +199,9 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>agent-hub dashboard</title>
+<!-- Alpine.js (issue #179): テーマトグル・スライダー等 inline JS を x-data/x-on で宣言的に置き換え。
+     defer により DOM ready 後に初期化。D3.js と VDOM 非共有のため干渉なし。 -->
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 <!-- D3.js ESM CDN 個別 import (issue #180: ~80kB gz → ~25-35kB gz に削減)
      type="module" script は常に defer 扱いのため <head> / body 末尾 どちらに置いても
      DOM ready 後に実行される。全 view の <script type="module"> が各自 import する。 -->
@@ -439,26 +442,30 @@ details.thread-item > summary::marker { display:none; }
 </head>
 <body class="BODY_CLASS">
 
-<div id="header">
+<div id="header" x-data="{ dark: false, driftVal: 3, topN: NODE_DEFAULT }">
   <h1>agent-hub</h1>
   <div class="stat"><strong>TOTAL_MSGS</strong>messages</div>
   <div class="stat"><strong>TOTAL_AGENTS</strong>agents</div>
   <div class="stat"><strong>TOTAL_LINKS</strong>active links</div>
   <div id="header-right">
-    <label style="display:flex;align-items:center;gap:6px;color:var(--text2)">
+    <label style="display:flex;align-items:center;gap:6px;color:var(--text2)"
+      @input="driftVal = $event.target.value">
       drift
       <input id="drift-speed" type="range" min="0" max="10" value="3" step="0.5"
         style="width:80px;accent-color:var(--accent);cursor:pointer">
-      <span id="drift-val" style="width:2ch;text-align:right">3</span>
+      <span id="drift-val" style="width:2ch;text-align:right" x-text="driftVal">3</span>
     </label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--text2)">
       nodes
       <input id="top-n" type="range" min="1" max="NODE_COUNT" value="NODE_DEFAULT" step="1"
-        style="width:80px;accent-color:var(--accent);cursor:pointer">
-      <span id="top-n-val" style="min-width:2ch;text-align:right">NODE_DEFAULT</span>
+        style="width:80px;accent-color:var(--accent);cursor:pointer"
+        @input="topN = parseInt($event.target.value); $dispatch('topn-change', { n: topN })">
+      <span id="top-n-val" style="min-width:2ch;text-align:right" x-text="topN">NODE_DEFAULT</span>
     </label>
     tenant: TENANT_LABEL &nbsp;|&nbsp; reload で最新取得
-    <button id="theme-btn" onclick="toggleTheme()">🌙 dark</button>
+    <button id="theme-btn"
+      @click="dark = !dark; document.body.classList.toggle('dark', dark); $dispatch('theme-changed', { dark })"
+      x-text="dark ? '☀️ light' : '🌙 dark'">🌙 dark</button>
   </div>
 </div>
 
@@ -657,10 +664,9 @@ function redraw(topN) {
   });
 }
 
-// drift speed slider
+// drift speed slider — Alpine x-data が driftVal テキスト表示を担当。
+// speedSlider.value は setInterval 内で直接 DOM から読むため参照を保持。
 const speedSlider = document.getElementById('drift-speed');
-const speedVal    = document.getElementById('drift-val');
-speedSlider.addEventListener('input', () => { speedVal.textContent = speedSlider.value; });
 
 let drifting = true;
 setInterval(() => {
@@ -678,14 +684,12 @@ setInterval(() => {
 svg.on('mousedown', () => { drifting = false; })
    .on('mouseup',   () => { setTimeout(() => { drifting = true; }, 800); });
 
-// top-n slider (ノード数リアルタイム変更)
+// top-n slider — Alpine x-data が topN テキスト表示と $dispatch('topn-change') を担当。
+// 初期描画のみここで行い、以降の更新は topn-change カスタムイベント経由で受け取る。
 const topNSlider = document.getElementById('top-n');
-const topNVal    = document.getElementById('top-n-val');
-topNSlider.addEventListener('input', () => {
-  const n = parseInt(topNSlider.value, 10);
-  topNVal.textContent = n;
-  redraw(n);
-});
+
+// Alpine の $dispatch は bubbles:true CustomEvent を発火するため window で受信可能。
+window.addEventListener('topn-change', e => { redraw(e.detail.n); });
 
 // 初期描画 (slider の default value を使用)
 redraw(parseInt(topNSlider.value, 10));
@@ -723,16 +727,13 @@ redraw(parseInt(topNSlider.value, 10));
   });
 })();
 
-// theme toggle
-// window に公開: type="module" スコープ外から onclick="toggleTheme()" で呼ぶため
-function toggleTheme() {
-  const dark = document.body.classList.toggle('dark');
-  document.getElementById('theme-btn').textContent = dark ? '☀️ light' : '🌙 dark';
-  // update edge + node text colors
+// theme toggle — Alpine x-data が body.dark クラスとボタンテキストを担当。
+// D3 ノードテキスト色の更新のみここで行う (module スコープの selectAll が必要なため)。
+// Alpine の $dispatch('theme-changed') → window CustomEvent (bubbles:true) で受信。
+window.addEventListener('theme-changed', () => {
   const nc = getComputedStyle(document.documentElement).getPropertyValue('--node-text').trim();
   selectAll('.node text').attr('fill', nc);
-}
-window.toggleTheme = toggleTheme;
+});
 
 // heatmap tooltip
 document.querySelectorAll('td[data-n]').forEach(td => {
