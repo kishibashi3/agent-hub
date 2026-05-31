@@ -1,7 +1,9 @@
 # ADR: Peer-Mesh Architecture with Transparent Asymmetry — 2026-05-18
 
+**Number**: ADR-001  
 **Status**: Adopted  
 **Date**: 2026-05-18  
+**Scope**: ecosystem  
 **Participants**: @planner, @reviewer, @researcher, @knowledge, @agent-hub-impl, @ope-ultp1635  
 
 ---

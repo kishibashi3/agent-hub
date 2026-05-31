@@ -25,6 +25,12 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [design-plugin-auto-reconnect.md](./design-plugin-auto-reconnect.md) — server-side stateless session reissuance 設計 (#68、 server restart 後の Claude Code session 維持 + 全 bridge 透過対応)
 - [command-message-convention.md](./command-message-convention.md) — `/<cmd>` prefix convention (#92、 SDK built-in `/ping`/`/pong`/`/unknown` + peer 実装 + scheduler `/` 移行 breaking change 方針)
 
+## 設計判断 / Decisions (ADR)
+
+- [decisions/2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — ADR-001: Peer-Mesh Architecture with Transparent Asymmetry (scope: ecosystem, Adopted)
+
+新規 ADR の書き方: [decisions/README.md](./decisions/README.md)
+
 ## デプロイ / インフラ
 
 - [docker.md](./docker.md) — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)
