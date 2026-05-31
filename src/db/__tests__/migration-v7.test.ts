@@ -129,7 +129,7 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
 
     // migration 適用 (v6 → latest = v10)
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // last_active_at column が増えている
     const v7Columns = db
@@ -153,7 +153,7 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // last_active_at column が schema.sql 由来で存在する
     const columns = db
@@ -164,16 +164,16 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
 
   it('v10 → v10 で no-op (= idempotent)、v10 row は重複しない', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // 再適用しても version は 10 のまま
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // schema_version table は v10 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(12) as { version: number }[];
+      .all(11) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

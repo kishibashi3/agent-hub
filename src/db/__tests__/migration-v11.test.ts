@@ -171,7 +171,7 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
 
     // v11 migration 適用
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // root_message_id カラムが追加されている
     const v11Columns = db
@@ -216,7 +216,7 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
 
     // v11 migration 適用
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // reply1 の root_message_id = rootId (直接の親がルート)
     const r1 = db
@@ -237,7 +237,7 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // message_causes テーブルに root_message_id カラムが存在する
     const columns = db
@@ -251,16 +251,16 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     db.pragma('foreign_keys = ON');
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // 再適用しても version は 12 のまま
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // schema_version table は v11 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(12) as { version: number }[];
+      .all(11) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

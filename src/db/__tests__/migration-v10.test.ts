@@ -151,7 +151,7 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
 
     // v10 migration 適用
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // message_causes テーブルが作成されている
     const v10Tables = db
@@ -191,7 +191,7 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // message_causes テーブルが schema.sql 由来で存在する
     const tables = db
@@ -205,16 +205,16 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
     db.pragma('foreign_keys = ON');
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // 再適用しても version は 10 のまま
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(11);
 
     // schema_version table は v10 row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(12) as { version: number }[];
+      .all(11) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

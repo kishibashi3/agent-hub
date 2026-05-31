@@ -58,14 +58,18 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # agent-hub と同 host path を共有 (WAL mode で並行 read/write 安全)
-      # issue #202: dashboard が thread_status テーブルに書き込むため :ro を除去
-      - ./data:/app/data
+      # agent-hub と同 host path を read-only 共有 (dashboard は hub DB に書かない)
+      # dashboard 専用 RW データ (= thread status 等) は dashboard_data.db に分離 (issue #202)
+      - ./data:/app/data:ro
     environment:
       DB_PATH: /app/data/app.db
       PORT: "8080"
       # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate (= admin clarification)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
+      # TODO(issue #202 別PR): dashboard 専用 RW volume を追加し DASHBOARD_DB_PATH を設定すること。
+      #   現状 /app/data は :ro のため dashboard_thread_status への書き込みは WARN ログとなり続行。
+      #   例: DASHBOARD_DB_PATH: /app/dashboard_data/dashboard_data.db
+      #   (volume: ./dashboard_data:/app/dashboard_data を併せて追加)
     depends_on:
       agent-hub:
         condition: service_healthy

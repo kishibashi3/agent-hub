@@ -31,10 +31,11 @@ defense-in-depth) を HTML / HTML attribute 文脈に出す全箇所で `html.es
 
 ## DB access semantics
 
-- issue #202 以降: dashboard_thread_status テーブルへの WRITE あり (read-mostly、write 頻度低)
-- docker-compose の dashboard service volume mount から `:ro` を除去 (issue #202)
-- SQLite WAL mode で agent-hub server (= writer) + dashboard (= dashboard_thread_status writer) の
-  マルチプロセス並行アクセスを安全に処理。それ以外は従来と同様 SELECT only。
+- hub `app.db` は read-only mount のまま (`./data:/app/data:ro`)。dashboard は hub DB に書かない。
+- dashboard 専用 RW データ (= thread status) は `dashboard_data.db` に分離 (issue #202)。
+  DASHBOARD_DB_PATH env で指定 (default: /app/data/dashboard_data.db)。
+  docker-compose への volume 追加は別 PR (L1 GO 対象)。
+- SQLite WAL mode で agent-hub server (= hub DB writer) と並行読みを安全に処理。
 - `AGENT_HUB_TENANT` env: set → 当該 tenant filter、 unset → 全 tenant aggregate
   (= admin clarification、 multi-tenant 同名 handle は合算)
 - MVP scale: 10-20 peer 想定 (= operator 設計判断)。 100+ peer / 大規模 query は
@@ -69,6 +70,10 @@ TELEMETRY_URL = os.environ.get("AGENT_HUB_TELEMETRY_URL") or None
 # DASHBOARD_STALE_HOURS: スレッドの最終メッセージからこの時間が経過すると
 # 明示的 status が未設定の場合に 'stale' と判定する。デフォルト 24 時間。
 STALE_HOURS = int(os.environ.get("DASHBOARD_STALE_HOURS", "24"))
+# DASHBOARD_DB_PATH: dashboard 専用 RW SQLite ファイル (= thread status 管理)。
+# hub の app.db とは別ファイルにすることで hub DB への write 権限を持たない設計を維持。
+# docker-compose への volume 追加は別 PR (L1 GO 対象、issue #202)。
+DASHBOARD_DB_PATH = os.environ.get("DASHBOARD_DB_PATH") or "/app/data/dashboard_data.db"
 
 # ============================================================
 # Health view constants (= Phase 1: EQS)
@@ -1576,15 +1581,14 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
 # ============================================================
 
 def ensure_thread_status_table():
-    """起動時: dashboard_thread_status テーブルが未作成なら作成 (CREATE TABLE IF NOT EXISTS)。
+    """起動時: dashboard_data.db に dashboard_thread_status テーブルを作成 (CREATE TABLE IF NOT EXISTS)。
 
-    hub migration v12 が先行して実行されていれば no-op。
-    dashboard が hub より先に起動するレアケースや、v12 migration 前の既存 DB に対する
-    フォールバックとして機能する。
-    DB_PATH が read-only の場合（:ro mount が残っている等）は警告ログを出して続行。
+    hub の app.db とは分離した DASHBOARD_DB_PATH (= dashboard 専用 RW ファイル) に作成する。
+    ファイルが存在しない場合は SQLite が自動生成する。
+    DASHBOARD_DB_PATH が書き込み不可の場合は警告ログを出して続行。
     """
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(DASHBOARD_DB_PATH)
         con.execute("""
             CREATE TABLE IF NOT EXISTS dashboard_thread_status (
                 root_message_id TEXT NOT NULL,
@@ -1601,20 +1605,20 @@ def ensure_thread_status_table():
     except Exception as e:
         print(
             f"[dashboard] WARN: could not ensure dashboard_thread_status table "
-            f"(DB_PATH={DB_PATH}): {e}",
+            f"(DASHBOARD_DB_PATH={DASHBOARD_DB_PATH}): {e}",
             flush=True,
         )
 
 
 def load_thread_statuses():
-    """dashboard_thread_status テーブルから全ステータスを一括取得して dict 化して返す。
+    """DASHBOARD_DB_PATH の dashboard_thread_status テーブルから全ステータスを一括取得して dict 化して返す。
 
     Returns:
         dict: {(root_message_id, tenant_id): {status, updated_at, updated_by, note}}
         テーブルが存在しない場合は空 dict を返す。
     """
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(DASHBOARD_DB_PATH)
         cur = con.cursor()
         cur.execute(
             "SELECT root_message_id, tenant_id, status, updated_at, updated_by, note "
@@ -1638,9 +1642,12 @@ def effective_status(root_id, tenant_id, thread_end, status_map):
     """スレッドの実効ステータスを返す。
 
     優先順位:
-    1. dashboard_thread_status テーブルに明示的 status あり → そのまま返す
-    2. 未設定 + thread_end が STALE_HOURS 超過 → 'stale'（read-time 計算）
-    3. 未設定 + 最近活動あり → 'running'
+    1. dashboard_thread_status テーブルに明示的 status (done/stash) あり
+       かつ thread_end > updated_at の場合 → 'running' に自動戻し（read-time 計算、DB 書き込みなし）
+       ※ done/stash 後に新しいメッセージが届いたらスレッドが再活性化したとみなす
+    2. dashboard_thread_status テーブルに明示的 status あり → そのまま返す
+    3. 未設定 + thread_end が STALE_HOURS 超過 → 'stale'（read-time 計算）
+    4. 未設定 + 最近活動あり → 'running'
 
     Args:
         root_id:    スレッドのルート message ID
@@ -1654,6 +1661,12 @@ def effective_status(root_id, tenant_id, thread_end, status_map):
     key = (root_id, tenant_id or "default")
     row = status_map.get(key)
     if row:
+        # auto-revert: done/stash 後に新メッセージが来たら running に戻す（read-time、DB 書き込みなし）
+        if row["status"] in ("done", "stash") and thread_end and row.get("updated_at"):
+            mark_ts = _parse_ts(row["updated_at"])
+            last_ts = _parse_ts(thread_end)
+            if mark_ts and last_ts and last_ts > mark_ts:
+                return "running"
         return row["status"]
     # 未設定 → stale 自動判定
     if thread_end:
@@ -1677,7 +1690,7 @@ def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
         True on success, False on error.
     """
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(DASHBOARD_DB_PATH)
         con.execute(
             """
             INSERT INTO dashboard_thread_status (root_message_id, tenant_id, status, updated_at, note, updated_by)
