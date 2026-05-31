@@ -335,29 +335,40 @@ describe('messages.ts', () => {
         expect(causeRow).toBeUndefined();
       });
 
-      it('mark_as_read まで messages テーブルにメッセージが保持される', () => {
-        const msg = sendMessage(db, 'default', { to: 'bob', message: 'persistent' }, 'alice');
+      it('message_causes INSERT 失敗時は messages 行もロールバックされる (atomicity)', () => {
+        // root を事前に作成 (caused_by なし → message_causes INSERT は発生しない)
+        const root = sendMessage(db, 'default', { to: 'bob', message: 'root' }, 'alice');
 
-        // 送信直後: messages に存在する
-        const beforeRead = db
-          .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
-          .get('default', msg.id);
-        expect(beforeRead).toBeDefined();
+        // BEFORE INSERT trigger で message_causes への INSERT を強制失敗させる
+        db.exec(`
+          CREATE TRIGGER test_fail_message_causes
+          BEFORE INSERT ON message_causes
+          BEGIN
+            SELECT RAISE(ABORT, 'test: forced message_causes failure');
+          END
+        `);
 
-        // mark_as_read 後も messages テーブルから削除されない（read_receipts に記録されるだけ）
-        markAsRead(db, 'default', msg.id, 'bob');
-        const afterRead = db
-          .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
-          .get('default', msg.id);
-        expect(afterRead).toBeDefined();
+        try {
+          // caused_by あり → messages INSERT 後に message_causes INSERT を試みて失敗
+          expect(() =>
+            sendMessage(db, 'default', { to: 'alice', message: 'reply', caused_by: root.id }, 'bob')
+          ).toThrow();
 
-        // read_receipts に記録されている
-        const receipt = db
-          .prepare(
-            'SELECT reader FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?'
-          )
-          .get('default', msg.id, '@bob');
-        expect(receipt).toBeDefined();
+          // messages に reply 行が残っていない（トランザクションがロールバックされた）
+          const allMessages = db
+            .prepare('SELECT id FROM messages WHERE tenant_id = ?')
+            .all('default') as Array<{ id: string }>;
+          expect(allMessages).toHaveLength(1);
+          expect(allMessages[0].id).toBe(root.id);
+
+          // message_causes にも reply の行がない
+          const allCauses = db
+            .prepare('SELECT message_id FROM message_causes WHERE tenant_id = ?')
+            .all('default');
+          expect(allCauses).toHaveLength(0);
+        } finally {
+          db.exec('DROP TRIGGER IF EXISTS test_fail_message_causes');
+        }
       });
     });
   });
@@ -711,6 +722,31 @@ describe('messages.ts', () => {
       expect(() => markAsRead(db, 'default', msg.id, 'unknown')).toThrow(
         '@unknown は登録されていません'
       );
+    });
+
+    it('mark_as_read 後も messages テーブルにメッセージが保持される', () => {
+      const msg = sendMessage(db, 'default', { to: 'bob', message: 'persistent' }, 'alice');
+
+      // 送信直後: messages に存在する
+      const beforeRead = db
+        .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+        .get('default', msg.id);
+      expect(beforeRead).toBeDefined();
+
+      // mark_as_read 後も messages テーブルから削除されない（read_receipts に記録されるだけ）
+      markAsRead(db, 'default', msg.id, 'bob');
+      const afterRead = db
+        .prepare('SELECT id FROM messages WHERE tenant_id = ? AND id = ?')
+        .get('default', msg.id);
+      expect(afterRead).toBeDefined();
+
+      // read_receipts に記録されている
+      const receipt = db
+        .prepare(
+          'SELECT reader FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?'
+        )
+        .get('default', msg.id, '@bob');
+      expect(receipt).toBeDefined();
     });
   });
 
