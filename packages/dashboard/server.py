@@ -2045,35 +2045,42 @@ def get_causal_tree_data(limit=30, agent=None, from_date=None, to_date=None, sor
     order_clause = order_map.get(sort, "thread_size DESC")
 
     # ------------------------------------------------------------------
-    # 全スレッド数 (フィルタあり)
+    # HAVING 句で日付範囲フィルタ (集計後に適用) — count / list 共通
     # ------------------------------------------------------------------
-    count_sql = f"""
-        SELECT COUNT(DISTINCT mc.root_message_id)
-        FROM message_causes mc
-        JOIN messages m ON m.id = mc.message_id
-          {'AND m.tenant_id = mc.tenant_id' if TENANT else ''}
-        WHERE mc.position = 0
-          {tenant_cond}
-          {agent_cond}
-    """
-    count_params = tenant_params + agent_params
-    cur.execute(count_sql, count_params)
-    total_threads = (cur.fetchone() or (0,))[0]
-
-    # ------------------------------------------------------------------
-    # スレッド一覧取得
-    # ------------------------------------------------------------------
-    # HAVING 句で日付範囲フィルタ (集計後に適用)
     having_parts = []
     having_params: list = []
     if from_date:
         having_parts.append("thread_start >= ?")
         having_params.append(from_date)
     if to_date:
-        # to_date は末日の 23:59:59 まで含めるため T 区切りで prefix 比較
+        # to_date は末日の 23:59:59.999Z まで含める (ISO 準拠)
         having_parts.append("thread_start <= ?")
-        having_params.append(to_date + "T99")  # 当日末まで含む
+        having_params.append(to_date + "T23:59:59.999Z")
     having_clause = ("HAVING " + " AND ".join(having_parts)) if having_parts else ""
+
+    # ------------------------------------------------------------------
+    # 全スレッド数 (日付フィルタを含む)
+    # ------------------------------------------------------------------
+    count_sql = f"""
+        SELECT COUNT(*) FROM (
+            SELECT mc.root_message_id, MIN(m.created_at) AS thread_start
+            FROM message_causes mc
+            JOIN messages m ON m.id = mc.message_id
+              {'AND m.tenant_id = mc.tenant_id' if TENANT else ''}
+            WHERE mc.position = 0
+              {tenant_cond}
+              {agent_cond}
+            GROUP BY mc.root_message_id
+            {having_clause}
+        )
+    """
+    count_params = tenant_params + agent_params + having_params
+    cur.execute(count_sql, count_params)
+    total_threads = (cur.fetchone() or (0,))[0]
+
+    # ------------------------------------------------------------------
+    # スレッド一覧取得
+    # ------------------------------------------------------------------
 
     list_sql = f"""
         SELECT mc.root_message_id,
@@ -2177,7 +2184,11 @@ def get_thread_data(thread_id):
     """1 スレッドの全メッセージを時系列フラットで取得 (issue #181 読みページ用)。
 
     Args:
-        thread_id: root_message_id (= `?thread=<id>` の値)
+        thread_id: root_message_id (= `?thread=<id>` の値)。
+            NOTE: child メッセージ ID を渡した場合はスレッドが見つからず None を返す。
+            MCP get_thread は root/child 両対応だが、dashboard は root ID のみ受け付ける
+            非対称仕様。UI リンクは常に root_id を使うため実運用上は問題ないが、
+            URL 手入力時はサイレント失敗する点に注意 (TODO: root 解決ロジック追加)。
 
     Returns:
         dict: {

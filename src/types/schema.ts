@@ -115,7 +115,8 @@ export const getThreadInputSchema = z.object({
   /** thread の任意のメッセージ ID (root でも子でも可)。
    *  root_message_id に解決して全スレッドを取得する。 */
   message_id: z.string().min(1),
-  limit: z.number().int().positive().optional().default(100),
+  /** リプライの最大取得件数（root メッセージを除く）。最大 500。 */
+  limit: z.number().int().positive().max(500).optional().default(100),
 });
 
 export type GetThreadInput = z.infer<typeof getThreadInputSchema>;
