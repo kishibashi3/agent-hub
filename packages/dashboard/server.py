@@ -1874,6 +1874,9 @@ def compute_eqs_from_db():
     thread_map: dict[str, list] = defaultdict(list)
     # dm_reply_map[(sender, recipient)] = created_at ASC 順のメッセージリスト
     # A→B エスカレーションへの B→A 返信を caused_by 不問で検索するため (issue #207 Bug 2)
+    # NOTE: トピック境界を区別しない。A→B エスカレーション後の最初の B→A メッセージを
+    # 返答とみなすため、複数の異なる件が混在する DM ペアでは誤採用の可能性がある。
+    # MVP scale (< 20 peer) では許容範囲。将来は time window や thread context で改善予定。
     dm_reply_map: dict[tuple, list] = defaultdict(list)
     all_msgs = []
 
@@ -1937,8 +1940,8 @@ def compute_eqs_from_db():
                 (esc_msg["recipient"], esc_msg["sender"]), []
             )
             for msg in dm_replies:              # created_at ASC 順
-                if msg["id"] == esc_msg["id"]:
-                    continue
+                # dm_reply_map[(B, A)] は B→A メッセージのみを保持するため
+                # A→B であるエスカレーション自身は含まれない (dead check 削除済み)
                 msg_ts = _parse_ts(msg["created_at"])
                 if msg_ts and msg_ts > esc_ts:
                     response = msg
