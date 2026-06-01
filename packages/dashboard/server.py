@@ -80,8 +80,28 @@ except ValueError:
 DASHBOARD_DB_PATH = os.environ.get("DASHBOARD_DB_PATH") or "/app/data/dashboard_data.db"
 
 # ============================================================
-# Health view constants (= Phase 1: EQS)
+# Health view constants (= Phase 1: PPD + EQS)
 # ============================================================
+
+# PPD: Ping-Pong Detection (thread-size based, issue #198 方式)
+# issue #198 で server-side 実装に移行後、dashboard 表示も同一ロジックで復活 (issue #210)。
+# thread_size = root_message_id を共有する全メッセージ数 (TypeScript getThreadSize と同一定義)。
+# サーバー側 PPD_THREAD_THRESHOLD (TypeScript) と env var を統一するため
+# AGENT_HUB_PPD_THREAD_THRESHOLD を使用する。
+try:
+    PPD_THREAD_THRESHOLD  = int(os.environ.get("AGENT_HUB_PPD_THREAD_THRESHOLD")  or "5")
+    PPD_CRITICAL_THRESHOLD = int(os.environ.get("AGENT_HUB_PPD_CRITICAL_THRESHOLD") or "10")
+    PPD_SEVERE_THRESHOLD   = int(os.environ.get("AGENT_HUB_PPD_SEVERE_THRESHOLD")   or "20")
+except ValueError:
+    PPD_THREAD_THRESHOLD, PPD_CRITICAL_THRESHOLD, PPD_SEVERE_THRESHOLD = 5, 10, 20
+# 順序整合性チェック: WARN < CRITICAL < SEVERE でない場合は起動時に即失敗させる
+if not (PPD_THREAD_THRESHOLD < PPD_CRITICAL_THRESHOLD < PPD_SEVERE_THRESHOLD):
+    raise ValueError(
+        f"PPD threshold order violation: "
+        f"PPD_THREAD_THRESHOLD={PPD_THREAD_THRESHOLD} must be < "
+        f"PPD_CRITICAL_THRESHOLD={PPD_CRITICAL_THRESHOLD} must be < "
+        f"PPD_SEVERE_THRESHOLD={PPD_SEVERE_THRESHOLD}"
+    )
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
 # エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
@@ -1790,6 +1810,100 @@ def _parse_ts(ts_str):
     return datetime.fromisoformat(ts_str.rstrip("Z"))
 
 
+def compute_ppd_from_db():
+    """Ping-Pong Detection (PPD) を message_causes テーブルから計算 (issue #198 方式)。
+
+    旧実装 (issue #199 削除前) は peer-pair 往復カウントを使用していたが、
+    会話の文脈を無視するため issue #198 で root_message_id ベース thread-size 判定に置き換えた。
+    本関数はサーバーサイド (TypeScript checkAndAlertPPD / getThreadSize) と同一の定義で
+    dashboard health 画面に再表示する (issue #210)。
+
+    thread_size = COUNT(message_causes WHERE root_message_id = X AND position = 0) + 1
+               = スレッド内の全メッセージ数 (root 自身 + 直接/間接返信)
+
+    Returns:
+        dict: {threads, total_threaded, ping_pong_count}
+          threads: list of
+            {root_id, thread_size, root_sender, root_recipient, first_ts, last_ts, severity}
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    # ── アラート対象スレッド取得 ──────────────────────────────────────────────
+    # message_causes の root_message_id ごとに thread_size = COUNT + 1 を集計し、
+    # PPD_THREAD_THRESHOLD 以上のスレッドのみ返す (thread_size DESC)。
+    if TENANT is None:
+        cur.execute(
+            "SELECT mc.root_message_id, COUNT(*) + 1 AS thread_size, "
+            "MIN(m.created_at) AS first_ts, MAX(m.created_at) AS last_ts, "
+            "rm.sender AS root_sender, rm.recipient AS root_recipient "
+            "FROM message_causes mc "
+            "JOIN messages m  ON m.tenant_id  = mc.tenant_id AND m.id  = mc.message_id "
+            "JOIN messages rm ON rm.tenant_id = mc.tenant_id AND rm.id = mc.root_message_id "
+            "WHERE mc.position = 0 "
+            "GROUP BY mc.root_message_id "
+            "HAVING COUNT(*) + 1 >= ? "
+            "ORDER BY thread_size DESC "
+            "LIMIT 100",
+            (PPD_THREAD_THRESHOLD,),
+        )
+    else:
+        cur.execute(
+            "SELECT mc.root_message_id, COUNT(*) + 1 AS thread_size, "
+            "MIN(m.created_at) AS first_ts, MAX(m.created_at) AS last_ts, "
+            "rm.sender AS root_sender, rm.recipient AS root_recipient "
+            "FROM message_causes mc "
+            "JOIN messages m  ON m.tenant_id  = mc.tenant_id AND m.id  = mc.message_id "
+            "JOIN messages rm ON rm.tenant_id = mc.tenant_id AND rm.id = mc.root_message_id "
+            "WHERE mc.tenant_id = ? AND mc.position = 0 "
+            "GROUP BY mc.root_message_id "
+            "HAVING COUNT(*) + 1 >= ? "
+            "ORDER BY thread_size DESC "
+            "LIMIT 100",
+            (TENANT, PPD_THREAD_THRESHOLD),
+        )
+    rows = cur.fetchall()
+
+    # ── total_threaded: reply を 1 件以上持つスレッド数 (= HAVING 分母) ──────
+    if TENANT is None:
+        cur.execute(
+            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes WHERE position = 0"
+        )
+    else:
+        cur.execute(
+            "SELECT COUNT(DISTINCT root_message_id) FROM message_causes "
+            "WHERE tenant_id = ? AND position = 0",
+            (TENANT,),
+        )
+    total_row = cur.fetchone()
+    con.close()
+
+    total_threaded = total_row[0] if total_row else 0
+
+    threads = []
+    for root_id, thread_size, first_ts, last_ts, root_sender, root_recipient in rows:
+        sev = (
+            "severe"   if thread_size >= PPD_SEVERE_THRESHOLD   else
+            "critical" if thread_size >= PPD_CRITICAL_THRESHOLD else
+            "warning"
+        )
+        threads.append({
+            "root_id":        root_id,
+            "thread_size":    thread_size,
+            "root_sender":    root_sender,
+            "root_recipient": root_recipient,
+            "first_ts":       first_ts,
+            "last_ts":        last_ts,
+            "severity":       sev,
+        })
+
+    return {
+        "threads":         threads,
+        "total_threaded":  total_threaded,
+        "ping_pong_count": len(threads),
+    }
+
+
 def compute_eqs_from_db():
     """Escalation Quality Score (EQS) を messages テーブルから計算。
 
@@ -1977,8 +2091,54 @@ def compute_eqs_from_db():
 
 
 def render_health():
-    """Health view (= Phase 1 SHS: EQS) の body HTML を build。"""
+    """Health view (= Phase 1 SHS: PPD + EQS) の body HTML を build。"""
+    ppd = compute_ppd_from_db()
     eqs = compute_eqs_from_db()
+
+    # ── PPD サマリー ──────────────────────────────────────────────────────────
+    total_threaded = max(ppd["total_threaded"], 1)
+    ppd_rate = round(ppd["ping_pong_count"] / total_threaded * 100, 1)
+    ppd_color = (
+        "#39d353" if ppd_rate < 10 else
+        "#ffa657" if ppd_rate < 25 else
+        "#f78166"
+    )
+
+    threads = ppd["threads"]
+    if threads:
+        ppd_rows_html = []
+        for t in threads[:30]:
+            sev = t["severity"]
+            badge_cls = f"badge badge-{sev}"
+            short_root = esc(t["root_id"][:8]) + "…"
+            start_s = esc(t["first_ts"][:16].replace("T", " ") if t.get("first_ts") else "—")
+            end_s   = esc(t["last_ts"][:16].replace("T", " ")  if t.get("last_ts")  else "—")
+            ppd_rows_html.append(
+                f"<tr>"
+                f"<td style='font-family:monospace;font-size:11px'>{short_root}</td>"
+                f"<td>{esc(t['root_sender'])}&nbsp;→&nbsp;{esc(t['root_recipient'])}</td>"
+                f"<td style='text-align:right'>{t['thread_size']}</td>"
+                f"<td><span class='{badge_cls}'>{sev.upper()}</span></td>"
+                f"<td style='font-size:10px;color:var(--text2)'>{start_s} → {end_s}</td>"
+                f"</tr>"
+            )
+        ppd_table = (
+            "<table class='link-list' style='max-width:100%'>"
+            "<thead><tr>"
+            "<th>root</th>"
+            "<th>entry point</th>"
+            "<th style='text-align:right'>thread size</th>"
+            "<th>severity</th>"
+            "<th>window</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(ppd_rows_html) + "</tbody>"
+            "</table>"
+        )
+    else:
+        ppd_table = (
+            f"<p class='dim' style='padding:12px 0'>"
+            f"⚑ ロングスレッド検出なし (min thread_size: {PPD_THREAD_THRESHOLD})</p>"
+        )
 
     # ── EQS セクション ────────────────────────────────────────────────────────
     if eqs["total_escalations"] == 0:
@@ -2033,9 +2193,34 @@ def render_health():
     return f"""<div class='view-content'>
 <h2>🔥 Structural Health — Phase 1 MVP</h2>
 <p class='dim health-note'>
-  Phase 1 計測指標: EQS（エスカレーション品質）<br>
-  燃焼類型対応: 合議過多型(6)
+  Phase 1 計測指標: PPD（ロングスレッド検出）+ EQS（エスカレーション品質）<br>
+  燃焼類型対応: 劇場型(2)・合議過多型(6)・無限ループ型(9)
 </p>
+
+<div class='detail-stats' style='margin-bottom:24px'>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{ppd_color}'>{ppd_rate}%</span>
+    <span class='stat-label'>PPD rate<br><span style='font-size:9px'>long-thread / threaded</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{ppd["ping_pong_count"]}</span>
+    <span class='stat-label'>long threads<br><span style='font-size:9px'>≥{PPD_THREAD_THRESHOLD} msgs</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{ppd["total_threaded"]}</span>
+    <span class='stat-label'>threaded roots<br><span style='font-size:9px'>(has replies)</span></span>
+  </div>
+</div>
+
+<div class='health-section'>
+  <h3>⚑ Ping-Pong Alerts (PPD)</h3>
+  <p class='dim health-note'>
+    同一スレッド内 (root_message_id) のメッセージ数で判定 (issue #198 方式)。
+    Warning(≥{PPD_THREAD_THRESHOLD}) / Critical(≥{PPD_CRITICAL_THRESHOLD}) / Severe(≥{PPD_SEVERE_THRESHOLD}) msgs。
+    サーバー側 checkAndAlertPPD と同一閾値 (AGENT_HUB_PPD_THREAD_THRESHOLD)。
+  </p>
+  {ppd_table}
+</div>
 
 <div class='health-section'>
   <h3>⬆ Escalation Quality Score (EQS)</h3>
