@@ -54,7 +54,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 # admin spec (= 2026-05-20): env 化 3 fields
-DB_PATH = os.environ.get("DB_PATH", "/app/data/app.db")
+DB_PATH = os.environ.get("AGENT_HUB_DB_PATH", "/app/data/app.db")
 # TENANT 未指定 → 全 tenant aggregate (= admin clarification 受領)。
 # set されていれば当該 tenant のみ filter。
 TENANT = os.environ.get("AGENT_HUB_TENANT") or None
@@ -67,11 +67,11 @@ PORT = int(os.environ.get("PORT", "8080"))
 TELEMETRY_URL = os.environ.get("AGENT_HUB_TELEMETRY_URL") or None
 
 # Thread status management (issue #202)
-# DASHBOARD_STALE_HOURS: スレッドの最終メッセージからこの時間が経過すると
+# AGENT_HUB_DASHBOARD_STALE_HOURS: スレッドの最終メッセージからこの時間が経過すると
 # 明示的 status が未設定の場合に 'stale' と判定する。デフォルト 24 時間。
 # 非整数値が渡された場合は ValueError を catch してデフォルト値にフォールバックする。
 try:
-    STALE_HOURS = int(os.environ.get("DASHBOARD_STALE_HOURS") or "24")
+    STALE_HOURS = int(os.environ.get("AGENT_HUB_DASHBOARD_STALE_HOURS") or "24")
 except ValueError:
     STALE_HOURS = 24  # invalid env var (non-integer) → fallback to 24 hours
 # AGENT_HUB_DASHBOARD_DB_PATH: dashboard 専用 RW SQLite ファイル (= thread status 管理)。
@@ -3193,7 +3193,7 @@ if __name__ == "__main__":
         f"[dashboard] serving on http://0.0.0.0:{PORT} "
         f"(DB_PATH={DB_PATH}, "
         f"AGENT_HUB_TENANT={TENANT if TENANT is not None else '(unset → all tenants)'}, "
-        f"DASHBOARD_STALE_HOURS={STALE_HOURS})",
+        f"AGENT_HUB_DASHBOARD_STALE_HOURS={STALE_HOURS})",
         flush=True,
     )
     # issue #202: thread_status テーブルを確保（hub migration v12 のフォールバック）

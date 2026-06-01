@@ -110,7 +110,7 @@ def _on_signal(signum: int, _frame: Any) -> None:
 # ============================================================
 
 HUB_URL = os.environ.get("AGENT_HUB_URL", "http://localhost:3000/mcp")
-PAT = os.environ.get("GITHUB_PAT", "")
+PAT = os.environ.get("AGENT_HUB_GITHUB_PAT", "")
 HANDLE_OVERRIDE = os.environ.get("AGENT_HUB_USER", "")
 TENANT = os.environ.get("AGENT_HUB_TENANT", "")
 
@@ -143,7 +143,7 @@ def build_headers() -> dict[str, str]:
         headers["X-User-Id"] = HANDLE_OVERRIDE
     else:
         print(
-            "[ERR] Set GITHUB_PAT (pat mode) or AGENT_HUB_USER (trust mode)",
+            "[ERR] Set AGENT_HUB_GITHUB_PAT (pat mode) or AGENT_HUB_USER (trust mode)",
             file=sys.stderr,
         )
         sys.exit(1)

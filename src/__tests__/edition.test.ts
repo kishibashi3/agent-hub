@@ -55,19 +55,19 @@ describe('resolveEdition', () => {
       expect(cfg.exposesCeAdminTools).toBe(true);
     });
 
-    it('AUTH_MODE=pat を明示しても等価', () => {
+    it('AGENT_HUB_AUTH_MODE=pat を明示しても等価', () => {
       const cfg = resolveEdition({
         AGENT_HUB_EDITION: 'community',
-        AUTH_MODE: 'pat',
+        AGENT_HUB_AUTH_MODE: 'pat',
       });
       expect(cfg.authMode).toBe('pat');
     });
 
     // v2 設計 1d=(B): CE+trust は v1 で WARN-only、v2 で hard reject (= migration anchor)
-    it('AUTH_MODE=trust は v1 では WARN-only で許容 (= 起動成功)', () => {
+    it('AGENT_HUB_AUTH_MODE=trust は v1 では WARN-only で許容 (= 起動成功)', () => {
       const cfg = resolveEdition({
         AGENT_HUB_EDITION: 'community',
-        AUTH_MODE: 'trust',
+        AGENT_HUB_AUTH_MODE: 'trust',
       });
       expect(cfg.edition).toBe('community');
       expect(cfg.authMode).toBe('trust'); // legacy mode で起動許可
@@ -75,14 +75,14 @@ describe('resolveEdition', () => {
       const msg = String(warnSpy.mock.calls[0][0]);
       expect(msg).toMatch(/次バージョン \(v2\) から reject/);
       expect(msg).toMatch(/AGENT_HUB_EDITION=private/); // LAN への移行 hint
-      expect(msg).toMatch(/AUTH_MODE=pat/); // PAT 公開への移行 hint
+      expect(msg).toMatch(/AGENT_HUB_AUTH_MODE=pat/); // PAT 公開への移行 hint
       expect(msg).toMatch(/AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1/); // opt-in path 明示
     });
 
     it("AUTH_MODE=trust + AGENT_HUB_ALLOW_LEGACY_CE_TRUST='1' で audit-friendly opt-in WARN に切替え", () => {
       const cfg = resolveEdition({
         AGENT_HUB_EDITION: 'community',
-        AUTH_MODE: 'trust',
+        AGENT_HUB_AUTH_MODE: 'trust',
         AGENT_HUB_ALLOW_LEGACY_CE_TRUST: '1',
       });
       expect(cfg.authMode).toBe('trust');
@@ -115,25 +115,25 @@ describe('resolveEdition', () => {
       expect(cfg.exposesCeAdminTools).toBe(false);
     });
 
-    it('AUTH_MODE=trust を明示しても等価', () => {
+    it('AGENT_HUB_AUTH_MODE=trust を明示しても等価', () => {
       const cfg = resolveEdition({
         AGENT_HUB_EDITION: 'private',
-        AUTH_MODE: 'trust',
+        AGENT_HUB_AUTH_MODE: 'trust',
       });
       expect(cfg.authMode).toBe('trust');
     });
 
     // v2 設計: PE+pat は設計矛盾、常に hard reject (= 1d の inverse 側、v1/v2 共通)
-    it('AUTH_MODE=pat は v1/v2 共通で hard reject (= 設計矛盾)', () => {
+    it('AGENT_HUB_AUTH_MODE=pat は v1/v2 共通で hard reject (= 設計矛盾)', () => {
       expect(() =>
-        resolveEdition({ AGENT_HUB_EDITION: 'private', AUTH_MODE: 'pat' })
+        resolveEdition({ AGENT_HUB_EDITION: 'private', AGENT_HUB_AUTH_MODE: 'pat' })
       ).toThrow(EditionConfigError);
       try {
-        resolveEdition({ AGENT_HUB_EDITION: 'private', AUTH_MODE: 'pat' });
+        resolveEdition({ AGENT_HUB_EDITION: 'private', AGENT_HUB_AUTH_MODE: 'pat' });
       } catch (err) {
         const msg = String((err as Error).message);
         // 両方向 hint を検証 (Sug 3 反映)
-        expect(msg).toMatch(/AUTH_MODE 指定を削除/); // LAN 専用への path
+        expect(msg).toMatch(/AGENT_HUB_AUTH_MODE 指定を削除/); // LAN 専用への path
         expect(msg).toMatch(/AGENT_HUB_EDITION=community/); // PAT 公開への path
       }
     });
@@ -159,10 +159,10 @@ describe('resolveEdition', () => {
     });
   });
 
-  describe('AUTH_MODE の値 validation', () => {
-    it('未知の AUTH_MODE は EditionConfigError', () => {
+  describe('AGENT_HUB_AUTH_MODE の値 validation', () => {
+    it('未知の AGENT_HUB_AUTH_MODE は EditionConfigError', () => {
       expect(() =>
-        resolveEdition({ AGENT_HUB_EDITION: 'community', AUTH_MODE: 'oauth2' })
+        resolveEdition({ AGENT_HUB_EDITION: 'community', AGENT_HUB_AUTH_MODE: 'oauth2' })
       ).toThrow(EditionConfigError);
     });
   });

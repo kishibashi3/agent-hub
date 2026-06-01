@@ -13,12 +13,12 @@ const ALG = 'HS256';
 
 /** 環境変数から署名鍵を取得（無ければ起動失敗）*/
 function getSecret(): Uint8Array {
-  const s = process.env.JWT_SIGNING_SECRET;
+  const s = process.env.AGENT_HUB_JWT_SIGNING_SECRET;
   if (!s || s.length < 32) {
     throw new Error(
-      'JWT_SIGNING_SECRET is not set or too short (min 32 chars). ' +
+      'AGENT_HUB_JWT_SIGNING_SECRET is not set or too short (min 32 chars). ' +
         'Set it as an environment variable: ' +
-        'JWT_SIGNING_SECRET=$(openssl rand -hex 32)'
+        'AGENT_HUB_JWT_SIGNING_SECRET=$(openssl rand -hex 32)'
     );
   }
   return new TextEncoder().encode(s);

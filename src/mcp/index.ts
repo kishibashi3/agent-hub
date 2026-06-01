@@ -13,7 +13,7 @@ dotenv.config();
  * - DB 接続を初期化してメッセージ・参加者を永続化
  */
 async function main() {
-  const port = parseInt(process.env.MCP_PORT || '3000', 10);
+  const port = parseInt(process.env.AGENT_HUB_PORT || '3000', 10);
   const server = new MCPServer(port);
 
   try {

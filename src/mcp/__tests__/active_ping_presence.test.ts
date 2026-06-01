@@ -15,7 +15,7 @@ import {
  * 全 fail なら SSE disconnect + sessions Map から削除 → is_online 自動 false。
  *
  * scope (= 本 file):
- * - **feature flag** (= `MCP_PING_LOOP_DISABLED`) の env binary signal 検証
+ * - **feature flag** (= `AGENT_HUB_MCP_PING_LOOP_DISABLED`) の env binary signal 検証
  * - `startActivePingLoop()` / `stopActivePingLoop()` の idempotent + lifecycle 検証
  *
  * scope (= 別 test file 候補):
@@ -30,56 +30,56 @@ describe('MCP active ping presence (issue #91)', () => {
   let originalEnv: string | undefined;
 
   beforeEach(() => {
-    originalEnv = process.env.MCP_PING_LOOP_DISABLED;
-    delete process.env.MCP_PING_LOOP_DISABLED;
+    originalEnv = process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
+    delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
   });
 
   afterEach(() => {
     // 何かしら起動した interval を必ず停止 (= test isolation)
     stopActivePingLoop();
     if (originalEnv === undefined) {
-      delete process.env.MCP_PING_LOOP_DISABLED;
+      delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
     } else {
-      process.env.MCP_PING_LOOP_DISABLED = originalEnv;
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = originalEnv;
     }
   });
 
   describe('isPingLoopDisabled() feature flag', () => {
     it('env unset → false (= active ping enabled、 default behavior)', () => {
-      delete process.env.MCP_PING_LOOP_DISABLED;
+      delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
       expect(isPingLoopDisabled()).toBe(false);
     });
 
     it('env empty string → false (= unset 同等、 redline #1 整合)', () => {
-      process.env.MCP_PING_LOOP_DISABLED = '';
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '';
       expect(isPingLoopDisabled()).toBe(false);
     });
 
     it('env="1" → true (= ping loop disabled、 SSE-only presence に倒す)', () => {
-      process.env.MCP_PING_LOOP_DISABLED = '1';
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
       expect(isPingLoopDisabled()).toBe(true);
     });
 
     it('env="true" → true (= 値の中身を問わない binary signal)', () => {
-      process.env.MCP_PING_LOOP_DISABLED = 'true';
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = 'true';
       expect(isPingLoopDisabled()).toBe(true);
     });
 
     it('env="0" → true (= 「0 だから false」 ではなく binary set/unset signal、 #68 と同 pattern)', () => {
       // operator rollback misconfig 防御: 値の semantic 解釈なし
-      process.env.MCP_PING_LOOP_DISABLED = '0';
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '0';
       expect(isPingLoopDisabled()).toBe(true);
     });
 
     it('env="false" → true (= 上記同様、 binary semantic)', () => {
-      process.env.MCP_PING_LOOP_DISABLED = 'false';
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = 'false';
       expect(isPingLoopDisabled()).toBe(true);
     });
   });
 
   describe('startActivePingLoop() / stopActivePingLoop() lifecycle', () => {
     it('flag disabled → start は no-op (= interval を作らない)', () => {
-      process.env.MCP_PING_LOOP_DISABLED = '1';
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
       const stop = startActivePingLoop();
       // stop function は返るが、 実際の clearInterval は no-op (= interval 不在)
       // double-stop でも crash しないことを確認
@@ -90,7 +90,7 @@ describe('MCP active ping presence (issue #91)', () => {
     });
 
     it('start → start (= 2 回目) は no-op (= idempotent、 重複 interval を作らない)', () => {
-      delete process.env.MCP_PING_LOOP_DISABLED;
+      delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
       const stop1 = startActivePingLoop();
       const stop2 = startActivePingLoop();
       // 両方 valid stop function を返す (= test 用 contract)
@@ -103,7 +103,7 @@ describe('MCP active ping presence (issue #91)', () => {
     });
 
     it('start → stop → start → stop で再起動可能 (= 停止後 再起動 OK)', () => {
-      delete process.env.MCP_PING_LOOP_DISABLED;
+      delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
       const stop1 = startActivePingLoop();
       stop1();
       // 停止後の再 start
@@ -114,7 +114,7 @@ describe('MCP active ping presence (issue #91)', () => {
     });
 
     it('stopActivePingLoop() を 起動なしで呼んでも crash しない (= defensive)', () => {
-      delete process.env.MCP_PING_LOOP_DISABLED;
+      delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
       // 起動なしの状態で stop を直接呼んでも safely no-op
       expect(() => stopActivePingLoop()).not.toThrow();
       // 連続 stop も OK

@@ -7,15 +7,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // データベースファイルのパス
-// DB_PATH 未設定時は WARN を出して `__dirname` 相対の default path を使用する。
-// Docker 環境では `DB_PATH=/data/app.db` を明示することを推奨。
+// AGENT_HUB_DB_PATH 未設定時は WARN を出して `__dirname` 相対の default path を使用する。
+// Docker 環境では `AGENT_HUB_DB_PATH=/data/app.db` を明示することを推奨。
 // fail-fast は不要 (dev 環境では default で動くべき)。
-const DB_PATH_FROM_ENV = process.env.DB_PATH;
+const DB_PATH_FROM_ENV = process.env.AGENT_HUB_DB_PATH;
 if (!DB_PATH_FROM_ENV) {
   const defaultPath = path.join(__dirname, '../../data/app.db');
   console.warn(
-    `[DB] DB_PATH is not set, using default path: ${defaultPath}. ` +
-      'Set DB_PATH to an explicit absolute path (e.g. DB_PATH=/data/app.db) ' +
+    `[DB] AGENT_HUB_DB_PATH is not set, using default path: ${defaultPath}. ` +
+      'Set AGENT_HUB_DB_PATH to an explicit absolute path (e.g. AGENT_HUB_DB_PATH=/data/app.db) ' +
       'to avoid unexpected DB location, especially in Docker environments.'
   );
 }
