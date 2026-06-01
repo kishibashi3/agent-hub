@@ -33,8 +33,8 @@ defense-in-depth) を HTML / HTML attribute 文脈に出す全箇所で `html.es
 
 - hub `app.db` は read-only mount のまま (`./data:/app/data:ro`)。dashboard は hub DB に書かない。
 - dashboard 専用 RW データ (= thread status) は `dashboard_data.db` に分離 (issue #202)。
-  DASHBOARD_DB_PATH env で指定 (default: /app/data/dashboard_data.db)。
-  docker-compose への volume 追加は別 PR (L1 GO 対象)。
+  AGENT_HUB_DASHBOARD_DB_PATH env で指定 (default: /app/data/dashboard_data.db)。
+  docker-compose の dashboard_data named volume に /root/.agent-hub をマウントして永続化 (issue #204)。
 - SQLite WAL mode で agent-hub server (= hub DB writer) と並行読みを安全に処理。
 - `AGENT_HUB_TENANT` env: set → 当該 tenant filter、 unset → 全 tenant aggregate
   (= admin clarification、 multi-tenant 同名 handle は合算)
@@ -74,10 +74,10 @@ try:
     STALE_HOURS = int(os.environ.get("DASHBOARD_STALE_HOURS") or "24")
 except ValueError:
     STALE_HOURS = 24  # invalid env var (non-integer) → fallback to 24 hours
-# DASHBOARD_DB_PATH: dashboard 専用 RW SQLite ファイル (= thread status 管理)。
+# AGENT_HUB_DASHBOARD_DB_PATH: dashboard 専用 RW SQLite ファイル (= thread status 管理)。
 # hub の app.db とは別ファイルにすることで hub DB への write 権限を持たない設計を維持。
-# docker-compose への volume 追加は別 PR (L1 GO 対象、issue #202)。
-DASHBOARD_DB_PATH = os.environ.get("DASHBOARD_DB_PATH") or "/app/data/dashboard_data.db"
+# docker-compose の dashboard_data named volume に /root/.agent-hub をマウントして永続化 (issue #204)。
+DASHBOARD_DB_PATH = os.environ.get("AGENT_HUB_DASHBOARD_DB_PATH") or "/app/data/dashboard_data.db"
 
 # ============================================================
 # Health view constants (= Phase 1: PPD + EQS)
@@ -1611,10 +1611,10 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
 def ensure_thread_status_table() -> bool:
     """起動時 & 書き込み前: dashboard_data.db に dashboard_thread_status テーブルを作成 (CREATE TABLE IF NOT EXISTS)。
 
-    hub の app.db とは分離した DASHBOARD_DB_PATH (= dashboard 専用 RW ファイル) に作成する。
+    hub の app.db とは分離した AGENT_HUB_DASHBOARD_DB_PATH (= dashboard 専用 RW ファイル) に作成する。
     ファイルが存在しない場合は SQLite が自動生成する。
-    DASHBOARD_DB_PATH の親ディレクトリが存在しない場合は自動作成を試みる (issue #216)。
-    DASHBOARD_DB_PATH が書き込み不可の場合は警告ログを出して False を返す。
+    AGENT_HUB_DASHBOARD_DB_PATH の親ディレクトリが存在しない場合は自動作成を試みる (issue #216)。
+    AGENT_HUB_DASHBOARD_DB_PATH が書き込み不可の場合は警告ログを出して False を返す。
 
     Returns:
         True on success, False on failure.
@@ -1641,14 +1641,14 @@ def ensure_thread_status_table() -> bool:
     except Exception as e:
         print(
             f"[dashboard] WARN: could not ensure dashboard_thread_status table "
-            f"(DASHBOARD_DB_PATH={DASHBOARD_DB_PATH}): {e}",
+            f"(AGENT_HUB_DASHBOARD_DB_PATH={DASHBOARD_DB_PATH}): {e}",
             flush=True,
         )
         return False
 
 
 def load_thread_statuses():
-    """DASHBOARD_DB_PATH の dashboard_thread_status テーブルから全ステータスを一括取得して dict 化して返す。
+    """AGENT_HUB_DASHBOARD_DB_PATH の dashboard_thread_status テーブルから全ステータスを一括取得して dict 化して返す。
 
     Returns:
         dict: {(root_message_id, tenant_id): {status, updated_at, updated_by, note}}
