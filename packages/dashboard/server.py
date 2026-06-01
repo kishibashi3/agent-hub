@@ -47,7 +47,7 @@ import json
 import os
 import sqlite3
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1981,7 +1981,6 @@ def compute_ppd_detail(root_id):
     all_msgs.sort(key=lambda m: m["created_at"] or "")
 
     # 参加者ペア集計
-    from collections import Counter
     pair_counter = Counter(
         (m["sender"], m["recipient"]) for m in all_msgs
     )
@@ -1995,7 +1994,7 @@ def compute_ppd_detail(root_id):
     ts_list = [_parse_ts(m["created_at"]) for m in all_msgs if m["created_at"]]
     ts_list = [t for t in ts_list if t is not None]
     buckets  = []
-    turning_point_idx = 0
+    turning_point_idx = None
     if len(ts_list) >= 2:
         t_min = min(ts_list)
         t_max = max(ts_list)
@@ -2158,7 +2157,7 @@ def render_ppd_detail(root_id):
         tp = detail["turning_point_idx"]
         bucket_rows = ""
         for i, b in enumerate(detail["buckets"]):
-            is_peak  = (i == tp)
+            is_peak  = (tp is not None and i == tp)
             bar_color = "var(--warn-severe)" if is_peak else "var(--accent)"
             peak_mark = "⚡ 転換点" if is_peak else ""
             bar_html  = (
@@ -2416,7 +2415,7 @@ def render_health():
             short_root = esc(t["root_id"][:8]) + "…"
             start_s = esc(t["first_ts"][:16].replace("T", " ") if t.get("first_ts") else "—")
             end_s   = esc(t["last_ts"][:16].replace("T", " ")  if t.get("last_ts")  else "—")
-            diag_url = esc_attr(f"/?view=ppd_detail&thread={t['root_id']}")
+            diag_url = f"/?view=ppd_detail&thread={esc_attr(t['root_id'])}"
             ppd_rows_html.append(
                 f"<tr>"
                 f"<td style='font-family:monospace;font-size:11px'>"
