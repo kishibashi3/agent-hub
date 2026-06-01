@@ -1608,14 +1608,21 @@ def render_matrix_only(top, counts, totals, total_msgs, total_agents, total_link
 # Thread status management (issue #202)
 # ============================================================
 
-def ensure_thread_status_table():
-    """起動時: dashboard_data.db に dashboard_thread_status テーブルを作成 (CREATE TABLE IF NOT EXISTS)。
+def ensure_thread_status_table() -> bool:
+    """起動時 & 書き込み前: dashboard_data.db に dashboard_thread_status テーブルを作成 (CREATE TABLE IF NOT EXISTS)。
 
     hub の app.db とは分離した DASHBOARD_DB_PATH (= dashboard 専用 RW ファイル) に作成する。
     ファイルが存在しない場合は SQLite が自動生成する。
-    DASHBOARD_DB_PATH が書き込み不可の場合は警告ログを出して続行。
+    DASHBOARD_DB_PATH の親ディレクトリが存在しない場合は自動作成を試みる (issue #216)。
+    DASHBOARD_DB_PATH が書き込み不可の場合は警告ログを出して False を返す。
+
+    Returns:
+        True on success, False on failure.
     """
     try:
+        # 親ディレクトリが存在しない場合は自動作成 (named volume 初回マウント時等)
+        db_dir = os.path.dirname(os.path.abspath(DASHBOARD_DB_PATH))
+        os.makedirs(db_dir, exist_ok=True)
         con = sqlite3.connect(DASHBOARD_DB_PATH)
         con.execute("""
             CREATE TABLE IF NOT EXISTS dashboard_thread_status (
@@ -1630,12 +1637,14 @@ def ensure_thread_status_table():
         """)
         con.commit()
         con.close()
+        return True
     except Exception as e:
         print(
             f"[dashboard] WARN: could not ensure dashboard_thread_status table "
             f"(DASHBOARD_DB_PATH={DASHBOARD_DB_PATH}): {e}",
             flush=True,
         )
+        return False
 
 
 def load_thread_statuses():
@@ -1707,6 +1716,9 @@ def effective_status(root_id, tenant_id, thread_end, status_map):
 def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
     """dashboard_thread_status テーブルに UPSERT する。
 
+    起動時の ensure_thread_status_table() が失敗していた場合に備えて
+    書き込み前に lazy init を試みる (issue #216)。
+
     Args:
         root_id:    スレッドルート message ID
         tenant_id:  テナント ID
@@ -1718,6 +1730,10 @@ def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
         True on success, False on error.
     """
     try:
+        # 起動時の ensure が失敗していた場合に備えて lazy init を試みる
+        # DB 初期化に失敗した場合は早期リターン (reviewer Minor #1 反映)
+        if not ensure_thread_status_table():
+            return False
         con = sqlite3.connect(DASHBOARD_DB_PATH)
         con.execute(
             """
