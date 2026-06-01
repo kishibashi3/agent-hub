@@ -269,7 +269,7 @@ const notificationEventStore = isResourceNotifyFilterDisabled()
 /**
  * 認証ミドルウェア
  *
- * AUTH_MODE 環境変数で挙動を切り替える:
+ * AGENT_HUB_AUTH_MODE 環境変数で挙動を切り替える:
  * - `trust` (デフォルト): localhost 互換モード。X-User-Id ヘッダーをそのまま信頼。
  *   **インターネット公開禁止**（任意の人が任意のヘッダー値でなりすませる）
  * - `pat`: Authorization: Bearer <github-pat> を受け取り、GitHub API で検証して userId を解決
@@ -455,7 +455,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     if (typeof userId !== 'string' || userId.trim() === '') {
       return res.status(401).json({
         error: 'Unauthorized',
-        message: 'AUTH_MODE=trust: X-User-Id header is required',
+        message: 'AGENT_HUB_AUTH_MODE=trust: X-User-Id header is required',
       });
     }
     const trimmed = userId.trim();
@@ -484,7 +484,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       return res.status(401).json({
         error: 'Unauthorized',
         message:
-          'AUTH_MODE=pat: Authorization: Bearer <github-pat> required. ' +
+          'AGENT_HUB_AUTH_MODE=pat: Authorization: Bearer <github-pat> required. ' +
           'Issue a token at https://github.com/settings/tokens with scope read:user',
       });
     }
@@ -604,7 +604,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
   const _unreachable: never = mode;
   return res.status(500).json({
     error: 'ServerMisconfigured',
-    message: `unknown AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
+    message: `unknown AGENT_HUB_AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
   });
 }
 

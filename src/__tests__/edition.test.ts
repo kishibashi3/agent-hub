@@ -79,7 +79,7 @@ describe('resolveEdition', () => {
       expect(msg).toMatch(/AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1/); // opt-in path 明示
     });
 
-    it("AUTH_MODE=trust + AGENT_HUB_ALLOW_LEGACY_CE_TRUST='1' で audit-friendly opt-in WARN に切替え", () => {
+    it("AGENT_HUB_AUTH_MODE=trust + AGENT_HUB_ALLOW_LEGACY_CE_TRUST='1' で audit-friendly opt-in WARN に切替え", () => {
       const cfg = resolveEdition({
         AGENT_HUB_EDITION: 'community',
         AGENT_HUB_AUTH_MODE: 'trust',
