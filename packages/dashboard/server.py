@@ -1731,7 +1731,9 @@ def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
     """
     try:
         # 起動時の ensure が失敗していた場合に備えて lazy init を試みる
-        ensure_thread_status_table()
+        # DB 初期化に失敗した場合は早期リターン (reviewer Minor #1 反映)
+        if not ensure_thread_status_table():
+            return False
         con = sqlite3.connect(DASHBOARD_DB_PATH)
         con.execute(
             """
