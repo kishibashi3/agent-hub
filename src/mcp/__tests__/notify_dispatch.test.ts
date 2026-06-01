@@ -359,7 +359,7 @@ describe('selectNotificationTargets dedup (issue #114: per-user single-subscribe
 });
 
 /**
- * issue #114 fix の rollback path (= `MCP_NOTIFY_DEDUP_DISABLED` 環境変数)。
+ * issue #114 fix の rollback path (= `AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED` 環境変数)。
  *
  * production で異常 detect 時、 環境変数 1 つで server restart のみで旧 「全 subscribers
  * fanout」 behavior に即時 revert できる safety mechanism (= operator が L1 GO 取得時
@@ -372,42 +372,42 @@ describe('isNotifyDedupDisabled (issue #114 rollback flag)', () => {
   let originalEnv: string | undefined;
 
   beforeEach(() => {
-    originalEnv = process.env.MCP_NOTIFY_DEDUP_DISABLED;
-    delete process.env.MCP_NOTIFY_DEDUP_DISABLED;
+    originalEnv = process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED;
+    delete process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED;
   });
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      delete process.env.MCP_NOTIFY_DEDUP_DISABLED;
+      delete process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED;
     } else {
-      process.env.MCP_NOTIFY_DEDUP_DISABLED = originalEnv;
+      process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED = originalEnv;
     }
   });
 
   it('env unset → false (= dedup enabled、 default behavior)', () => {
-    delete process.env.MCP_NOTIFY_DEDUP_DISABLED;
+    delete process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED;
     expect(isNotifyDedupDisabled()).toBe(false);
   });
 
   it('env empty string → false (= unset と同等扱い)', () => {
-    process.env.MCP_NOTIFY_DEDUP_DISABLED = '';
+    process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED = '';
     expect(isNotifyDedupDisabled()).toBe(false);
   });
 
   it('env="1" → true (= dedup disabled、 旧 path に倒す)', () => {
-    process.env.MCP_NOTIFY_DEDUP_DISABLED = '1';
+    process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED = '1';
     expect(isNotifyDedupDisabled()).toBe(true);
   });
 
   it('env="0" → true (= 値の意味判定なし、 set/unset の binary signal)', () => {
     // 「0 だから false 扱い」 と誤読されないよう test で boundary 明示 (=
     // PR #105 `MCP_AUTO_REISSUE_DISABLED` test pattern と同 form)。
-    process.env.MCP_NOTIFY_DEDUP_DISABLED = '0';
+    process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED = '0';
     expect(isNotifyDedupDisabled()).toBe(true);
   });
 
   it('isNotifyDedupDisabled が true なら selectNotificationTargets で dedup skip', () => {
-    process.env.MCP_NOTIFY_DEDUP_DISABLED = '1';
+    process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED = '1';
 
     const sessions: Array<[string, NotifiableSession]> = [
       ['sid-1', { tenantDomain: 'kaz', userId: '@bridge', subscribedUris: new Set(['inbox://@bridge']), createdAt: 1000 }],
@@ -429,7 +429,7 @@ describe('isNotifyDedupDisabled (issue #114 rollback flag)', () => {
 });
 
 /**
- * issue #117 fix の rollback path (= `MCP_RESOURCE_NOTIFY_FILTER_DISABLED` 環境変数)。
+ * issue #117 fix の rollback path (= `AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED` 環境変数)。
  *
  * binary semantic (= PR #105 `MCP_AUTO_REISSUE_DISABLED` と同 convention): set されたら
  * disabled (= 旧動作: 全 event replay)、unset / empty なら enabled (= 値の文字列
@@ -442,37 +442,37 @@ describe('isResourceNotifyFilterDisabled (issue #117 rollback flag)', () => {
   let originalEnv: string | undefined;
 
   beforeEach(() => {
-    originalEnv = process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
-    delete process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+    originalEnv = process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+    delete process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
   });
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      delete process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+      delete process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
     } else {
-      process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = originalEnv;
+      process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED = originalEnv;
     }
   });
 
   it('env unset → false (= replay filter enabled、 default behavior)', () => {
-    delete process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
+    delete process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED;
     expect(isResourceNotifyFilterDisabled()).toBe(false);
   });
 
   it('env empty string → false (= unset と同等扱い)', () => {
-    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '';
+    process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '';
     expect(isResourceNotifyFilterDisabled()).toBe(false);
   });
 
   it('env="1" → true (= replay filter disabled、 旧 path に倒す)', () => {
-    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '1';
+    process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '1';
     expect(isResourceNotifyFilterDisabled()).toBe(true);
   });
 
   it('env="0" → true (= 値の意味判定なし、 set/unset の binary signal)', () => {
     // 「0 だから false 扱い」 と誤読されないよう test で boundary 明示 (=
     // PR #105 `MCP_AUTO_REISSUE_DISABLED` test pattern と同 form)。
-    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '0';
+    process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED = '0';
     expect(isResourceNotifyFilterDisabled()).toBe(true);
   });
 });

@@ -15,8 +15,8 @@ primary_region = "nrt"
   # Dockerfile を使う
 
 [env]
-  MCP_PORT = "3000"
-  DB_PATH = "/app/data/app.db"
+  AGENT_HUB_PORT = "3000"
+  AGENT_HUB_DB_PATH = "/app/data/app.db"
 
 [http_service]
   internal_port = 3000

@@ -5,7 +5,7 @@
 # port mapping を declarative に管理** できるため operator 推奨。
 #
 # usage:
-#   1. `.env` ファイルに認証情報 (GITHUB_PAT 等) を記載
+#   1. `.env` ファイルに認証情報 (AGENT_HUB_GITHUB_PAT 等) を記載
 #   2. `docker-compose up -d`
 #   3. `docker-compose logs -f` で server + scheduler の log を tail
 #   4. `docker-compose down` で停止
@@ -26,7 +26,7 @@ services:
     environment:
       # ---- scheduler 用認証情報 (= 必須、 .env で渡す) ----
       # GitHub PAT (read:user scope) または AGENT_HUB_USER (= trust mode、 dev only)
-      GITHUB_PAT: ${GITHUB_PAT:-}
+      AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
       AGENT_HUB_USER: ${AGENT_HUB_USER:-}
       # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
@@ -34,7 +34,7 @@ services:
       # 'community' (default) / 'private' / 'enterprise'
       AGENT_HUB_EDITION: ${AGENT_HUB_EDITION:-}
       # 'pat' (= 推奨、 production) / 'trust' (= localhost only、 dev)
-      AUTH_MODE: ${AUTH_MODE:-}
+      AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
       # GitHub Org 制限 (= optional、 pat mode で組織 membership 検証)
       AGENT_HUB_GITHUB_ORG: ${AGENT_HUB_GITHUB_ORG:-}
     healthcheck:
@@ -63,7 +63,7 @@ services:
       # dashboard 専用 RW named volume (= thread status / dashboard_data.db、issue #204)
       - dashboard_data:/root/.agent-hub
     environment:
-      DB_PATH: /app/data/app.db
+      AGENT_HUB_DB_PATH: /app/data/app.db
       PORT: "8080"
       # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate (= admin clarification)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}

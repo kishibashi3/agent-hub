@@ -3,7 +3,7 @@
  *
  * agent-hub#10 (3-edition strategy) / agent-hub#18 (Private Edition) を実装。
  * v2 設計 (PR #23 にて 1d=(B), Minor 1-4, Sug 1+3 確定) を反映:
- *   - CE+`AUTH_MODE=trust` は v1 では WARN-only で許容、v2 で hard reject に格上げ
+ *   - CE+`AGENT_HUB_AUTH_MODE=trust` は v1 では WARN-only で許容、v2 で hard reject に格上げ
  *   - 延命 opt-in env `AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1` で v2 まで猶予
  *   - PE+`AGENT_HUB_DISABLE_DEFAULT_TENANT` は startup で WARN log (silent ignore 廃止)
  *   - error message は両方向 migration hint で対称化
@@ -64,11 +64,11 @@ export class EditionConfigError extends Error {
  * 解決規則 (v2 設計反映):
  *   1. `AGENT_HUB_EDITION` を読む。未指定 or 空文字 → `EditionConfigError` (= 起動失敗)
  *   2. value validation: 'community' | 'private' 以外 → `EditionConfigError`
- *   3. `AUTH_MODE` 値 validation: 'trust' | 'pat' 以外 → `EditionConfigError`
- *   4. edition + AUTH_MODE 整合性 check:
- *      - **CE + `AUTH_MODE=trust`** → **v1 では WARN-only で許容** (= 起動成功、v2 で hard reject 予告)、
+ *   3. `AGENT_HUB_AUTH_MODE` 値 validation: 'trust' | 'pat' 以外 → `EditionConfigError`
+ *   4. edition + AGENT_HUB_AUTH_MODE 整合性 check:
+ *      - **CE + `AGENT_HUB_AUTH_MODE=trust`** → **v1 では WARN-only で許容** (= 起動成功、v2 で hard reject 予告)、
  *        `AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1` 明示時は audit-friendly な opt-in WARN に切替え
- *      - **PE + `AUTH_MODE=pat`** → 設計矛盾、常に `EditionConfigError` で hard reject
+ *      - **PE + `AGENT_HUB_AUTH_MODE=pat`** → 設計矛盾、常に `EditionConfigError` で hard reject
  *      - 未指定なら edition から auto-derive
  *   5. CE 固有 flag (`AGENT_HUB_DISABLE_DEFAULT_TENANT`) は PE で設定されていたら
  *      WARN log を出力 (silent ignore 廃止、設定意図の自覚を促す)
@@ -94,18 +94,18 @@ export function resolveEdition(
   }
   const edition: Edition = editionRaw;
 
-  const authModeRawRaw = env.AUTH_MODE?.trim().toLowerCase();
+  const authModeRawRaw = env.AGENT_HUB_AUTH_MODE?.trim().toLowerCase();
   const authModeExplicit: AuthMode | null =
     authModeRawRaw === 'trust' || authModeRawRaw === 'pat' ? authModeRawRaw : null;
   if (authModeRawRaw && authModeExplicit === null) {
     throw new EditionConfigError(
-      `AUTH_MODE='${authModeRawRaw}' は未知の値です。'trust' か 'pat' を指定してください。`
+      `AGENT_HUB_AUTH_MODE='${authModeRawRaw}' は未知の値です。'trust' か 'pat' を指定してください。`
     );
   }
 
   let authMode: AuthMode;
   if (edition === 'community') {
-    // CE は PAT 必須が default、AUTH_MODE=trust 明示 (= v1 では legacy 経路) を WARN-only で許容。
+    // CE は PAT 必須が default、AGENT_HUB_AUTH_MODE=trust 明示 (= v1 では legacy 経路) を WARN-only で許容。
     // v2 で hard reject される予定。AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1 で v2 まで延命可能。
     if (authModeExplicit === 'trust') {
       const optIn = env.AGENT_HUB_ALLOW_LEGACY_CE_TRUST === '1';
@@ -113,13 +113,13 @@ export function resolveEdition(
         console.warn(
           '[edition] legacy CE+trust mode running under explicit opt-in ' +
             "(AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1)。v2 でも WARN-only で延命されますが、" +
-            'PAT 認証への移行を推奨します (= AUTH_MODE=pat または AGENT_HUB_EDITION=private)。'
+            'PAT 認証への移行を推奨します (= AGENT_HUB_AUTH_MODE=pat または AGENT_HUB_EDITION=private)。'
         );
       } else {
         console.warn(
-          '[edition] AGENT_HUB_EDITION=community で AUTH_MODE=trust は次バージョン (v2) から ' +
+          '[edition] AGENT_HUB_EDITION=community で AGENT_HUB_AUTH_MODE=trust は次バージョン (v2) から ' +
             "reject されます。LAN 専用運用なら AGENT_HUB_EDITION=private を、" +
-            'PAT 認証で公開運用なら AUTH_MODE=pat を指定してください。' +
+            'PAT 認証で公開運用なら AGENT_HUB_AUTH_MODE=pat を指定してください。' +
             '現バージョン中の延命が必要な場合は AGENT_HUB_ALLOW_LEGACY_CE_TRUST=1 を設定してください (opt-in)。'
         );
       }
@@ -128,11 +128,11 @@ export function resolveEdition(
       authMode = 'pat';
     }
   } else {
-    // PE は trust 固定。AUTH_MODE=pat を明示されたら設計矛盾として hard reject。
+    // PE は trust 固定。AGENT_HUB_AUTH_MODE=pat を明示されたら設計矛盾として hard reject。
     if (authModeExplicit === 'pat') {
       throw new EditionConfigError(
-        'AGENT_HUB_EDITION=private で AUTH_MODE=pat は使用できません。' +
-          ' LAN 専用運用なら AUTH_MODE 指定を削除 (PE は trust 固定)、' +
+        'AGENT_HUB_EDITION=private で AGENT_HUB_AUTH_MODE=pat は使用できません。' +
+          ' LAN 専用運用なら AGENT_HUB_AUTH_MODE 指定を削除 (PE は trust 固定)、' +
           ' PAT 認証で公開運用なら AGENT_HUB_EDITION=community を指定してください。'
       );
     }

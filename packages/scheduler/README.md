@@ -69,11 +69,11 @@ pip install -r requirements.txt
 ```bash
 # PAT mode (= 推奨、 production)
 export AGENT_HUB_URL=http://localhost:3000/mcp
-export GITHUB_PAT=ghp_xxx...
+export AGENT_HUB_GITHUB_PAT=ghp_xxx...
 export AGENT_HUB_TENANT=my-tenant       # optional
 python scheduler.py
 
-# Trust mode (= localhost 開発用、 server-side AUTH_MODE=trust が前提)
+# Trust mode (= localhost 開発用、 server-side AGENT_HUB_AUTH_MODE=trust が前提)
 export AGENT_HUB_URL=http://localhost:3000/mcp
 export AGENT_HUB_USER=alice
 python scheduler.py
@@ -84,14 +84,14 @@ python scheduler.py
 | 変数 | default | 用途 |
 |---|---|---|
 | `AGENT_HUB_URL` | `http://localhost:3000/mcp` | MCP endpoint URL |
-| `GITHUB_PAT` | (unset) | GitHub Personal Access Token、 pat mode 用 (= 推奨) |
+| `AGENT_HUB_GITHUB_PAT` | (unset) | GitHub Personal Access Token、 pat mode 用 (= 推奨) |
 | `AGENT_HUB_USER` | (unset) | handle 名 (trust mode で識別、 pat mode で handle override) |
 | `AGENT_HUB_TENANT` | (unset → `default`) | tenant 識別子 (CE 接続時) |
 | `SCHEDULER_CONFIG` | `./schedules.json` | 設定 file path override |
 
 認証 mode:
-- **PAT mode (推奨)**: `GITHUB_PAT` を設定 → GitHub login を handle として認証。 `AGENT_HUB_USER` も併設で multi-persona override
-- **Trust mode (= localhost 開発用)**: `AGENT_HUB_USER` のみ設定、 server-side `AUTH_MODE=trust` 必要
+- **PAT mode (推奨)**: `AGENT_HUB_GITHUB_PAT` を設定 → GitHub login を handle として認証。 `AGENT_HUB_USER` も併設で multi-persona override
+- **Trust mode (= localhost 開発用)**: `AGENT_HUB_USER` のみ設定、 server-side `AGENT_HUB_AUTH_MODE=trust` 必要
 
 ## 動作
 
@@ -262,7 +262,7 @@ nano /home/pi/agent-hub/packages/scheduler/schedules.json
 ```bash
 # /home/pi/agent-hub/packages/scheduler/.env
 AGENT_HUB_URL=http://localhost:3000/mcp
-GITHUB_PAT=ghp_xxx...
+AGENT_HUB_GITHUB_PAT=ghp_xxx...
 AGENT_HUB_TENANT=my-tenant
 AGENT_HUB_USER=scheduler   # optional, multi-persona override
 ```
@@ -481,7 +481,7 @@ stderr:
 ### `[ERR] MCP session init failed`
 
 - agent-hub server が起動しているか確認 (`AGENT_HUB_URL`)
-- `GITHUB_PAT` or `AGENT_HUB_USER` の設定確認
+- `AGENT_HUB_GITHUB_PAT` or `AGENT_HUB_USER` の設定確認
 - `AGENT_HUB_TENANT` の設定確認 (= 「見えない幽霊」 bug 防止、 [agent-hub#28](https://github.com/kishibashi3/agent-hub/issues/28) 参照)
 
 ### DM が届かない

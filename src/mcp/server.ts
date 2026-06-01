@@ -233,7 +233,7 @@ export function _setEditionConfigForTest(config: EditionConfig | null): void {
 
 /**
  * `notifications/resources/updated` replay フィルタ (= issue #117 fix) の
- * rollback path (= `MCP_RESOURCE_NOTIFY_FILTER_DISABLED` 環境変数)。
+ * rollback path (= `AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED` 環境変数)。
  *
  * **binary semantic** (= PR #105 / #116 と同 convention):
  * - unset / empty (default, new behavior): resource update 通知は replay しない
@@ -246,8 +246,8 @@ export function _setEditionConfigForTest(config: EditionConfig | null): void {
  * SDK safety-net poll (30s) が取りこぼしをカバーする。
  */
 export function isResourceNotifyFilterDisabled(): boolean {
-  return process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED !== undefined &&
-    process.env.MCP_RESOURCE_NOTIFY_FILTER_DISABLED !== '';
+  return process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED !== undefined &&
+    process.env.AGENT_HUB_MCP_RESOURCE_NOTIFY_FILTER_DISABLED !== '';
 }
 
 /**
@@ -269,7 +269,7 @@ const notificationEventStore = isResourceNotifyFilterDisabled()
 /**
  * 認証ミドルウェア
  *
- * AUTH_MODE 環境変数で挙動を切り替える:
+ * AGENT_HUB_AUTH_MODE 環境変数で挙動を切り替える:
  * - `trust` (デフォルト): localhost 互換モード。X-User-Id ヘッダーをそのまま信頼。
  *   **インターネット公開禁止**（任意の人が任意のヘッダー値でなりすませる）
  * - `pat`: Authorization: Bearer <github-pat> を受け取り、GitHub API で検証して userId を解決
@@ -455,7 +455,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     if (typeof userId !== 'string' || userId.trim() === '') {
       return res.status(401).json({
         error: 'Unauthorized',
-        message: 'AUTH_MODE=trust: X-User-Id header is required',
+        message: 'AGENT_HUB_AUTH_MODE=trust: X-User-Id header is required',
       });
     }
     const trimmed = userId.trim();
@@ -484,7 +484,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       return res.status(401).json({
         error: 'Unauthorized',
         message:
-          'AUTH_MODE=pat: Authorization: Bearer <github-pat> required. ' +
+          'AGENT_HUB_AUTH_MODE=pat: Authorization: Bearer <github-pat> required. ' +
           'Issue a token at https://github.com/settings/tokens with scope read:user',
       });
     }
@@ -604,7 +604,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
   const _unreachable: never = mode;
   return res.status(500).json({
     error: 'ServerMisconfigured',
-    message: `unknown AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
+    message: `unknown AGENT_HUB_AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
   });
 }
 
@@ -667,16 +667,16 @@ const PING_MAX_RETRIES = 2;
 const ORPHAN_IDLE_TTL_MS = 5 * 60_000;
 
 /**
- * Feature flag: `MCP_PING_LOOP_DISABLED` env が set されていれば active ping loop 無効化
+ * Feature flag: `AGENT_HUB_MCP_PING_LOOP_DISABLED` env が set されていれば active ping loop 無効化
  * (= rollback safety + 既存 SSE-only presence に倒す)。
  *
  * 「unset = 新 behavior (= active ping)」 が default、 「set = 旧 behavior (= subscribe-only)」 が opt-out。
- * 値の中身は問わない (= binary signal、 redline #1 整合)。 `MCP_AUTO_REISSUE_DISABLED` (= #68) と
+ * 値の中身は問わない (= binary signal、 redline #1 整合)。 `AGENT_HUB_MCP_AUTO_REISSUE_DISABLED` (= #68) と
  * 同 pattern。
  */
 export function isPingLoopDisabled(): boolean {
-  return process.env.MCP_PING_LOOP_DISABLED !== undefined &&
-    process.env.MCP_PING_LOOP_DISABLED !== '';
+  return process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== undefined &&
+    process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== '';
 }
 
 /**
@@ -820,14 +820,14 @@ export async function runOneActivePingCycle(): Promise<{
  * Active ping loop を起動 (= MCPServer.start() で呼ぶ)。
  *
  * 既に起動中なら no-op。 stop function を返すので、 test 等で停止できる。
- * feature flag `MCP_PING_LOOP_DISABLED` が set されていれば起動 skip。
+ * feature flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` が set されていれば起動 skip。
  */
 export function startActivePingLoop(): () => void {
   if (activePingLoopInterval) {
     return () => stopActivePingLoop();
   }
   if (isPingLoopDisabled()) {
-    console.log('[MCP] active ping loop disabled (= MCP_PING_LOOP_DISABLED env set)');
+    console.log('[MCP] active ping loop disabled (= AGENT_HUB_MCP_PING_LOOP_DISABLED env set)');
     return () => {};
   }
   console.log(
@@ -861,20 +861,20 @@ export function stopActivePingLoop(): void {
 // ============================================================
 
 /**
- * Feature flag: `MCP_AUTO_REISSUE_DISABLED` env が set されていれば auto-reissue 無効化、
+ * Feature flag: `AGENT_HUB_MCP_AUTO_REISSUE_DISABLED` env が set されていれば auto-reissue 無効化、
  * 旧 path (= 400 Bad Request) に倒す (= rollback safety、 PR #100 reviewer Suggestion (a))。
  *
  * 「unset = 新 behavior (= reissue)」 が default、 「set = 旧 behavior (= 400)」 が opt-out。
  * 値の中身は問わない (= binary signal、 redline #1 整合)。
  *
  * production rollback path:
- *   `docker run -e MCP_AUTO_REISSUE_DISABLED=1 ...` で即時 disable。
+ *   `docker run -e AGENT_HUB_MCP_AUTO_REISSUE_DISABLED=1 ...` で即時 disable。
  *
  * future PR 候補 (= prometheus counter / reissue 頻度監視) は本 PR scope 外、 comment defer。
  */
 export function isAutoReissueDisabled(): boolean {
-  return process.env.MCP_AUTO_REISSUE_DISABLED !== undefined &&
-    process.env.MCP_AUTO_REISSUE_DISABLED !== '';
+  return process.env.AGENT_HUB_MCP_AUTO_REISSUE_DISABLED !== undefined &&
+    process.env.AGENT_HUB_MCP_AUTO_REISSUE_DISABLED !== '';
 }
 
 /**
@@ -1050,11 +1050,11 @@ export interface NotifiableSession {
 }
 
 /**
- * issue #114 fix の rollback path (= `MCP_NOTIFY_DEDUP_DISABLED` 環境変数)。
+ * issue #114 fix の rollback path (= `AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED` 環境変数)。
  *
  * **binary semantic**: set されていれば true (= 旧 「全 subscribers fanout」 path に倒す)、
  * unset / empty なら false (= 新 dedup 動作、 default)。 値の文字列 (`0`/`false` 等) は
- * 解釈しない (= PR #105 `MCP_AUTO_REISSUE_DISABLED` と同 convention、 「set されたら
+ * 解釈しない (= PR #105 `AGENT_HUB_MCP_AUTO_REISSUE_DISABLED` と同 convention、 「set されたら
  * disable」 が rule)。
  *
  * deploy 後 production で異常 detect した operator が **環境変数 1 つで旧 behavior に
@@ -1062,8 +1062,8 @@ export interface NotifiableSession {
  * (= 全 subscribers に push) に倒れる、 dedup invariant は disabled。
  */
 export function isNotifyDedupDisabled(): boolean {
-  return process.env.MCP_NOTIFY_DEDUP_DISABLED !== undefined &&
-    process.env.MCP_NOTIFY_DEDUP_DISABLED !== '';
+  return process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED !== undefined &&
+    process.env.AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED !== '';
 }
 
 /**
@@ -1221,7 +1221,7 @@ export function isParticipantOnline<S extends PresenceSession>(
  * **issue #114 fix**: 同 (tenant, userId, uri) で複数 sessions が subscribe している
  * 場合、 **最 recent 1 session のみ** に push する dedup を適用 (= production で観測
  * された 31x fanout を構造的に解消)。 dedup criteria は participants.last_active_at
- * DESC + session.createdAt DESC tie-breaker。 `MCP_NOTIFY_DEDUP_DISABLED` 環境変数で
+ * DESC + session.createdAt DESC tie-breaker。 `AGENT_HUB_MCP_NOTIFY_DEDUP_DISABLED` 環境変数で
  * 旧 「全 subscribers fanout」 path に rollback 可能。
  */
 export function notifyResourceUpdated(
@@ -1726,7 +1726,7 @@ export class MCPServer {
     await this.initDatabase();
 
     // Active ping loop 起動 (= issue #91、 server restart 後の即 cycle 開始)。
-    // feature flag MCP_PING_LOOP_DISABLED が set されていれば skip (= rollback path)。
+    // feature flag AGENT_HUB_MCP_PING_LOOP_DISABLED が set されていれば skip (= rollback path)。
     startActivePingLoop();
 
     return new Promise((resolve) => {
