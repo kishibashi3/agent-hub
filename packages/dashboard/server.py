@@ -1920,6 +1920,293 @@ def compute_ppd_from_db():
     }
 
 
+def compute_ppd_detail(root_id):
+    """PPD 詰まり診断ビュー用データを計算 (issue #218)。
+
+    指定 root_message_id のスレッドについて以下を返す:
+    - root: ルートメッセージ情報 (sender, recipient, body, created_at)
+    - messages: スレッド内全メッセージ (created_at 昇順)
+    - pairs: 参加者ペア別集計 {(sender, recipient): count}
+    - buckets: 往復密度時系列 (等間隔バケット)
+    - turning_point_idx: 最大密度バケットのインデックス
+
+    Args:
+        root_id: スレッドのルート message ID
+
+    Returns:
+        dict または None (root_id が存在しない場合)
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    # ルートメッセージを取得
+    tenant_filter = "AND m.tenant_id = ?" if TENANT else ""
+    tenant_args   = (TENANT,) if TENANT else ()
+
+    cur.execute(
+        f"SELECT id, sender, recipient, body, created_at, tenant_id "
+        f"FROM messages m "
+        f"WHERE m.id = ? {tenant_filter} "
+        f"LIMIT 1",
+        (root_id,) + tenant_args,
+    )
+    root_row = cur.fetchone()
+    if not root_row:
+        con.close()
+        return None
+    root_tid = root_row[5]  # tenant_id
+
+    # スレッド内全メッセージ (root + 返信) を取得
+    cur.execute(
+        "SELECT m.id, m.sender, m.recipient, m.body, m.created_at "
+        "FROM message_causes mc "
+        "JOIN messages m ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id "
+        "WHERE mc.root_message_id = ? AND mc.tenant_id = ? AND mc.position = 0 "
+        "ORDER BY m.created_at ASC",
+        (root_id, root_tid),
+    )
+    reply_rows = cur.fetchall()
+    con.close()
+
+    # root メッセージ自身もリストに含める
+    all_msgs = [
+        {"id": root_row[0], "sender": root_row[1], "recipient": root_row[2],
+         "body": root_row[3], "created_at": root_row[4]}
+    ] + [
+        {"id": r[0], "sender": r[1], "recipient": r[2],
+         "body": r[3], "created_at": r[4]}
+        for r in reply_rows
+    ]
+    # created_at で再ソート (root が最古とは限らない場合に備えて)
+    all_msgs.sort(key=lambda m: m["created_at"] or "")
+
+    # 参加者ペア集計
+    from collections import Counter
+    pair_counter = Counter(
+        (m["sender"], m["recipient"]) for m in all_msgs
+    )
+    pairs = [
+        {"sender": s, "recipient": r, "count": c}
+        for (s, r), c in pair_counter.most_common()
+    ]
+
+    # 往復密度時系列: スレッド全体を N_BUCKETS 等分バケットに分割
+    N_BUCKETS = 10
+    ts_list = [_parse_ts(m["created_at"]) for m in all_msgs if m["created_at"]]
+    ts_list = [t for t in ts_list if t is not None]
+    buckets  = []
+    turning_point_idx = 0
+    if len(ts_list) >= 2:
+        t_min = min(ts_list)
+        t_max = max(ts_list)
+        span  = (t_max - t_min).total_seconds()
+        if span > 0:
+            bucket_width = span / N_BUCKETS
+            counts = [0] * N_BUCKETS
+            for t in ts_list:
+                idx = int((t - t_min).total_seconds() / bucket_width)
+                idx = min(idx, N_BUCKETS - 1)
+                counts[idx] += 1
+            max_count = max(counts) if counts else 1
+            for i, c in enumerate(counts):
+                start_dt = t_min + timedelta(seconds=i * bucket_width)
+                buckets.append({
+                    "label":   start_dt.strftime("%H:%M"),
+                    "count":   c,
+                    "pct":     int(c / max_count * 100) if max_count else 0,
+                })
+            turning_point_idx = counts.index(max(counts))
+        else:
+            # 全メッセージが同一秒: 単一バケット
+            buckets = [{"label": ts_list[0].strftime("%H:%M"), "count": len(ts_list), "pct": 100}]
+
+    # スレッドの所要時間
+    duration_s = None
+    if len(ts_list) >= 2:
+        duration_s = int((max(ts_list) - min(ts_list)).total_seconds())
+
+    return {
+        "root_id":          root_id,
+        "root_sender":      root_row[1],
+        "root_recipient":   root_row[2],
+        "root_body":        root_row[3],
+        "root_ts":          root_row[4],
+        "tenant_id":        root_tid,
+        "messages":         all_msgs,
+        "thread_size":      len(all_msgs),
+        "pairs":            pairs,
+        "buckets":          buckets,
+        "turning_point_idx": turning_point_idx,
+        "duration_s":       duration_s,
+    }
+
+
+def render_ppd_detail(root_id):
+    """PPD 詰まり診断ビュー HTML を生成 (issue #218)。
+
+    表示内容:
+    - スレッドメタ情報 + thread status (done/stash/running ボタン)
+    - 参加者ペア集計テーブル
+    - 往復密度時系列 (バーチャート)
+    - 転換点ハイライト
+    - スレッドメッセージ一覧
+    """
+    detail = compute_ppd_detail(root_id)
+    if detail is None:
+        return (
+            "<div class='stat-box' style='border-color:var(--warn-severe)'>"
+            f"<p>root_message_id <code>{esc(root_id)}</code> が見つかりません。</p>"
+            "<p><a href='/?view=health'>← Health ビューに戻る</a></p>"
+            "</div>"
+        )
+
+    thread_size = detail["thread_size"]
+    sev = (
+        "severe"   if thread_size >= PPD_SEVERE_THRESHOLD   else
+        "critical" if thread_size >= PPD_CRITICAL_THRESHOLD else
+        "warning"  if thread_size >= PPD_THREAD_THRESHOLD   else
+        "normal"
+    )
+    sev_color = {
+        "severe": "var(--warn-severe)", "critical": "var(--warn-critical)",
+        "warning": "var(--warn-warn)", "normal": "var(--text2)",
+    }.get(sev, "var(--text2)")
+
+    # スレッド所要時間フォーマット
+    dur_str = "—"
+    if detail["duration_s"] is not None:
+        d = detail["duration_s"]
+        if d < 60:
+            dur_str = f"{d}s"
+        elif d < 3600:
+            dur_str = f"{d // 60}m {d % 60}s"
+        else:
+            dur_str = f"{d // 3600}h {(d % 3600) // 60}m"
+
+    # root_ts フォーマット
+    root_ts_fmt = esc(detail["root_ts"][:16].replace("T", " ") if detail.get("root_ts") else "—")
+
+    # ── thread status ──────────────────────────────────────────────────────
+    status_map = load_thread_statuses()
+    eff_status  = effective_status(
+        root_id, detail["tenant_id"],
+        detail["messages"][-1]["created_at"] if detail["messages"] else None,
+        status_map,
+    )
+    redirect_url   = esc_attr(f"/?view=ppd_detail&thread={root_id}")
+    tenant_id_safe = esc_attr(detail["tenant_id"])
+    status_form  = (
+        f"<form method='post' action='/?action=set_thread_status' "
+        f"style='display:inline-flex;gap:8px;align-items:center;margin-top:8px'>"
+        f"<input type='hidden' name='root_id' value='{esc_attr(root_id)}'>"
+        f"<input type='hidden' name='tenant_id' value='{tenant_id_safe}'>"
+        f"<input type='hidden' name='redirect' value='{redirect_url}'>"
+        f"<span style='font-size:12px;color:var(--text2)'>status:</span>"
+        f"<span class='badge badge-{sev}'>{eff_status}</span>"
+        f"<button name='status' value='done'  class='btn-status'>✓ done</button>"
+        f"<button name='status' value='stash' class='btn-status'>📌 stash</button>"
+        f"<button name='status' value='running' class='btn-status'>▶ running</button>"
+        f"</form>"
+    )
+
+    # ── メタ情報ヘッダー ────────────────────────────────────────────────────
+    header_html = (
+        f"<div style='margin-bottom:20px'>"
+        f"<h2 style='margin:0 0 8px;color:{sev_color}'>"
+        f"PPD 詰まり診断 <span style='font-family:monospace;font-size:14px'>{esc(root_id[:16])}…</span>"
+        f"</h2>"
+        f"<table style='font-size:13px;border-collapse:collapse'>"
+        f"<tr><td style='padding:2px 12px 2px 0;color:var(--text2)'>entry point</td>"
+        f"<td><strong>{esc(detail['root_sender'])}</strong>&nbsp;→&nbsp;<strong>{esc(detail['root_recipient'])}</strong></td></tr>"
+        f"<tr><td style='padding:2px 12px 2px 0;color:var(--text2)'>開始時刻</td><td>{root_ts_fmt}</td></tr>"
+        f"<tr><td style='padding:2px 12px 2px 0;color:var(--text2)'>スレッドサイズ</td>"
+        f"<td><strong style='color:{sev_color}'>{thread_size} msgs</strong>"
+        f"&nbsp;<span class='badge badge-{sev}'>{sev.upper()}</span></td></tr>"
+        f"<tr><td style='padding:2px 12px 2px 0;color:var(--text2)'>所要時間</td><td>{dur_str}</td></tr>"
+        f"</table>"
+        f"{status_form}"
+        f"</div>"
+        f"<p style='font-size:12px'><a href='/?view=health'>← Health ビュー</a>"
+        f"&nbsp;|&nbsp;<a href='/?view=causaltree&thread={esc_attr(root_id)}'>Causal Tree で詳細表示</a></p>"
+    )
+
+    # ── 参加者ペア集計 ───────────────────────────────────────────────────────
+    if detail["pairs"]:
+        pair_rows = "".join(
+            f"<tr>"
+            f"<td>{esc(p['sender'])}</td>"
+            f"<td style='color:var(--text2)'>→</td>"
+            f"<td>{esc(p['recipient'])}</td>"
+            f"<td style='text-align:right;font-family:monospace'>{p['count']}</td>"
+            f"<td style='text-align:right;color:var(--text2)'>"
+            f"{int(p['count'] / thread_size * 100)}%</td>"
+            f"</tr>"
+            for p in detail["pairs"]
+        )
+        pairs_html = (
+            "<h3 style='font-size:13px;margin:20px 0 8px;color:var(--text2)'>参加者ペア</h3>"
+            "<table class='link-list' style='max-width:600px'>"
+            "<thead><tr><th>送信者</th><th></th><th>受信者</th>"
+            "<th style='text-align:right'>件数</th><th style='text-align:right'>割合</th></tr></thead>"
+            f"<tbody>{pair_rows}</tbody></table>"
+        )
+    else:
+        pairs_html = ""
+
+    # ── 往復密度時系列バーチャート ────────────────────────────────────────────
+    if detail["buckets"]:
+        tp = detail["turning_point_idx"]
+        bucket_rows = ""
+        for i, b in enumerate(detail["buckets"]):
+            is_peak  = (i == tp)
+            bar_color = "var(--warn-severe)" if is_peak else "var(--accent)"
+            peak_mark = "⚡ 転換点" if is_peak else ""
+            bar_html  = (
+                f"<div style='background:{bar_color};width:{b['pct']}%;height:14px;"
+                f"min-width:2px;border-radius:2px;display:inline-block'></div>"
+            )
+            bucket_rows += (
+                f"<tr>"
+                f"<td style='font-family:monospace;font-size:11px;color:var(--text2);white-space:nowrap'>{esc(b['label'])}</td>"
+                f"<td style='padding:3px 8px'>{bar_html}</td>"
+                f"<td style='font-family:monospace;font-size:11px;text-align:right'>{b['count']}</td>"
+                f"<td style='font-size:11px;color:var(--warn-severe)'>{peak_mark}</td>"
+                f"</tr>"
+            )
+        timeseries_html = (
+            "<h3 style='font-size:13px;margin:20px 0 8px;color:var(--text2)'>往復密度時系列</h3>"
+            "<table style='border-collapse:collapse;width:100%;max-width:600px'>"
+            f"<tbody>{bucket_rows}</tbody></table>"
+            f"<p style='font-size:11px;color:var(--text2);margin-top:4px'>"
+            f"スレッド全体を {len(detail['buckets'])} バケットに分割。⚡ は最大密度バケット（転換点）。</p>"
+        )
+    else:
+        timeseries_html = ""
+
+    # ── メッセージ一覧 ────────────────────────────────────────────────────────
+    msg_rows = "".join(
+        f"<tr>"
+        f"<td style='font-family:monospace;font-size:10px;color:var(--text2);white-space:nowrap'>"
+        f"{esc(m['created_at'][:16].replace('T', ' ') if m.get('created_at') else '—')}</td>"
+        f"<td style='font-size:12px'>{esc(m['sender'])}</td>"
+        f"<td style='color:var(--text2)'>→</td>"
+        f"<td style='font-size:12px'>{esc(m['recipient'])}</td>"
+        f"<td style='font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>"
+        f"{esc((m.get('body') or '')[:80])}</td>"
+        f"</tr>"
+        for m in detail["messages"]
+    )
+    msgs_html = (
+        f"<h3 style='font-size:13px;margin:20px 0 8px;color:var(--text2)'>"
+        f"メッセージ一覧 ({thread_size} 件)</h3>"
+        "<table class='link-list' style='max-width:100%'>"
+        "<thead><tr><th>時刻</th><th>送信者</th><th></th><th>受信者</th><th>本文 (先頭80字)</th></tr></thead>"
+        f"<tbody>{msg_rows}</tbody></table>"
+    )
+
+    return header_html + pairs_html + timeseries_html + msgs_html
+
+
 def compute_eqs_from_db():
     """Escalation Quality Score (EQS) を messages テーブルから計算。
 
@@ -2129,9 +2416,11 @@ def render_health():
             short_root = esc(t["root_id"][:8]) + "…"
             start_s = esc(t["first_ts"][:16].replace("T", " ") if t.get("first_ts") else "—")
             end_s   = esc(t["last_ts"][:16].replace("T", " ")  if t.get("last_ts")  else "—")
+            diag_url = esc_attr(f"/?view=ppd_detail&thread={t['root_id']}")
             ppd_rows_html.append(
                 f"<tr>"
-                f"<td style='font-family:monospace;font-size:11px'>{short_root}</td>"
+                f"<td style='font-family:monospace;font-size:11px'>"
+                f"<a href='{diag_url}' title='詰まり診断ビュー'>{short_root}</a></td>"
                 f"<td>{esc(t['root_sender'])}&nbsp;→&nbsp;{esc(t['root_recipient'])}</td>"
                 f"<td style='text-align:right'>{t['thread_size']}</td>"
                 f"<td><span class='{badge_cls}'>{sev.upper()}</span></td>"
@@ -3074,6 +3363,20 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif view == "health":
                 view_body = render_health()
+                body = render_alt_view_layout(
+                    "health", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            elif view == "ppd_detail":
+                # issue #218: PPD 詰まり診断ビュー
+                # ?view=ppd_detail&thread=<root_message_id> で特定スレッドの診断を表示
+                ppd_thread_id = qs.get("thread", [None])[0]
+                if not ppd_thread_id:
+                    view_body = (
+                        "<p>thread パラメータが必要です。"
+                        "<a href='/?view=health'>← Health ビューに戻る</a></p>"
+                    )
+                else:
+                    view_body = render_ppd_detail(ppd_thread_id)
                 body = render_alt_view_layout(
                     "health", view_body, total_msgs, total_agents, total_links_for_header,
                 )
