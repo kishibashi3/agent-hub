@@ -87,18 +87,6 @@ export async function handleSendMessage(
       console.error('[send_message] notify failed (non-fatal):', notifyErr);
     }
 
-    // PPD チェック (issue #198): caused_by を持つ返信が閾値に達したら @operator に通知。
-    // best-effort — 失敗しても send_message 自体は成功扱い。
-    try {
-      const alertRecipient = scope.checkAndAlertPPD(message.id);
-      if (alertRecipient) {
-        // アラートメッセージの inbox に push 通知
-        notifyResourceUpdated(inboxUriFor(alertRecipient), scope.tenantId);
-      }
-    } catch (ppdErr) {
-      console.error('[send_message] PPD check failed (non-fatal):', ppdErr);
-    }
-
     return {
       content: [
         {
