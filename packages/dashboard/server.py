@@ -85,9 +85,13 @@ DASHBOARD_DB_PATH = os.environ.get("DASHBOARD_DB_PATH") or "/app/data/dashboard_
 
 # EQS: Escalation Quality Score (= 合議過多型燃焼の計測、 設計書 §3.2.2)
 # エスカレーション = ESCALATION_SIGNALS を含むメッセージ (宛先不問)
-# 返答         = 同スレッド内の後続メッセージ (送信者不問)
+# 返答         = 同スレッド内 or DM 会話の後続メッセージ (送信者不問)
+#
+# NOTE (issue #207): "L1" は agent-hub エコシステムで認可レベル表記として多用される
+# ("L1 breaking change", "L1 GO待ち", "L1 対象" 等) ため、エスカレーション信号から除外。
+# 実際の L1 エスカレーション要求は "L1 GO をお願い" 等、より具体的なフレーズで表現される。
 ESCALATION_SIGNALS = [
-    "確認をお願い", "判断をお願い", "L1", "GO をお願い",
+    "確認をお願い", "判断をお願い", "GO をお願い",
     "承認", "許可をください", "どうしますか", "判断してください",
     "エスカレーション", "確認お願い", "判断お願い",
 ]
@@ -1795,11 +1799,14 @@ def compute_eqs_from_db():
        root message (= caused_by なし) は m.id が自分自身のスレッドルート。
        JOIN 条件に m.tenant_id = mc.tenant_id を含めてテナント境界を確保。
     2. thread_map = {root_id: [created_at ASC 順のメッセージリスト]} を構築 (O(N))。
+       dm_reply_map = {(sender, recipient): [...]} も同時に構築 (issue #207 Bug 2 fix)。
        各 msg dict に effective_root を含めるため msg_root dict は不要。
     3. エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)。
        旧実装の OPERATOR_HANDLE 宛限定は廃止。全送受信メッセージを対象とする。
-    4. 各エスカレーションのスレッドを thread_map から O(1) で取得し、
-       エスカレーション後の最初のメッセージ（送信者不問）を返答とする。
+    4. 各エスカレーションの返答を 2 段階で検索:
+       (a) 因果チェーン内の後続メッセージ (thread_map から O(1))
+       (b) なければ DM 会話の返信: A→B エスカレーションへの B→A 返信 (caused_by 不問)
+           agent-hub では多くの DM 返信が caused_by を設定しないため必須 (issue #207)。
     5. 返答本文を GO / 非 GO / unknown に分類。
     6. overescalation_rate = GO数 / 全エスカレーション数 × 100
        quality_score = 100 - |rate - 50| × 2  (50% が理想、 設計書 §3.2.2)
@@ -1810,6 +1817,10 @@ def compute_eqs_from_db():
     - esc2 の返答 = GO → go_count にカウント
     esc1 の返答が unknown になるのは「中継エスカレーション」として許容する。
     将来は "最初の非エスカレーション後続" を返答とするロジックで改善可能。
+
+    issue #207 の修正点:
+    - ESCALATION_SIGNALS から "L1" を除外 (認可レベル表記との混同防止)
+    - 返答検索を DM 会話コンテキストにも拡張 (caused_by 不問)
 
     旧実装の問題点 (PR #169 Minor):
     - O(N²): 各エスカレーションに対し全メッセージを線形スキャン
@@ -1861,6 +1872,12 @@ def compute_eqs_from_db():
     # thread_map[root_id] は created_at ASC 順 (ORDER BY 済み)
     # effective_root は msg dict に含めるため別途 msg_root dict は不要
     thread_map: dict[str, list] = defaultdict(list)
+    # dm_reply_map[(sender, recipient)] = created_at ASC 順のメッセージリスト
+    # A→B エスカレーションへの B→A 返信を caused_by 不問で検索するため (issue #207 Bug 2)
+    # NOTE: トピック境界を区別しない。A→B エスカレーション後の最初の B→A メッセージを
+    # 返答とみなすため、複数の異なる件が混在する DM ペアでは誤採用の可能性がある。
+    # MVP scale (< 20 peer) では許容範囲。将来は time window や thread context で改善予定。
+    dm_reply_map: dict[tuple, list] = defaultdict(list)
     all_msgs = []
 
     for msg_id, sender, recipient, body, created_at, effective_root in rows:
@@ -1871,6 +1888,7 @@ def compute_eqs_from_db():
         }
         all_msgs.append(msg)
         thread_map[effective_root].append(msg)
+        dm_reply_map[(sender, recipient)].append(msg)
 
     # エスカレーション検出 (ESCALATION_SIGNALS マッチ、 宛先不問)
     # 宛先不問: 旧実装の OPERATOR_HANDLE 宛限定を廃止し全メッセージ対象に変更
@@ -1897,8 +1915,10 @@ def compute_eqs_from_db():
             unknown_count += 1
             continue
 
-        # スレッドを O(1) で取得し、エスカレーション後の最初のメッセージを返答とする
-        # (送信者不問: エスカレーション元・先どちらの返答も対象)
+        # 返答検索: 優先順位
+        # 1. 因果チェーン内の後続メッセージ (caused_by チェーンで繋がったスレッド)
+        # 2. DM 会話の返信 (B→A の caused_by 不問 DM — agent-hub では多くの返信が caused_by なし)
+        #    (issue #207 Bug 2 fix)
         # エスカレーション連鎖ケース: 返答が別エスカレーションの場合は unknown になる
         # (= 仕様: エスカレーション連鎖挙動コメント参照)
         root_id = esc_msg["effective_root"]
@@ -1912,6 +1932,20 @@ def compute_eqs_from_db():
             if msg_ts and msg_ts > esc_ts:
                 response = msg
                 break                             # 最初の後続メッセージを返答とする
+
+        # 因果チェーン内に返答なし → DM 会話の返信を検索 (caused_by 不問)
+        # A→B エスカレーションに対し B→A の最初のメッセージを返答とみなす
+        if response is None:
+            dm_replies = dm_reply_map.get(
+                (esc_msg["recipient"], esc_msg["sender"]), []
+            )
+            for msg in dm_replies:              # created_at ASC 順
+                # dm_reply_map[(B, A)] は B→A メッセージのみを保持するため
+                # A→B であるエスカレーション自身は含まれない (dead check 削除済み)
+                msg_ts = _parse_ts(msg["created_at"])
+                if msg_ts and msg_ts > esc_ts:
+                    response = msg
+                    break
 
         if response is None:
             unknown_count += 1
