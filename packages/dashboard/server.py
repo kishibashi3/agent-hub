@@ -1815,7 +1815,7 @@ def compute_ppd_from_db():
 
     旧実装 (issue #199 削除前) は peer-pair 往復カウントを使用していたが、
     会話の文脈を無視するため issue #198 で root_message_id ベース thread-size 判定に置き換えた。
-    本関数はサーバーサイド (TypeScript checkAndAlertPPD / getThreadSize) と同一の定義で
+    本関数はサーバーサイド (TypeScript getThreadSize) と同一の定義で
     dashboard health 画面に再表示する (issue #210)。
 
     thread_size = COUNT(message_causes WHERE root_message_id = X AND position = 0) + 1
@@ -2217,7 +2217,7 @@ def render_health():
   <p class='dim health-note'>
     同一スレッド内 (root_message_id) のメッセージ数で判定 (issue #198 方式)。
     Warning(≥{PPD_THREAD_THRESHOLD}) / Critical(≥{PPD_CRITICAL_THRESHOLD}) / Severe(≥{PPD_SEVERE_THRESHOLD}) msgs。
-    サーバー側 checkAndAlertPPD と同一閾値 (AGENT_HUB_PPD_THREAD_THRESHOLD)。
+    サーバー側 getThreadSize と同一閾値 (AGENT_HUB_PPD_THREAD_THRESHOLD)。
   </p>
   {ppd_table}
 </div>
