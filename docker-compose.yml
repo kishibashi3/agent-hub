@@ -68,7 +68,8 @@ services:
       # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate (= admin clarification)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
       # dashboard 専用 RW SQLite (= thread status 等)。named volume に永続化 (issue #204)
-      DASHBOARD_DB_PATH: /root/.agent-hub/dashboard.db
+      # AGENT_HUB_ prefix 統一 (issue #209) で AGENT_HUB_DASHBOARD_DB_PATH を使用
+      AGENT_HUB_DASHBOARD_DB_PATH: /root/.agent-hub/dashboard.db
     depends_on:
       agent-hub:
         condition: service_healthy
