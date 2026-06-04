@@ -43,6 +43,8 @@ v2.0 (= issue #92 `/` prefix migration、 breaking change):
 - message (str, 必須): DM 本文
 - owner (str, 必須): `@<sender-handle>` format、 add/delete/run-now で restriction
 - one_shot (bool, optional, default false): true なら fire 後 auto-delete
+- caused_by (str, optional): fire 時の send_message に渡す caused_by (= issue #221)
+  /run_in / /run_at で entry 追加時に依頼メッセージ ID を自動設定。causal chain 追跡用。
 
 環境変数:
   AGENT_HUB_URL      MCP endpoint (default: http://localhost:3000/mcp)
@@ -284,14 +286,25 @@ def init_session(headers: dict[str, str]) -> str:
 
 
 def send_dm(
-    headers: dict[str, str], session_id: str, to: str, message: str
+    headers: dict[str, str],
+    session_id: str,
+    to: str,
+    message: str,
+    caused_by: str | None = None,
 ) -> dict[str, Any]:
     """`send_message` tool を呼出。 成功時は response body を返す、 失敗時 raise。
 
     issue #70 Mojibake fix: `_encode_json_body()` で UTF-8 bytes 化、
     `Content-Type: application/json; charset=utf-8` (= build_headers) で server に
     明示。 message が日本語含む場合の root encoding 整合性を保証。
+
+    issue #221: `caused_by` を指定すると send_message tool arguments に含める。
+    scheduler 経由の fire で causal chain が保たれる (= /run_in / /run_at / /run)。
+    None の場合は arguments に含めない (= 既存 behavior と互換)。
     """
+    arguments: dict[str, Any] = {"to": to, "message": message}
+    if caused_by is not None:
+        arguments["caused_by"] = caused_by
     resp = requests.post(
         HUB_URL,
         headers={**headers, "mcp-session-id": session_id},
@@ -300,7 +313,7 @@ def send_dm(
             "method": "tools/call",
             "params": {
                 "name": "send_message",
-                "arguments": {"to": to, "message": message},
+                "arguments": arguments,
             },
             "id": int(time.time() * 1000),
         }),
@@ -474,6 +487,7 @@ def handle_inbox_command(
     iters: list[Any],
     next_times: list[datetime],
     config_path: Path,
+    msg_id: str | None = None,
 ) -> None:
     """inbox に届いた DM body を parse し command として実行、 sender へ reply。
 
@@ -486,6 +500,10 @@ def handle_inbox_command(
     全 command が `/` prefix を要求。 `/` で始まらない body は **silently ignore**
     (= scheduler は command-only peer、 LLM bypass)、 未知 `/<cmd>` は `/unknown <cmd>`
     で明示返答 (= `docs/command-message-convention.md` §3)。
+
+    issue #221: `msg_id` を受け取り、 /run_in / /run_at で作成する one-shot entry の
+    `caused_by` に設定する。 fire 時に send_message へ caused_by が渡され causal chain
+    が保たれる。 /run (即時 fire) でも caused_by=msg_id を send_dm() に渡す。
 
     対応 command:
     - `/ping`                                       : 生存確認
@@ -586,6 +604,9 @@ def handle_inbox_command(
             if isinstance(parsed, str):
                 send_dm(headers, session_id, sender, parsed)
                 return
+            # issue #221: 依頼メッセージ ID を caused_by として保存 → fire 時に伝搬
+            if msg_id is not None:
+                parsed["caused_by"] = msg_id
             _do_add_entry(
                 headers, session_id, sender, parsed,
                 schedules, iters, next_times, config_path,
@@ -596,6 +617,9 @@ def handle_inbox_command(
             if isinstance(parsed, str):
                 send_dm(headers, session_id, sender, parsed)
                 return
+            # issue #221: 依頼メッセージ ID を caused_by として保存 → fire 時に伝搬
+            if msg_id is not None:
+                parsed["caused_by"] = msg_id
             _do_add_entry(
                 headers, session_id, sender, parsed,
                 schedules, iters, next_times, config_path,
@@ -694,7 +718,8 @@ def handle_inbox_command(
                 fire_to = s["to"]
                 fire_msg = s["message"]
             try:
-                send_dm(headers, session_id, fire_to, fire_msg)
+                # issue #221: /run 即時 fire でも caused_by を現在の依頼 msg_id に設定
+                send_dm(headers, session_id, fire_to, fire_msg, caused_by=msg_id)
                 send_dm(
                     headers,
                     session_id,
@@ -1036,6 +1061,7 @@ def sse_listen_loop(
                                 iters,
                                 next_times,
                                 config_path,
+                                msg_id=msg_id,  # issue #221: causal chain 追跡
                             )
                             if msg_id:
                                 mark_message_read(headers, sid, msg_id)
@@ -1238,6 +1264,11 @@ def _validate_entry(
         if not isinstance(entry["one_shot"], bool):
             return f"{where}.one_shot: must be boolean"
 
+    # caused_by optional string (= issue #221: causal chain 追跡)
+    if "caused_by" in entry:
+        if not isinstance(entry["caused_by"], str):
+            return f"{where}.caused_by: must be string"
+
     return None
 
 
@@ -1432,13 +1463,14 @@ def main() -> None:
             fire_name = s["name"]
             fire_to = s["to"]
             fire_msg = s["message"]
+            fire_caused_by: str | None = s.get("caused_by")  # issue #221
             is_one_shot = bool(s.get("one_shot")) or (
                 bool(s.get("run_at")) and not s.get("cron")
             )
 
         send_ok = False
         try:
-            send_dm(headers, session_id, fire_to, fire_msg)
+            send_dm(headers, session_id, fire_to, fire_msg, caused_by=fire_caused_by)
             send_ok = True
             print(
                 f"[FIRE] {next_due.isoformat()} name='{fire_name}' "

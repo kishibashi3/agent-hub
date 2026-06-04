@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -341,3 +341,204 @@ class TestNextFireTime:
         entry = _valid_oneshot_entry(run_at="not-a-datetime")
         with pytest.raises(ValueError, match="invalid run_at"):
             sched._next_fire_time(entry, self._now())
+
+
+# ============================================================
+# caused_by (issue #221)
+# ============================================================
+
+class TestCausedBy:
+    """issue #221: scheduler fire 時の caused_by 伝搬テスト。"""
+
+    # ----------------------------------------------------------
+    # _validate_entry
+    # ----------------------------------------------------------
+
+    def test_validate_entry_caused_by_string_ok(self) -> None:
+        """caused_by が string → validation OK。"""
+        entry = _valid_oneshot_entry(caused_by="msg-uuid-abc")
+        err = sched._validate_entry(entry, set(), where="entry")
+        assert err is None
+
+    def test_validate_entry_caused_by_absent_ok(self) -> None:
+        """caused_by 未指定 → validation OK (optional field)。"""
+        entry = _valid_oneshot_entry()
+        assert "caused_by" not in entry
+        err = sched._validate_entry(entry, set(), where="entry")
+        assert err is None
+
+    def test_validate_entry_caused_by_non_string_fails(self) -> None:
+        """caused_by が string でない → validation error。"""
+        entry = _valid_oneshot_entry(caused_by=12345)
+        err = sched._validate_entry(entry, set(), where="entry")
+        assert err is not None
+        assert "caused_by" in err
+
+    # ----------------------------------------------------------
+    # send_dm
+    # ----------------------------------------------------------
+
+    def test_send_dm_includes_caused_by(self) -> None:
+        """caused_by 指定時 → send_message arguments に caused_by が含まれる。"""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"Content-Type": "application/json"}
+        mock_resp.json.return_value = {"result": {}}
+
+        with patch("scheduler.requests.post", return_value=mock_resp) as mock_post:
+            sched.send_dm(
+                headers={"Content-Type": "application/json"},
+                session_id="sess-1",
+                to="@target",
+                message="hello",
+                caused_by="cause-msg-id",
+            )
+
+        _args, kwargs = mock_post.call_args
+        import json as _json
+        body = _json.loads(kwargs["data"].decode("utf-8"))
+        arguments = body["params"]["arguments"]
+        assert arguments["caused_by"] == "cause-msg-id"
+        assert arguments["to"] == "@target"
+        assert arguments["message"] == "hello"
+
+    def test_send_dm_omits_caused_by_when_none(self) -> None:
+        """caused_by=None (default) → send_message arguments に caused_by が含まれない。"""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"Content-Type": "application/json"}
+        mock_resp.json.return_value = {"result": {}}
+
+        with patch("scheduler.requests.post", return_value=mock_resp) as mock_post:
+            sched.send_dm(
+                headers={"Content-Type": "application/json"},
+                session_id="sess-1",
+                to="@target",
+                message="hello",
+            )
+
+        _args, kwargs = mock_post.call_args
+        import json as _json
+        body = _json.loads(kwargs["data"].decode("utf-8"))
+        arguments = body["params"]["arguments"]
+        assert "caused_by" not in arguments
+
+    # ----------------------------------------------------------
+    # handle_inbox_command: /run_in と /run_at が caused_by を entry に保存
+    # ----------------------------------------------------------
+
+    def _make_shared_state(self):
+        """handle_inbox_command テスト用の shared state 一式を返す。"""
+        schedules: list = []
+        iters: list = []
+        next_times: list = []
+        return schedules, iters, next_times
+
+    def test_run_in_stores_caused_by_in_entry(self, tmp_path: Path) -> None:
+        """/run_in で作成した entry に caused_by が設定される。"""
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        schedules, iters, next_times = self._make_shared_state()
+
+        sent: list = []
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            sent.append({"to": to, "message": message, "caused_by": caused_by})
+            return {}
+
+        with patch.object(sched, "send_dm", side_effect=fake_send_dm):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@ope",
+                body="/run_in 2h @target hello",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+                msg_id="request-msg-id-xyz",
+            )
+
+        assert len(schedules) == 1
+        assert schedules[0]["caused_by"] == "request-msg-id-xyz"
+
+    def test_run_at_stores_caused_by_in_entry(self, tmp_path: Path) -> None:
+        """/run_at で作成した entry に caused_by が設定される。"""
+        from datetime import datetime, timezone, timedelta
+        future = (datetime.now(tz=timezone.utc) + timedelta(hours=1)).strftime(
+            "%Y-%m-%dT%H:%M:%S+00:00"
+        )
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        schedules, iters, next_times = self._make_shared_state()
+
+        with patch.object(sched, "send_dm", return_value={}):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@ope",
+                body=f"/run_at {future} @target hello",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+                msg_id="request-msg-id-abc",
+            )
+
+        assert len(schedules) == 1
+        assert schedules[0]["caused_by"] == "request-msg-id-abc"
+
+    def test_run_in_no_caused_by_when_msg_id_none(self, tmp_path: Path) -> None:
+        """/run_in で msg_id=None の場合、entry に caused_by が設定されない。"""
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        schedules, iters, next_times = self._make_shared_state()
+
+        with patch.object(sched, "send_dm", return_value={}):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@ope",
+                body="/run_in 2h @target hello",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+                msg_id=None,
+            )
+
+        assert len(schedules) == 1
+        assert "caused_by" not in schedules[0]
+
+    def test_run_command_passes_caused_by_to_send_dm(self, tmp_path: Path) -> None:
+        """/run <name> 即時 fire で send_dm に caused_by が渡される。"""
+        from datetime import datetime, timezone, timedelta
+        cfg = tmp_path / "schedules.json"
+        future = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+        entry = _valid_oneshot_entry(name="myshot")
+        schedules = [entry]
+        iters = [None]
+        next_times = [future]
+
+        fired_args: list = []
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            fired_args.append({"to": to, "message": message, "caused_by": caused_by})
+            return {}
+
+        with patch.object(sched, "send_dm", side_effect=fake_send_dm):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@ope",
+                body="/run myshot",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+                msg_id="run-cmd-msg-id",
+            )
+
+        # fired_args[0] = fire to @planner, fired_args[1] = [OK] reply to sender
+        assert fired_args[0]["to"] == "@planner"
+        assert fired_args[0]["caused_by"] == "run-cmd-msg-id"
