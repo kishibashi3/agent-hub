@@ -91,14 +91,14 @@ services:
     environment:
       # Gemini Live API 認証 (必須)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash-live-001}
 
       # agent-hub 接続 (hub service と同一 docker network 内)
       AGENT_HUB_URL: http://agent-hub:3000/mcp
       AGENT_HUB_USER: ${AGENT_HUB_VOICE_USER:-voice}
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
       AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
-      AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
+      AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-trust}
 
       # voice-gateway 設定
       GATEWAY_PORT: "8765"
