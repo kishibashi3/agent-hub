@@ -80,7 +80,7 @@ except ValueError:
 DASHBOARD_DB_PATH = os.environ.get("AGENT_HUB_DASHBOARD_DB_PATH") or "/app/data/dashboard_data.db"
 
 # ============================================================
-# Health view constants (= Phase 1: PPD + EQS)
+# Health view constants (= Phase 1: PPD + EQS / Phase 2: CDS + MOR)
 # ============================================================
 
 # PPD: Ping-Pong Detection (thread-size based, issue #198 方式)
@@ -123,6 +123,60 @@ NON_GO_RESPONSE_SIGNALS = [
     "待ってください", "変更が必要", "やり直し", "却下", "別の方法",
     "確認が必要", "設計を見直し", "NG", "保留", "差し戻し",
 ]
+
+# CDS: Conversation Density Score (= Phase 2 SHS, issue #230, 設計書 §4)
+# 進行貢献型メッセージ = 委任型 + 完了型 + 問題報告型
+# 非進行型メッセージ = 確認型 + standby型 + 挨拶型
+# CDS = 進行貢献型 / 全メッセージ × 100
+# 理想値: 60〜80% (ロール別期待値は異なる — 設計書 §4.2 参照)
+CDS_HIGH_SIGNALS = [
+    # 委任型
+    "着手します", "実装開始", "dispatch", "依頼します", "依頼しました",
+    "お願いします", "対応します", "PR を作", "commit", "push",
+    # 完了型
+    "完了しました", "完了です", "PR を出しました", "LGTM", "merge しました",
+    "マージしました", "finished", "done", "完了", "実装しました",
+    "調査しました", "調査完了", "作成しました",
+    # 問題報告型
+    "ブロックされています", "エラーが発生", "設計に問題", "ブロック",
+    "失敗しました", "エラー:", "エラーが出", "問題が発生", "障害",
+]
+CDS_LOW_SIGNALS = [
+    # 確認型
+    "了解しました", "了解です", "ありがとうございます", "確認しました",
+    "承知しました", "分かりました", "わかりました", "受け取りました",
+    # standby型
+    "待機中", "standby", "次タスクを待っています", "待機します",
+    "idle", "待ちます", "準備完了", "ready",
+    # 挨拶型・単純 acknowledgement (短い単体応答)
+    "はい", "OK", "ok", "nod",
+]
+# CDS 低すぎる場合の警告: 50% 未満で警告、40% 未満で危険
+CDS_WARNING_THRESHOLD = 50
+CDS_DANGER_THRESHOLD  = 40
+
+# MOR: Meta-Overhead Ratio (= Phase 2 SHS, issue #230, 設計書 §5)
+# MOR = meta_messages / total_messages × 100
+# 理想値: 10〜25%  警戒値: 30%超  危険値: 40%超
+META_SIGNALS = [
+    # プロセス調整
+    "プロセスを変更", "手順を見直し", "運用を調整", "フローを改善",
+    "プロセス改善", "フロー変更", "運用改善", "手順変更",
+    # ルール議論
+    "ルールを更新", "規約を変更", "CLAUDE.md を修正", "persona を更新",
+    "CLAUDE.md を更新", "CLAUDE.md に追記", "規約を追加", "ルール変更",
+    # 役割調整
+    "ロールを変更", "担当を変更", "責務を見直し", "役割を変更",
+    "担当変更", "役割調整",
+    # システム管理
+    "bridge を再起動", "respawn", "bridge を stop", "spawn",
+    "bridge 再起動", "再起動してください", "stop-bridge", "start-bridge",
+]
+# MOR balance score (for SHS): 25% 以下なら満点、超えるほど減点 (設計書 §6)
+# MOR_balance_score = 100 - max(0, MOR - 25) × 3
+MOR_IDEAL_MAX  = 25   # 25% 以下は理想範囲
+MOR_WARNING    = 30   # 30% 超で警告
+MOR_DANGER     = 40   # 40% 超で危険
 
 
 # ============================================================
@@ -2392,8 +2446,196 @@ def compute_eqs_from_db():
     }
 
 
+def compute_cds_from_db():
+    """Conversation Density Score (CDS) を messages テーブルから計算 (issue #230, 設計書 §4).
+
+    CDS = 進行貢献型メッセージ数 / 全メッセージ数 × 100
+
+    進行貢献型 (high):  委任型 / 完了型 / 問題報告型 (CDS_HIGH_SIGNALS マッチ)
+    非進行型  (low):    確認型 / standby型 / 挨拶型  (CDS_LOW_SIGNALS マッチ or その他)
+
+    NOTE: 1 メッセージが high/low の両方にマッチする場合は high を優先する。
+    NOTE: どちらにもマッチしない (= その他) メッセージは low として扱う (保守的評価)。
+
+    エージェント別期待値 (設計書 §4.2):
+      @operator: 40〜60%  @planner: 50〜70%  @reviewer: 60〜80%
+
+    Returns:
+        dict: {
+            total_msgs: int,             全メッセージ数
+            high_count: int,             進行貢献型メッセージ数
+            low_count: int,              非進行型メッセージ数
+            other_count: int,            未分類 (= neither high nor low signal)
+            cds_score: float | None,     CDS (%, 全体)
+            by_sender: list[dict],       送信者別 {sender, total, high, low, cds}
+        }
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    if TENANT is None:
+        cur.execute(
+            "SELECT sender, body FROM messages ORDER BY created_at ASC"
+        )
+    else:
+        cur.execute(
+            "SELECT sender, body FROM messages WHERE tenant_id = ? ORDER BY created_at ASC",
+            (TENANT,),
+        )
+    rows = cur.fetchall()
+    con.close()
+
+    if not rows:
+        return {
+            "total_msgs":  0,
+            "high_count":  0,
+            "low_count":   0,
+            "other_count": 0,
+            "cds_score":   None,
+            "by_sender":   [],
+        }
+
+    # 全体集計
+    total_high = total_low = total_other = 0
+    # sender 別集計: {sender: {"total": int, "high": int, "low": int}}
+    sender_stats: dict[str, dict] = defaultdict(lambda: {"total": 0, "high": 0, "low": 0})
+
+    for sender, body in rows:
+        body_str = body or ""
+        is_high = any(sig in body_str for sig in CDS_HIGH_SIGNALS)
+        is_low  = any(sig in body_str for sig in CDS_LOW_SIGNALS)
+
+        sender_stats[sender]["total"] += 1
+        if is_high:
+            # high が low より優先 (委任・完了・問題報告は進行貢献と判定)
+            total_high += 1
+            sender_stats[sender]["high"] += 1
+        elif is_low:
+            total_low += 1
+            sender_stats[sender]["low"] += 1
+        else:
+            # 未分類: neither high nor low signal → 保守的に low として扱う
+            total_other += 1
+            sender_stats[sender]["low"] += 1
+
+    total = len(rows)
+    # CDS = 進行貢献型 / 全体 × 100 (other は非進行型扱いのため分子に含めない)
+    cds_score = round(total_high / total * 100, 1) if total > 0 else None
+
+    # sender 別 CDS を計算 (件数 降順)
+    by_sender = []
+    for sender, s in sorted(sender_stats.items(), key=lambda x: -x[1]["total"]):
+        t = s["total"]
+        h = s["high"]
+        by_sender.append({
+            "sender": sender,
+            "total":  t,
+            "high":   h,
+            "low":    s["low"],
+            "cds":    round(h / t * 100, 1) if t > 0 else 0.0,
+        })
+
+    return {
+        "total_msgs":  total,
+        "high_count":  total_high,
+        "low_count":   total_low + total_other,
+        "other_count": total_other,
+        "cds_score":   cds_score,
+        "by_sender":   by_sender,
+    }
+
+
+def compute_mor_from_db():
+    """Meta-Overhead Ratio (MOR) を messages テーブルから計算 (issue #230, 設計書 §5).
+
+    MOR = meta_messages / total_messages × 100
+
+    meta_messages: META_SIGNALS にマッチするメッセージ（プロセス調整・ルール議論・
+                   役割調整・システム管理に関するメッセージ）
+
+    理想値: 10〜25%   警戒値: 30%超   危険値: 40%超
+
+    MOR balance score (for SHS統合スコア):
+      balance_score = 100 - max(0, MOR - 25) × 3
+      → 25% 以下は 100 点満点、超えるほど減点。最低 0。
+
+    Returns:
+        dict: {
+            total_msgs: int,            全メッセージ数
+            meta_count: int,            meta_messages 数
+            mor_rate: float | None,     MOR (%)
+            balance_score: float | None, MOR balance score (0〜100; SHS 用)
+            top_meta_senders: list[dict],  meta_messages を多く送った送信者 {sender, meta, total, rate}
+        }
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    if TENANT is None:
+        cur.execute(
+            "SELECT sender, body FROM messages ORDER BY created_at ASC"
+        )
+    else:
+        cur.execute(
+            "SELECT sender, body FROM messages WHERE tenant_id = ? ORDER BY created_at ASC",
+            (TENANT,),
+        )
+    rows = cur.fetchall()
+    con.close()
+
+    if not rows:
+        return {
+            "total_msgs":        0,
+            "meta_count":        0,
+            "mor_rate":          None,
+            "balance_score":     None,
+            "top_meta_senders":  [],
+        }
+
+    total = len(rows)
+    meta_count = 0
+    # sender 別 meta 集計: {sender: {"meta": int, "total": int}}
+    sender_meta: dict[str, dict] = defaultdict(lambda: {"meta": 0, "total": 0})
+
+    for sender, body in rows:
+        body_str = body or ""
+        sender_meta[sender]["total"] += 1
+        if any(sig in body_str for sig in META_SIGNALS):
+            meta_count += 1
+            sender_meta[sender]["meta"] += 1
+
+    mor_rate = round(meta_count / total * 100, 1) if total > 0 else None
+    balance_score = (
+        round(max(0.0, 100 - max(0.0, mor_rate - MOR_IDEAL_MAX) * 3), 1)
+        if mor_rate is not None else None
+    )
+
+    # meta 送信者上位 (meta 件数 降順、上位 10)
+    top_meta_senders = sorted(
+        [
+            {
+                "sender": s,
+                "meta":   v["meta"],
+                "total":  v["total"],
+                "rate":   round(v["meta"] / v["total"] * 100, 1) if v["total"] > 0 else 0.0,
+            }
+            for s, v in sender_meta.items()
+            if v["meta"] > 0
+        ],
+        key=lambda x: -x["meta"],
+    )[:10]
+
+    return {
+        "total_msgs":        total,
+        "meta_count":        meta_count,
+        "mor_rate":          mor_rate,
+        "balance_score":     balance_score,
+        "top_meta_senders":  top_meta_senders,
+    }
+
+
 def render_health():
-    """Health view (= Phase 1 SHS: PPD + EQS) の body HTML を build。"""
+    """Health view (= Phase 2 SHS: PPD + EQS + CDS + MOR) の body HTML を build。"""
     ppd = compute_ppd_from_db()
     eqs = compute_eqs_from_db()
 
@@ -2494,10 +2736,154 @@ def render_health():
   理想値 40〜60%（合議過多型燃焼の検出閾値、設計書 §3.2.2）。
 </p>"""
 
-    return f"""<div class='view-content'>
-<h2>🔥 Structural Health — Phase 1 MVP</h2>
+    # ── CDS + MOR を計算 (Phase 2) ─────────────────────────────────────────────
+    cds = compute_cds_from_db()
+    mor = compute_mor_from_db()
+
+    # ── CDS セクション HTML ───────────────────────────────────────────────────
+    if cds["total_msgs"] == 0:
+        cds_html = (
+            "<p class='dim' style='padding:12px 0'>"
+            "メッセージが存在しません。</p>"
+        )
+    else:
+        cds_score = cds["cds_score"]
+        cds_color = (
+            "#39d353" if cds_score is not None and cds_score >= CDS_WARNING_THRESHOLD else
+            "#ffa657" if cds_score is not None and cds_score >= CDS_DANGER_THRESHOLD  else
+            "#f78166"
+        )
+        # sender 別 CDS テーブル (上位 20 件)
+        sender_rows_html = []
+        for s in cds["by_sender"][:20]:
+            c = s["cds"]
+            c_color = (
+                "#39d353" if c >= CDS_WARNING_THRESHOLD else
+                "#ffa657" if c >= CDS_DANGER_THRESHOLD  else
+                "#f78166"
+            )
+            sender_rows_html.append(
+                f"<tr>"
+                f"<td>{esc(s['sender'])}</td>"
+                f"<td style='text-align:right'>{s['total']}</td>"
+                f"<td style='text-align:right'>{s['high']}</td>"
+                f"<td style='text-align:right'>{s['low']}</td>"
+                f"<td style='text-align:right;color:{c_color}'>{c}%</td>"
+                f"</tr>"
+            )
+        sender_table = (
+            "<table class='link-list' style='max-width:100%;margin-top:8px'>"
+            "<thead><tr>"
+            "<th>sender</th>"
+            "<th style='text-align:right'>total</th>"
+            "<th style='text-align:right'>high (進行)</th>"
+            "<th style='text-align:right'>low (非進行)</th>"
+            "<th style='text-align:right'>CDS</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(sender_rows_html) + "</tbody>"
+            "</table>"
+        ) if sender_rows_html else ""
+
+        cds_html = f"""<div class='detail-stats' style='margin-bottom:12px'>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{cds_color}'>{cds_score}%</span>
+    <span class='stat-label'>CDS overall<br><span style='font-size:9px'>(ideal: ≥50%)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{cds["high_count"]}</span>
+    <span class='stat-label'>high-density msgs<br><span style='font-size:9px'>(委任/完了/問題報告)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{cds["low_count"]}</span>
+    <span class='stat-label'>low-density msgs<br><span style='font-size:9px'>(確認/standby/その他)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{cds["total_msgs"]}</span>
+    <span class='stat-label'>total messages</span>
+  </div>
+</div>
 <p class='dim health-note'>
-  Phase 1 計測指標: PPD（ロングスレッド検出）+ EQS（エスカレーション品質）<br>
+  ※ キーワードベース分類。偽陽性あり。CDS = 進行貢献型 / 全メッセージ × 100。
+  理想値 ≥50%（ロール別期待値: @reviewer ≥60%、@operator ≥40%）。設計書 §4。
+</p>
+{sender_table}"""
+
+    # ── MOR セクション HTML ───────────────────────────────────────────────────
+    if mor["total_msgs"] == 0:
+        mor_html = (
+            "<p class='dim' style='padding:12px 0'>"
+            "メッセージが存在しません。</p>"
+        )
+    else:
+        mor_rate   = mor["mor_rate"]
+        bal_score  = mor["balance_score"]
+        mor_color = (
+            "#39d353" if mor_rate is not None and mor_rate <= MOR_WARNING else
+            "#ffa657" if mor_rate is not None and mor_rate <= MOR_DANGER  else
+            "#f78166"
+        )
+        bal_color = (
+            "#39d353" if bal_score is not None and bal_score >= 70 else
+            "#ffa657" if bal_score is not None and bal_score >= 40 else
+            "#f78166"
+        )
+        # top_meta_senders テーブル
+        meta_sender_rows = []
+        for s in mor["top_meta_senders"]:
+            r = s["rate"]
+            r_color = (
+                "#ffa657" if r > MOR_WARNING else
+                "var(--text2)"
+            )
+            meta_sender_rows.append(
+                f"<tr>"
+                f"<td>{esc(s['sender'])}</td>"
+                f"<td style='text-align:right'>{s['meta']}</td>"
+                f"<td style='text-align:right'>{s['total']}</td>"
+                f"<td style='text-align:right;color:{r_color}'>{r}%</td>"
+                f"</tr>"
+            )
+        meta_sender_table = (
+            "<table class='link-list' style='max-width:100%;margin-top:8px'>"
+            "<thead><tr>"
+            "<th>sender</th>"
+            "<th style='text-align:right'>meta msgs</th>"
+            "<th style='text-align:right'>total msgs</th>"
+            "<th style='text-align:right'>rate</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(meta_sender_rows) + "</tbody>"
+            "</table>"
+        ) if meta_sender_rows else "<p class='dim' style='padding:8px 0'>メタトピックメッセージ検出なし。</p>"
+
+        mor_html = f"""<div class='detail-stats' style='margin-bottom:12px'>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{mor_color}'>{mor_rate}%</span>
+    <span class='stat-label'>MOR rate<br><span style='font-size:9px'>(ideal: 10〜25%)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{bal_color}'>{bal_score}</span>
+    <span class='stat-label'>MOR balance score<br><span style='font-size:9px'>(0〜100; SHS 用)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{mor["meta_count"]}</span>
+    <span class='stat-label'>meta messages</span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num'>{mor["total_msgs"]}</span>
+    <span class='stat-label'>total messages</span>
+  </div>
+</div>
+<p class='dim health-note'>
+  ※ キーワードベース分類。偽陽性あり。MOR = meta_messages / 全メッセージ × 100。
+  理想値 10〜25%、警戒値 30%超、危険値 40%超（設計書 §5）。
+  MOR balance score = 100 - max(0, MOR - 25) × 3。
+</p>
+{meta_sender_table}"""
+
+    return f"""<div class='view-content'>
+<h2>🔥 Structural Health — Phase 2</h2>
+<p class='dim health-note'>
+  計測指標: PPD（ロングスレッド検出）+ EQS（エスカレーション品質）+ CDS（会話密度）+ MOR（meta-overhead）<br>
   燃焼類型対応: 劇場型(2)・合議過多型(6)・無限ループ型(9)
 </p>
 
@@ -2513,6 +2899,22 @@ def render_health():
   <div class='stat-box'>
     <span class='stat-num'>{ppd["total_threaded"]}</span>
     <span class='stat-label'>threaded roots<br><span style='font-size:9px'>(has replies)</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{
+        "#39d353" if cds["cds_score"] is not None and cds["cds_score"] >= CDS_WARNING_THRESHOLD else
+        "#ffa657" if cds["cds_score"] is not None and cds["cds_score"] >= CDS_DANGER_THRESHOLD else
+        "#f78166" if cds["cds_score"] is not None else "var(--text2)"
+    }'>{cds["cds_score"] if cds["cds_score"] is not None else "—"}%</span>
+    <span class='stat-label'>CDS<br><span style='font-size:9px'>conversation density</span></span>
+  </div>
+  <div class='stat-box'>
+    <span class='stat-num' style='color:{
+        "#39d353" if mor["mor_rate"] is not None and mor["mor_rate"] <= MOR_WARNING else
+        "#ffa657" if mor["mor_rate"] is not None and mor["mor_rate"] <= MOR_DANGER else
+        "#f78166" if mor["mor_rate"] is not None else "var(--text2)"
+    }'>{mor["mor_rate"] if mor["mor_rate"] is not None else "—"}%</span>
+    <span class='stat-label'>MOR<br><span style='font-size:9px'>meta-overhead ratio</span></span>
   </div>
 </div>
 
@@ -2533,6 +2935,24 @@ def render_health():
     GO 系返答の割合（過剰 or 不足）を検出。
   </p>
   {eqs_html}
+</div>
+
+<div class='health-section'>
+  <h3>💬 Conversation Density Score (CDS)</h3>
+  <p class='dim health-note'>
+    進行貢献型メッセージ（委任・完了・問題報告）の割合。確認・standby は密度を下げる。
+    ※ キーワードベース分類。Phase 3 で LLM 分類器による精度向上予定。
+  </p>
+  {cds_html}
+</div>
+
+<div class='health-section'>
+  <h3>⚙ Meta-Overhead Ratio (MOR)</h3>
+  <p class='dim health-note'>
+    プロセス調整・ルール議論・システム管理に費やされたメッセージの割合。
+    過剰になると「管理のための管理」（自己参照ループ）に陥るリスク。
+  </p>
+  {mor_html}
 </div>
 </div>"""
 
