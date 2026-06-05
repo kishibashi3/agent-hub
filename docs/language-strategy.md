@@ -14,6 +14,39 @@
 
 ---
 
+## エコシステム言語マップ
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      agent-hub Ecosystem                            │
+├──────────────────────────────────┬──────────────────────────────────┤
+│        Core / Infra Layer        │      Interface / SDK Layer       │
+│        (軽く・速く)               │      (利用者に合わせる)            │
+├──────────────────────────────────┼──────────────────────────────────┤
+│                                  │                                  │
+│  [TypeScript]                    │  [TypeScript]                    │
+│   agent-hub server               │   agent-hub-sdk (主)             │
+│   scheduler                      │   plugins (Claude Code)          │
+│   dashboard ← 長期移行先         │                                  │
+│                                  │  [Python]                        │
+│  [Go]                            │   agent-hub-sdk (互換維持)        │
+│   bridge Tier 1 (受信係) ★移行   │                                  │
+│                                  │  [Java/Kotlin] ← 将来            │
+│  [Rust]                          │   Enterprise SDK                 │
+│   local-llm-monitor ★           │                                  │
+│   OTel pipeline                  │                                  │
+│   camera-agent (映像処理)         │                                  │
+│                                  │                                  │
+├──────────────────────────────────┴──────────────────────────────────┤
+│                    ML / ADK Layer [Python]                          │
+│              voice-gateway / cooking-agent / ADK連携                │
+└─────────────────────────────────────────────────────────────────────┘
+
+★ = 優先移行対象
+```
+
+---
+
 ## 現在 vs あるべき姿
 
 | コンポーネント | 現在 | あるべき | 理由 |
