@@ -483,3 +483,39 @@ export function markAsRead(
 
   return { read: true };
 }
+
+/**
+ * 全参加者の未読メッセージ数をバッチ取得する (issue #234)。
+ *
+ * 未読 = messages.recipient に対応する read_receipts 行が存在しない。
+ * 送信者 != 受信者 の条件は sendMessage が自分宛を禁止しているため冗長だが
+ * 防御的に保持する。
+ *
+ * **スコープ**: recipient が個人名 (person) のメッセージのみをカウントする。
+ * チーム宛メッセージ (recipient = @team-xxx) は各メンバーの queue_depth には
+ * 含まれない。チーム宛未読は getUnreadMessages() で取得すること。
+ *
+ * @returns Map<participantName, queueDepth>。
+ *          未読 0 の参加者はエントリを持たない (呼び出し側で ?? 0 を使うこと)。
+ */
+export function getQueueDepths(
+  db: Database,
+  tenantId: string
+): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT m.recipient AS participant_name, COUNT(*) AS depth
+       FROM messages m
+       LEFT JOIN read_receipts rr
+         ON m.tenant_id = rr.tenant_id
+         AND m.id = rr.message_id
+         AND rr.reader = m.recipient
+       WHERE m.tenant_id = ?
+         AND rr.message_id IS NULL
+         AND m.sender != m.recipient
+       GROUP BY m.recipient`
+    )
+    .all(tenantId) as { participant_name: string; depth: number }[];
+
+  return new Map(rows.map((r) => [r.participant_name, r.depth]));
+}

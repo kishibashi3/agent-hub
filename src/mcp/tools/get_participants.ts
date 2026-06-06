@@ -20,9 +20,10 @@ export const getParticipantsTool = {
   name: 'get_participants',
   description:
     '登録済みの全参加者 (person) とチーム (team) を返す。' +
-    'person は name, type, display_name, mode (peer の worker type), is_online (= 自分の inbox を SSE subscribe 中), last_active_at (= productive activity の最終 timestamp、 ISO 8601 / NULL) を持ち、' +
+    'person は name, type, display_name, mode (peer の worker type), is_online (= 自分の inbox を SSE subscribe 中), last_active_at (= productive activity の最終 timestamp、 ISO 8601 / NULL), queue_depth (= 未読メッセージ数) を持ち、' +
     'team は name, type, owner, members (= @handle 配列), created_at を持つ。' +
-    'type フィールドで person/team を判別する。 is_online と last_active_at の組合せで「subscribe 中 + active」「subscribe 中 + idle」 等を区別可能。',
+    'type フィールドで person/team を判別する。 is_online と last_active_at の組合せで「subscribe 中 + active」「subscribe 中 + idle」 等を区別可能。' +
+    ' queue_depth は on-demand spawn トリガー等の判断材料として利用できる。',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -60,6 +61,8 @@ export type ParticipantEntry =
       mode: string | null;
       is_online: boolean;
       last_active_at: string | null;
+      /** 未読メッセージ数 (issue #234)。0 = backlog なし。 */
+      queue_depth: number;
     }
   | {
       name: string;
@@ -88,6 +91,7 @@ export async function handleGetParticipants(
   try {
     const participants = scope.getParticipants();
     const teams = scope.getTeams();
+    const queueDepths = scope.getQueueDepths();
 
     const personEntries: ParticipantEntry[] = participants.map((p) => ({
       name: p.name,
@@ -96,6 +100,7 @@ export async function handleGetParticipants(
       mode: p.mode,
       is_online: isOnline(p.name),
       last_active_at: p.last_active_at,
+      queue_depth: queueDepths.get(p.name) ?? 0,
     }));
 
     // 各 team について members を都度 fetch する。

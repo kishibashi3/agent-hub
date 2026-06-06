@@ -5,6 +5,7 @@ import { scopeToTenant } from '../../../db/tenant-scope.js';
 import { handleGetParticipants } from '../get_participants.js';
 import { registerParticipant } from '../../../db/participants.js';
 import { createTeam } from '../../../db/teams.js';
+import { sendMessage, markAsRead } from '../../../db/messages.js';
 
 describe('get_participants ツール', () => {
   let db: Database.Database;
@@ -95,6 +96,111 @@ describe('get_participants ツール', () => {
     expect(byName['@alice'].is_online).toBe(true);
     expect(byName['@bob'].is_online).toBe(false);
     expect(byName['@charlie'].is_online).toBe(false);
+  });
+
+  describe('queue_depth (issue #234)', () => {
+    it('メッセージがない場合 queue_depth は 0', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const persons = entries.filter((e: any) => e.type === 'person');
+
+      persons.forEach((p: any) => {
+        expect(p.queue_depth).toBe(0);
+      });
+    });
+
+    it('未読メッセージ数が queue_depth に反映される', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      // alice → bob に 2 通送信
+      sendMessage(db, 'default', { to: '@bob', message: 'hello 1' }, '@alice');
+      sendMessage(db, 'default', { to: '@bob', message: 'hello 2' }, '@alice');
+      // bob → alice に 1 通送信
+      sendMessage(db, 'default', { to: '@alice', message: 'hi' }, '@bob');
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const byName = Object.fromEntries(
+        entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+      );
+
+      expect(byName['@bob'].queue_depth).toBe(2);
+      expect(byName['@alice'].queue_depth).toBe(1);
+    });
+
+    it('既読にすると queue_depth が減る', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      const msg1 = sendMessage(db, 'default', { to: '@bob', message: 'msg1' }, '@alice');
+      const msg2 = sendMessage(db, 'default', { to: '@bob', message: 'msg2' }, '@alice');
+
+      // bob が msg1 を既読にする
+      markAsRead(db, 'default', msg1.id, '@bob');
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const byName = Object.fromEntries(
+        entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+      );
+
+      // msg2 のみ未読
+      expect(byName['@bob'].queue_depth).toBe(1);
+      // alice に未読なし
+      expect(byName['@alice'].queue_depth).toBe(0);
+    });
+
+    it('全既読後は queue_depth が 0 になる', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      const msg = sendMessage(db, 'default', { to: '@bob', message: 'only msg' }, '@alice');
+      markAsRead(db, 'default', msg.id, '@bob');
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const bob = entries.find((e: any) => e.name === '@bob');
+
+      expect(bob.queue_depth).toBe(0);
+    });
+
+    it('team entry には queue_depth が含まれない', async () => {
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+      createTeam(db, 'default', { name: 'team-alpha', members: ['bob'] }, 'alice');
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const teams = entries.filter((e: any) => e.type === 'team');
+
+      teams.forEach((t: any) => {
+        expect(t).not.toHaveProperty('queue_depth');
+      });
+    });
+
+    it('cross-tenant: 別テナントのメッセージが queue_depth に混入しない (S1)', async () => {
+      // tenant-a を作成し alice に bob からメッセージを送信
+      db.prepare("INSERT INTO tenants (domain, owner) VALUES (?, ?)").run('tenant-a', 'alice');
+      registerParticipant(db, 'tenant-a', { name: 'alice' });
+      registerParticipant(db, 'tenant-a', { name: 'bob' });
+      sendMessage(db, 'tenant-a', { to: '@alice', message: 'secret' }, '@bob');
+
+      // tenant-b を作成し同名 alice を登録（メッセージなし）
+      db.prepare("INSERT INTO tenants (domain, owner) VALUES (?, ?)").run('tenant-b', 'alice');
+      registerParticipant(db, 'tenant-b', { name: 'alice' });
+
+      // tenant-b の alice の queue_depth は 0 であること
+      const result = await handleGetParticipants(scopeToTenant(db, 'tenant-b'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const alice = entries.find((e: any) => e.name === '@alice');
+
+      expect(alice).toBeDefined();
+      expect(alice.queue_depth).toBe(0);
+    });
   });
 
   describe('team metadata 統合 (issue: get_participants team info)', () => {
