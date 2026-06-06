@@ -80,6 +80,10 @@ interface Session {
   // 同値時の secondary order として使う (= 「同一 user の中で最も最近 created な session」 を
   // 「現用 instance」 と推定)。
   createdAt: number;
+  // POST /mcp を受けるたびに更新。resources/subscribe を持たない SDK (Go bridge-tmux 等) が
+  // orphan eviction に誤って引っかかるのを防ぐ。
+  // → subscribedUris.size === 0 でも lastActivityAt が新しければ正常 session と判断。
+  lastActivityAt: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -809,21 +813,28 @@ export async function runOneActivePingCycle(): Promise<{
 
   // --- orphan session eviction (issue #155) ---
   //
-  // `subscribe` を送らないまま ORPHAN_IDLE_TTL_MS を超えた session を強制回収。
+  // `subscribe` を送らないまま ORPHAN_IDLE_TTL_MS を超えた「真の」orphan session を強制回収。
   //
   // root cause: bridge の kill → re-spawn 時に MCP initialize が短時間に複数発行される。
   // 各 initialize で sessions.set() される が、 subscribe に到達するのは最後の 1 session のみ。
   // 残りは subscribedUris=[] のまま残留し、 StreamableHTTP の接続が alive のため ping も
   // 成功し続ける → 上の ping フェーズでは回収されない。
   //
-  // 正常系の bridge は initialize → subscribe を数秒以内に実施するため、
+  // 正常系の TypeScript bridge は initialize → subscribe を数秒以内に実施するため、
   // 5 分 TTL は安全マージンとして十分。
+  //
+  // ただし Go SDK (bridge-tmux 等) は resources/subscribe を実装しておらず、
+  // subscribedUris.size が常に 0 のまま正常稼働する。このため条件に
+  // lastActivityAt (= POST /mcp を受けるたびに更新) を追加し、
+  // 「unsubscribed かつ最近 POST 活動もない」 session のみを orphan と判定する。
+  // bridge-tmux は 5 秒ごとに get_messages を POST するため eviction 対象外になる。
   let orphansEvicted = 0;
   const nowMs = Date.now();
   for (const [sid, session] of sessions) {
     if (
       session.subscribedUris.size === 0 &&
-      nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS
+      nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS &&
+      nowMs - session.lastActivityAt > ORPHAN_IDLE_TTL_MS
     ) {
       console.log(
         `[MCP] orphan session evicted: ${sid} ` +
@@ -1019,6 +1030,7 @@ async function reissueSessionAndDispatch(
         tenantDomain,
         subscribedUris: new Set(),
         createdAt: Date.now(),
+        lastActivityAt: Date.now(),
       });
       console.log(
         `[MCP] session reissued: ${newSid} (replaces stale ${staleSessionId}) ` +
@@ -1562,7 +1574,12 @@ export class MCPServer {
 
       try {
         if (sessionId && sessions.has(sessionId)) {
-          await sessions.get(sessionId)!.transport.handleRequest(req, res, req.body);
+          // POST /mcp が来るたびに lastActivityAt を更新。
+          // resources/subscribe を実装しない SDK (Go bridge-tmux 等) が
+          // orphan eviction で誤 evict されないようにする (issue #155 補完)。
+          const existing = sessions.get(sessionId)!;
+          existing.lastActivityAt = Date.now();
+          await existing.transport.handleRequest(req, res, req.body);
           return;
         }
 
@@ -1612,6 +1629,7 @@ export class MCPServer {
                 tenantDomain,
                 subscribedUris: new Set(),
                 createdAt: Date.now(),
+                lastActivityAt: Date.now(),
               });
               console.log(
                 `[MCP] session opened: ${sid} userId=${userId} githubLogin=${githubLogin} tenant=${tenantDomain}`
