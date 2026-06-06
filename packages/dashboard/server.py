@@ -3969,13 +3969,15 @@ def _fetch_trace(msg_id):
     GET {TELEMETRY_URL}/api/traces/{msg_id} を呼び出し span のリストを返す。
     TELEMETRY_URL 未設定、接続失敗、または 404 の場合は [] を返す。
 
-    NOTE: bridges#91 により trace_id = msg_id (UUID 形式) で emit される。
+    NOTE: otelite の trace_id は msg_id (UUID) のダッシュ除去版 (hex 32文字)。
+    bridges#91 を待たず dashboard 側で変換する。
     タイムアウトは 3 秒。例外はサイレント skip (コスト取得失敗で page をブロックしない)。
     """
     if not TELEMETRY_URL:
         return []
     try:
-        url = f"{TELEMETRY_URL.rstrip('/')}/api/traces/{msg_id}"
+        trace_id = msg_id.replace("-", "")
+        url = f"{TELEMETRY_URL.rstrip('/')}/api/traces/{trace_id}"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
