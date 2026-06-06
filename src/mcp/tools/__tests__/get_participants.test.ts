@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { initDatabase } from '../../../db/migrations.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
 import { handleGetParticipants } from '../get_participants.js';
-import { registerParticipant } from '../../../db/participants.js';
+import { registerParticipant, softDeleteParticipant } from '../../../db/participants.js';
 import { createTeam } from '../../../db/teams.js';
 import { sendMessage, markAsRead } from '../../../db/messages.js';
 
@@ -180,6 +180,56 @@ describe('get_participants ツール', () => {
       teams.forEach((t: any) => {
         expect(t).not.toHaveProperty('queue_depth');
       });
+    });
+
+    it('team 宛メッセージは個人 member の queue_depth に加算されない', async () => {
+      // 設計上の振る舞い: getQueueDepths は m.recipient でグループ化するため、
+      // team 宛メッセージは team name にカウントされる。個人 member の queue_depth
+      // には含まれない（getUnreadMessages とは異なる意味論）。
+      // この挙動を意図的なものとして文書化するテスト。
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+      registerParticipant(db, 'default', { name: 'charlie' });
+      createTeam(db, 'default', { name: 'team-alpha', members: ['bob', 'charlie'] }, 'alice');
+
+      // alice がチーム宛にメッセージを送信
+      sendMessage(db, 'default', { to: '@team-alpha', message: 'hi team' }, '@alice');
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const byName = Object.fromEntries(
+        entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+      );
+
+      // team メッセージは個人の queue_depth に加算されない
+      expect(byName['@bob'].queue_depth).toBe(0);
+      expect(byName['@charlie'].queue_depth).toBe(0);
+      // 送信者 alice も 0
+      expect(byName['@alice'].queue_depth).toBe(0);
+    });
+
+    it('soft-delete 済み参加者は get_participants の返却一覧に現れない', async () => {
+      // soft-delete された参加者は getParticipants() の対象外なので
+      // queue_depth の計算結果があっても出力に混入しないことを確認。
+      registerParticipant(db, 'default', { name: 'alice' });
+      registerParticipant(db, 'default', { name: 'bob' });
+
+      // bob → alice に未読メッセージを送信
+      sendMessage(db, 'default', { to: '@alice', message: 'hello' }, '@bob');
+
+      // alice を soft-delete
+      softDeleteParticipant(db, 'default', '@alice');
+
+      const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const persons = entries.filter((e: any) => e.type === 'person');
+
+      // soft-delete 済み alice は一覧に現れない
+      expect(persons.map((p: any) => p.name)).not.toContain('@alice');
+      // bob のみ残る（queue_depth は 0: alice からのメッセージはない）
+      expect(persons).toHaveLength(1);
+      expect(persons[0].name).toBe('@bob');
+      expect(persons[0].queue_depth).toBe(0);
     });
 
     it('cross-tenant: 別テナントのメッセージが queue_depth に混入しない (S1)', async () => {
