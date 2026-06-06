@@ -341,3 +341,66 @@ class TestClaudeClassifier:
             result = clf.classify([])
             assert result == "done"
             mock_client.messages.create.assert_not_called()
+
+    def test_raises_if_no_model_configured(self):
+        """ANTHROPIC_MODEL 未設定かつ model= 引数なしで RuntimeError (C1 fail-fast)。"""
+        import os
+        with patch("classifier.anthropic"):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("ANTHROPIC_MODEL", None)
+                with pytest.raises(RuntimeError, match="ANTHROPIC_MODEL must be set"):
+                    ClaudeClassifier()
+
+
+# ------------------------------------------------------------------
+# Monitor._alerted_pairs テスト (C2: 重複アラート抑制)
+# ------------------------------------------------------------------
+
+class TestMonitorAlertedPairs:
+    def test_duplicate_critical_does_not_resend_alert(self):
+        """同一ペアが 2 サイクル連続 critical でも send_message は 1 回のみ。"""
+        participants = [{"name": "@alice", "type": "person"}]
+        history_map = {"@alice": [_make_message("1", "@alice", "@bob", "bad")]}
+        client = _make_mock_client(participants, history_map)
+        monitor = Monitor(
+            client=client,
+            classifier=MockClassifier("critical"),
+            alert_target="@ope-ultp1635",
+        )
+        monitor.poll_once()  # 1 回目: アラート送信 → _alerted_pairs に追加
+        monitor.poll_once()  # 2 回目: 同一ペア → スキップ
+        assert client.send_message.call_count == 1
+
+    def test_new_pair_after_first_cycle_sends_alert(self):
+        """1 サイクル目と異なるペアが 2 サイクル目に critical になればアラートを送る。"""
+        participants = [
+            {"name": "@alice", "type": "person"},
+            {"name": "@charlie", "type": "person"},
+        ]
+        history_map_cycle1 = {
+            "@alice": [_make_message("1", "@alice", "@bob", "bad1")],
+            "@charlie": [],
+        }
+        history_map_cycle2 = {
+            "@alice": [_make_message("1", "@alice", "@bob", "bad1")],
+            "@charlie": [_make_message("2", "@charlie", "@dave", "bad2")],
+        }
+        client = MagicMock()
+        client.user = "local-llm-monitor"
+        client.get_participants.return_value = participants
+        client.get_user_history.side_effect = (
+            lambda name, limit=100: history_map_cycle1.get(name, [])
+        )
+        client.send_message.return_value = {"id": "x"}
+
+        monitor = Monitor(client=client, classifier=MockClassifier("critical"))
+        monitor.poll_once()  # alice-bob critical → alerted
+
+        # 2 サイクル目: charlie-dave が新たに critical
+        client.get_user_history.side_effect = (
+            lambda name, limit=100: history_map_cycle2.get(name, [])
+        )
+        monitor.poll_once()
+
+        # alice-bob は skip、charlie-dave は新規送信 → 計 2 回
+        assert client.send_message.call_count == 2
