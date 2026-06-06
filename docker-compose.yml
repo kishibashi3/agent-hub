@@ -91,7 +91,7 @@ services:
     environment:
       # Gemini Live API 認証 (必須)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash-live-001}
+      GEMINI_MODEL: ${GEMINI_MODEL}
 
       # agent-hub 接続 (hub service と同一 docker network 内)
       AGENT_HUB_URL: http://agent-hub:3000/mcp
