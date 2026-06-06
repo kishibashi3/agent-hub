@@ -12,6 +12,7 @@ Unit tests for agent-hub scheduler (issue #49).
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -349,6 +350,11 @@ class TestNextFireTime:
 
 class TestCausedBy:
     """issue #221: scheduler fire 時の caused_by 伝搬テスト。"""
+
+    @pytest.fixture(autouse=True)
+    def fresh_shutdown_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """各テストに fresh な _shutdown_event を注入して並列実行時の isolation を保証する (issue #236)。"""
+        monkeypatch.setattr(sched, "_shutdown_event", threading.Event())
 
     # ----------------------------------------------------------
     # _validate_entry
