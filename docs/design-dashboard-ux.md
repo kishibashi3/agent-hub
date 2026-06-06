@@ -49,6 +49,8 @@ handle         | presence_state | queue | current_task              | last_activ
 @bridges-impl  | cold           | 1     | —                         | 30分前
 ```
 
+> **注**: `presence_state` カラムは**未実装**（別 issue で追加予定）。現在 `get_participants` が返すのは `is_online`（bool）のみ。
+
 - `presence_state`（absent/cold/warm/active）+ `queue_depth` が基礎
 - queue_depth が高い peer は「persona が too broad」のシグナル
 - **リアルタイム**: SSE push で更新
@@ -104,7 +106,7 @@ OTel spans（OTLP → Jaeger）
 
 ## 実装優先度
 
-1. **Peer Status View**: presence_state + queue_depth（issue #234）が前提
+1. **Peer Status View**: `queue_depth`（issue #234、PR #244 で実装済み ✅）が前提。`presence_state` は別 issue で実装予定（未実装）
 2. **Current Tasks View**: caused_by chain の最前線抽出ロジック
 3. **Health View リアルタイム化**: OTel 統合（issue #195）
 4. **SHS Phase 3**: RBDI + 統合スコア（Phase 2 の次）
