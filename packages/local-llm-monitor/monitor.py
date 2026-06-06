@@ -67,6 +67,8 @@ class Monitor:
         self.alert_target = alert_target
         self.history_limit = history_limit
         self.poll_interval_s = poll_interval_s
+        # critical アラートを送信済みのペアを記録 — サイクル間で持続させて重複送信を防ぐ
+        self._alerted_pairs: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # コアロジック
@@ -121,9 +123,13 @@ class Monitor:
             entry = {"pair": pair, "message_count": len(msgs)}
             results[status].append(entry)
 
-        # 5) critical 検出時にアラート送信
+        # 5) critical 検出時にアラート送信 (送信済みペアはスキップ)
         for conv in results["critical"]:
-            pair_str = " ↔ ".join(conv["pair"])
+            pair: tuple[str, str] = conv["pair"]
+            if pair in self._alerted_pairs:
+                logger.debug("skipping duplicate alert for already-alerted pair %s", pair)
+                continue
+            pair_str = " ↔ ".join(pair)
             alert_msg = (
                 f"🚨 [local-llm-monitor] CRITICAL thread detected\n"
                 f"Participants: {pair_str}\n"
@@ -132,6 +138,7 @@ class Monitor:
             )
             try:
                 self.client.send_message(self.alert_target, alert_msg)
+                self._alerted_pairs.add(pair)
                 logger.warning("CRITICAL alert sent to %s: %s", self.alert_target, pair_str)
             except Exception as exc:
                 logger.error("failed to send critical alert: %s", exc)

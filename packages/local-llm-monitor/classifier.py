@@ -120,7 +120,12 @@ class ClaudeClassifier(ClassifierInterface):
         if anthropic is None:  # pragma: no cover
             raise ImportError("anthropic package is required. Install it with: pip install anthropic")
         self._client = anthropic.Anthropic()
-        self._model = model or os.environ.get("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
+        self._model = model or os.environ.get("ANTHROPIC_MODEL")
+        if not self._model:
+            raise RuntimeError(
+                "ANTHROPIC_MODEL must be set. "
+                "Pass model= argument or set the ANTHROPIC_MODEL environment variable."
+            )
 
     def classify(self, messages: list[dict]) -> ThreadStatus:
         """メッセージ列を Claude に渡して分類する。
