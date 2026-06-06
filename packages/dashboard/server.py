@@ -2808,65 +2808,93 @@ def get_current_view_data():
             LIMIT 30
         """, (TENANT,))
     thread_rows = cur.fetchall()  # (root_id, thread_size, last_active, first_active)
+    thread_root_ids = [row[0] for row in thread_rows]
 
+    # ── N+1 解消: thread root IDs を IN クエリ 3 本でバッチ取得 ─────────────────
+    # (旧実装: ループ内で最大 90 クエリ / リクエスト → reviewer C1 指摘により修正)
+
+    # (a) Root message body — step 4 の root_body_map に未収録分を追加フェッチ
+    missing_roots = [rid for rid in thread_root_ids if rid not in root_body_map]
+    if missing_roots:
+        placeholders = ",".join("?" * len(missing_roots))
+        if TENANT is None:
+            cur.execute(
+                f"SELECT id, body FROM messages WHERE id IN ({placeholders})",
+                missing_roots,
+            )
+        else:
+            cur.execute(
+                f"SELECT id, body FROM messages WHERE tenant_id = ? AND id IN ({placeholders})",
+                [TENANT] + missing_roots,
+            )
+        for msg_id, body in cur.fetchall():
+            root_body_map[msg_id] = body
+
+    # (b) Participants per thread — DISTINCT sender/recipient IN 1 クエリ
+    thread_participants_map = {rid: set() for rid in thread_root_ids}
+    if thread_root_ids:
+        placeholders = ",".join("?" * len(thread_root_ids))
+        if TENANT is None:
+            cur.execute(
+                f"""
+                SELECT DISTINCT mc.root_message_id, m.sender, m.recipient
+                FROM message_causes mc
+                JOIN messages m ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id IN ({placeholders})
+                """,
+                thread_root_ids,
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT DISTINCT mc.root_message_id, m.sender, m.recipient
+                FROM message_causes mc
+                JOIN messages m ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id IN ({placeholders}) AND mc.tenant_id = ?
+                """,
+                thread_root_ids + [TENANT],
+            )
+        for rid, sender, recipient in cur.fetchall():
+            if rid in thread_participants_map:
+                thread_participants_map[rid].add(sender)
+                thread_participants_map[rid].add(recipient)
+
+    # (c) Last recipient per thread — ORDER BY created_at DESC, Python 側で先頭を採用
+    thread_last_recipient_map = {}
+    if thread_root_ids:
+        placeholders = ",".join("?" * len(thread_root_ids))
+        if TENANT is None:
+            cur.execute(
+                f"""
+                SELECT mc.root_message_id, m.recipient
+                FROM message_causes mc
+                JOIN messages m ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id IN ({placeholders})
+                ORDER BY mc.root_message_id, m.created_at DESC
+                """,
+                thread_root_ids,
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT mc.root_message_id, m.recipient
+                FROM message_causes mc
+                JOIN messages m ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id IN ({placeholders}) AND mc.tenant_id = ?
+                ORDER BY mc.root_message_id, m.created_at DESC
+                """,
+                thread_root_ids + [TENANT],
+            )
+        for rid, recipient in cur.fetchall():
+            if rid not in thread_last_recipient_map:  # 先頭 = DESC 最新
+                thread_last_recipient_map[rid] = recipient
+
+    # ── Loop: 事前取得済みの dict を参照するのみ (クエリなし) ─────────────────────
     stuck_threshold_h = 2  # 2 時間更新なし → 詰まり検出
     tasks = []
     for root_id, thread_size, last_active, first_active in thread_rows:
-        # Participants in this thread (sender + recipient 両方)
-        if TENANT is None:
-            cur.execute("""
-                SELECT DISTINCT m.sender, m.recipient
-                FROM message_causes mc
-                JOIN messages m
-                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
-                WHERE mc.root_message_id = ?
-            """, (root_id,))
-        else:
-            cur.execute("""
-                SELECT DISTINCT m.sender, m.recipient
-                FROM message_causes mc
-                JOIN messages m
-                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
-                WHERE mc.root_message_id = ? AND mc.tenant_id = ?
-            """, (root_id, TENANT))
-        participants_in_thread = set()
-        for sender, recipient in cur.fetchall():
-            participants_in_thread.add(sender)
-            participants_in_thread.add(recipient)
-
-        # Last recipient = 最後にメッセージを受け取ったエージェント (= 現在 ball-in-court)
-        if TENANT is None:
-            cur.execute("""
-                SELECT m.recipient
-                FROM message_causes mc
-                JOIN messages m
-                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
-                WHERE mc.root_message_id = ?
-                ORDER BY m.created_at DESC LIMIT 1
-            """, (root_id,))
-        else:
-            cur.execute("""
-                SELECT m.recipient
-                FROM message_causes mc
-                JOIN messages m
-                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
-                WHERE mc.root_message_id = ? AND mc.tenant_id = ?
-                ORDER BY m.created_at DESC LIMIT 1
-            """, (root_id, TENANT))
-        row = cur.fetchone()
-        last_recipient = row[0] if row else "—"
-
-        # Root message body (root_body_map に既にある場合はそちらを使用)
-        if root_id not in root_body_map:
-            if TENANT is None:
-                cur.execute("SELECT body FROM messages WHERE id = ?", (root_id,))
-            else:
-                cur.execute(
-                    "SELECT body FROM messages WHERE id = ? AND tenant_id = ?",
-                    (root_id, TENANT),
-                )
-            rb = cur.fetchone()
-            root_body_map[root_id] = rb[0] if rb else ""
+        participants_in_thread = thread_participants_map.get(root_id, set())
+        last_recipient = thread_last_recipient_map.get(root_id, "—")
         root_body = root_body_map.get(root_id, "")
 
         # 詰まり検出 (issue #255 設計: N 時間以上同じ状態 → ハイライト)
@@ -3006,7 +3034,7 @@ def render_current_view():
                 stuck_h = t["stuck_hours"]
                 stuck_marker = (
                     f"<span style='color:#f78166;margin-right:4px' "
-                    f"title='{stuck_h}時間 更新なし'>"
+                    f"title='{esc_attr(str(stuck_h))}時間 更新なし'>"
                     f"⚠ {round(stuck_h)}h</span>"
                 )
             root_url = esc_attr(f"/?view=causaltree&thread={t['root_id']}")
