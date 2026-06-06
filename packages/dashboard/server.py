@@ -2639,12 +2639,44 @@ def compute_mor_from_db():
 # Current View (issue #255): Peer Status View + Current Tasks View
 # ============================================================
 
+def _parse_ts(ts_str):
+    """タイムスタンプ文字列を UTC-aware datetime に正規化する。
+
+    サーバーが emit する 2 種類のフォーマットを透過的に処理する:
+    - SQLite strftime: 'YYYY-MM-DD HH:MM:SS.mmm' または 'YYYY-MM-DDTHH:MM:SS.mmm' (naive UTC)
+    - TypeScript toISOString / RFC 3339: 'YYYY-MM-DDTHH:MM:SS.mmmZ' (UTC)
+
+    戻り値は常に timezone.utc を持つ aware datetime。
+    datetime.now(timezone.utc) との差分計算で TypeError が発生しない。
+    None または空文字列は None を返す。
+
+    設計根拠: issue #259 (ecosystem-wide datetime format 統一)
+    """
+    if not ts_str:
+        return None
+    s = ts_str.strip()
+    if s.endswith("Z"):
+        # RFC 3339: '...Z' → strip Z して UTC-aware に
+        return datetime.fromisoformat(s[:-1]).replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        # SQLite naive UTC → UTC-aware に昇格
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _fmt_relative(now, ts_str):
-    """ISO timestamp → 相対時刻文字列 (例: '今', '3分前', '2時間前', '1日前')。"""
+    """ISO timestamp → 相対時刻文字列 (例: '今', '3分前', '2時間前', '1日前')。
+
+    now は datetime.now(timezone.utc) (UTC-aware) を渡すこと。
+    ts_str は _parse_ts() で正規化するため naive/RFC3339 どちらでも可。
+    """
     if not ts_str:
         return "—"
     try:
-        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        ts = _parse_ts(ts_str)
+        if ts is None:
+            return "—"
         diff = now - ts
         s = int(diff.total_seconds())
         if s < 60:
@@ -2671,7 +2703,9 @@ def _compute_presence_state(now, last_active_at):
     if not last_active_at:
         return "absent"
     try:
-        la = datetime.fromisoformat(last_active_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        la = _parse_ts(last_active_at)
+        if la is None:
+            return "absent"
         age_min = (now - la).total_seconds() / 60
         if age_min <= 2:
             return "active"
@@ -2697,7 +2731,7 @@ def get_current_view_data():
     """
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
 
     # ── 1. All non-deleted participants ─────────────────────────────────────
     if TENANT is None:
@@ -2902,9 +2936,10 @@ def get_current_view_data():
         stuck_hours = 0.0
         if last_active:
             try:
-                la = datetime.fromisoformat(last_active.replace("Z", "+00:00"))
-                stuck_hours = (now - la).total_seconds() / 3600
-                is_stuck = stuck_hours > stuck_threshold_h
+                la = _parse_ts(last_active)
+                if la is not None:
+                    stuck_hours = (now - la).total_seconds() / 3600
+                    is_stuck = stuck_hours > stuck_threshold_h
             except (ValueError, TypeError):
                 pass
 
