@@ -644,14 +644,16 @@ export function inboxUriFor(name: string): string {
  *
  * spec (= issue #91):
  * - 30 秒ごとに全 session に ping
- * - 5 秒以内 pong なし → timeout
+ * - PING_TIMEOUT_MS 以内に pong なし → timeout
  * - timeout → retry 2 回 (= 計 3 attempts) → 全 fail なら disconnect
  *
  * 数字は protocol level の MCP ping (= SDK 内蔵)、 round-trip latency を見ているので
- * 5 秒 timeout は通常応答 << 1 秒に対して充分 conservative。
+ * 通常応答 << 1 秒に対して充分 conservative。
+ * PING_TIMEOUT_MS は元々 5_000 だったが、voice-gateway 等の重量クライアントが
+ * 低速環境で誤 timeout を起こす問題 (issue #240) を受けて 10_000 に緩和した。
  */
 const PING_INTERVAL_MS = 30_000;
-const PING_TIMEOUT_MS = 5_000;
+const PING_TIMEOUT_MS = 10_000; // issue #240: 5_000 → 10_000 (voice-gateway 等低速環境の誤検知緩和)
 const PING_MAX_RETRIES = 2;
 
 /**
@@ -667,6 +669,29 @@ const PING_MAX_RETRIES = 2;
 const ORPHAN_IDLE_TTL_MS = 5 * 60_000;
 
 /**
+ * SSE keepalive コメント送出間隔 (issue #240)。
+ *
+ * GET /mcp ストリームに本間隔で `: keepalive\n\n` を書き込み、
+ * HTTP プロキシ (fly.io 等) の idle timeout をリセットする。
+ * SSE comment はクライアントが無視するため MCP プロトコルへの影響なし。
+ */
+export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
+
+/**
+ * SSE レスポンスに keepalive コメントを書き込む (issue #240)。
+ *
+ * `res.writableEnded` が true の場合は書き込みをスキップする (接続クローズ race 対策)。
+ */
+export function writeSseKeepalive(res: {
+  writableEnded: boolean;
+  write: (chunk: string) => boolean;
+}): void {
+  if (!res.writableEnded) {
+    res.write(': keepalive\n\n');
+  }
+}
+
+/**
  * Feature flag: `AGENT_HUB_MCP_PING_LOOP_DISABLED` env が set されていれば active ping loop 無効化
  * (= rollback safety + 既存 SSE-only presence に倒す)。
  *
@@ -677,6 +702,11 @@ const ORPHAN_IDLE_TTL_MS = 5 * 60_000;
 export function isPingLoopDisabled(): boolean {
   return process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== undefined &&
     process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== '';
+}
+
+/** PING_TIMEOUT_MS の現在値を返す (テスト・ログ参照用)。issue #240 */
+export function getPingTimeoutMs(): number {
+  return PING_TIMEOUT_MS;
 }
 
 /**
@@ -1646,6 +1676,16 @@ export class MCPServer {
       // fly.io プロキシの request timeout を無効化して SSE 長時間接続を維持する。
       // ref: https://fly.io/docs/networking/request-headers/#fly-timeout-kill-after
       res.setHeader('Fly-Timeout-Kill-After', '0');
+      // SSE keepalive: 15s 周期で `: keepalive\n\n` を送出し proxy idle timeout を防ぐ (issue #240)。
+      // transport.handleRequest が SSE ヘッダーを送信したあとに動作するため、
+      // 最初の送出は 15 秒後 = ヘッダーは確実に送信済み。
+      const keepaliveTimer = setInterval(() => {
+        writeSseKeepalive(res);
+      }, SSE_KEEPALIVE_INTERVAL_MS);
+      // 接続クローズ時に即時停止 (handleRequest resolve より先に close される場合がある)。
+      // finally 節でも clearInterval を呼ぶが、clearInterval は clear 済み ID への呼び出しが
+      // no-op のため二重 clear は安全・意図的 (= idempotent)。
+      req.on('close', () => clearInterval(keepaliveTimer));
       try {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);
       } catch (error) {
@@ -1679,6 +1719,9 @@ export class MCPServer {
             id: null,
           });
         }
+      } finally {
+        // catch で throw しない場合も含め確実に interval を停止する
+        clearInterval(keepaliveTimer);
       }
     });
 
