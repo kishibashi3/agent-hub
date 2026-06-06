@@ -46,6 +46,8 @@ export interface TenantScope {
   getHistory(input: GetHistoryInput, requester: string): Message[];
   getThread(input: GetThreadInput, requester: string): { rootId: string; threadSize: number; messages: Message[] };
   markAsRead(messageId: string, reader: string): { read: true };
+  /** 全参加者の未読メッセージ数をバッチ取得 (issue #234) */
+  getQueueDepths(): Map<string, number>;
 
   // teams
   createTeam(input: CreateTeamInput, requester: string): Team;
@@ -95,6 +97,7 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
       M.getThread(db, tenantId, input, requester),
     markAsRead: (messageId, reader) =>
       M.markAsRead(db, tenantId, messageId, reader),
+    getQueueDepths: () => M.getQueueDepths(db, tenantId),
 
     // teams
     createTeam: (input, requester) => T.createTeam(db, tenantId, input, requester),
