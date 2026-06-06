@@ -29,6 +29,9 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 ## 設計判断 / Decisions (ADR)
 
 - [decisions/2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — ADR-001: Peer-Mesh Architecture with Transparent Asymmetry (scope: ecosystem, Adopted)
+- [decisions/2026-05-18-caused-by-design.md](./decisions/2026-05-18-caused-by-design.md) — ADR-002: caused_by 因果チェーン追跡設計 (scope: agent-hub, Accepted)
+- [decisions/2026-05-18-sse-transport.md](./decisions/2026-05-18-sse-transport.md) — ADR-003: MCP トランスポートに Streamable HTTP (SSE) を選択 (scope: agent-hub, Accepted)
+- [decisions/2026-05-18-tenant-isolation.md](./decisions/2026-05-18-tenant-isolation.md) — ADR-004: マルチテナント分離設計 (scope: agent-hub, Accepted)
 - [decisions/2026-05-31-bridge-claude-otlp-span.md](./decisions/2026-05-31-bridge-claude-otlp-span.md) — ADR-005: bridge-claude OTLP span emit (observability #1) (scope: ecosystem, Adopted)
 - [decisions/2026-06-06-bridge-memory-interface.md](./decisions/2026-06-06-bridge-memory-interface.md) — ADR: Bridge Memory Interface — context persistence across sessions (scope: bridges, Proposed)
 
