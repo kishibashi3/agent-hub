@@ -143,11 +143,15 @@ describe('orphan session eviction (issue #155)', () => {
    * mock session を作る。
    * - `server.ping()` は常に resolve (= ping フェーズでは回収されない)
    * - `transport.close()` は vi.fn() で副作用なし
+   * - lastActivityAt は ageMs と同じ (= session 作成以来 POST なし) がデフォルト。
+   *   Go bridge (bridge-tmux 等) のシミュレートには lastActivityAtMs を小さく渡す。
    */
   function makeMockSession(opts: {
     subscribedUris?: string[];
     ageMs: number;
+    lastActivityAtMs?: number; // デフォルト: ageMs と同じ (最後の活動も session 作成時)
   }) {
+    const activityAge = opts.lastActivityAtMs ?? opts.ageMs;
     return {
       transport: { close: vi.fn().mockResolvedValue(undefined) },
       server: { ping: vi.fn().mockResolvedValue(undefined) },
@@ -156,6 +160,7 @@ describe('orphan session eviction (issue #155)', () => {
       tenantDomain: 'default',
       subscribedUris: new Set(opts.subscribedUris ?? []),
       createdAt: Date.now() - opts.ageMs,
+      lastActivityAt: Date.now() - activityAge,
     };
   }
 
@@ -200,5 +205,44 @@ describe('orphan session eviction (issue #155)', () => {
   it('runOneActivePingCycle の返り値に orphansEvicted フィールドが含まれる', async () => {
     const stats = await runOneActivePingCycle();
     expect(typeof stats.orphansEvicted).toBe('number');
+  });
+
+  // --- lastActivityAt 補完 (issue #155 + bridge-tmux 5min 切断 fix) ---
+  //
+  // Go bridge (bridge-tmux) は resources/subscribe を実装しないため subscribedUris が常に空。
+  // lastActivityAt (= POST /mcp のたびに更新) が新しければ正常 session と判断し eviction しない。
+
+  it('TTL 超え + unsubscribed でも lastActivityAt が新しければ evict しない (= active Go bridge)', async () => {
+    // bridge-tmux は 5s ごとに get_messages を POST → lastActivityAt は常に新鮮
+    _addSessionForTesting('active-go-bridge', makeMockSession({
+      ageMs: SIX_MIN_MS,
+      lastActivityAtMs: THIRTY_SEC_MS, // 30 秒前に最後のアクティビティ
+    }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(0);
+  });
+
+  it('TTL 超え + unsubscribed + lastActivityAt も古い → evicted (= 真の zombie orphan)', async () => {
+    // 真の orphan: re-spawn レース由来 → 誰も POST しない → lastActivityAt も古い
+    _addSessionForTesting('true-zombie', makeMockSession({
+      ageMs: SIX_MIN_MS,
+      lastActivityAtMs: SIX_MIN_MS, // 6 分前に最後のアクティビティ (= session 作成以来 POST なし)
+    }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(1);
+  });
+
+  it('active Go bridge + zombie orphan が混在 → zombie のみ evict', async () => {
+    _addSessionForTesting('go-bridge', makeMockSession({
+      ageMs: SIX_MIN_MS,
+      lastActivityAtMs: THIRTY_SEC_MS, // 最近活動あり
+    }));
+    _addSessionForTesting('zombie', makeMockSession({
+      ageMs: SIX_MIN_MS,
+      lastActivityAtMs: SIX_MIN_MS, // 活動なし
+    }));
+    const stats = await runOneActivePingCycle();
+    expect(stats.orphansEvicted).toBe(1);
+    expect(stats.total).toBe(2);
   });
 });
