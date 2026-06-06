@@ -137,7 +137,7 @@ describe('get_participants ツール', () => {
       registerParticipant(db, 'default', { name: 'bob' });
 
       const msg1 = sendMessage(db, 'default', { to: '@bob', message: 'msg1' }, '@alice');
-      const msg2 = sendMessage(db, 'default', { to: '@bob', message: 'msg2' }, '@alice');
+      sendMessage(db, 'default', { to: '@bob', message: 'msg2' }, '@alice');
 
       // bob が msg1 を既読にする
       markAsRead(db, 'default', msg1.id, '@bob');

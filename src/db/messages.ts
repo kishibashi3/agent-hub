@@ -491,9 +491,10 @@ export function markAsRead(
  * 送信者 != 受信者 の条件は sendMessage が自分宛を禁止しているため冗長だが
  * 防御的に保持する。
  *
- * **スコープ**: recipient が個人名 (person) のメッセージのみをカウントする。
- * チーム宛メッセージ (recipient = @team-xxx) は各メンバーの queue_depth には
- * 含まれない。チーム宛未読は getUnreadMessages() で取得すること。
+ * **スコープ**: SQL は全 recipient をカウントするため、返却 Map には @team-xxx キーが
+ * 含まれうる。呼び出し側 (get_participants ハンドラ等) が type==='person' フィルタで
+ * チーム宛エントリを自然に除外する設計。チーム宛未読を直接取得したい場合は
+ * getUnreadMessages() を使うこと。
  *
  * @returns Map<participantName, queueDepth>。
  *          未読 0 の参加者はエントリを持たない (呼び出し側で ?? 0 を使うこと)。
@@ -504,7 +505,7 @@ export function getQueueDepths(
 ): Map<string, number> {
   const rows = db
     .prepare(
-      `SELECT m.recipient AS participant_name, COUNT(*) AS depth
+      `SELECT m.recipient AS participant_name, COUNT(m.id) AS depth
        FROM messages m
        LEFT JOIN read_receipts rr
          ON m.tenant_id = rr.tenant_id
