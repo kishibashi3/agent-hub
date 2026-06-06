@@ -1,7 +1,8 @@
 # Dashboard UX 設計ドキュメント（draft）
 
 > **作成**: 2026-06-06 / @ope-ultp1635  
-> **ステータス**: Draft — agent-hub-impl によるレビュー・リファクタ待ち
+> **ステータス**: Draft — agent-hub-impl によるレビュー・リファクタ待ち  
+> **現在のダッシュボード**: http://192.168.3.45:5000 (Pi5 LAN 内)
 
 ---
 
