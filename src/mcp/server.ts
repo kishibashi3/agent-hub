@@ -644,14 +644,16 @@ export function inboxUriFor(name: string): string {
  *
  * spec (= issue #91):
  * - 30 秒ごとに全 session に ping
- * - 5 秒以内 pong なし → timeout
+ * - PING_TIMEOUT_MS 以内に pong なし → timeout
  * - timeout → retry 2 回 (= 計 3 attempts) → 全 fail なら disconnect
  *
  * 数字は protocol level の MCP ping (= SDK 内蔵)、 round-trip latency を見ているので
- * 5 秒 timeout は通常応答 << 1 秒に対して充分 conservative。
+ * 通常応答 << 1 秒に対して充分 conservative。
+ * PING_TIMEOUT_MS は元々 5_000 だったが、voice-gateway 等の重量クライアントが
+ * 低速環境で誤 timeout を起こす問題 (issue #240) を受けて 10_000 に緩和した。
  */
 const PING_INTERVAL_MS = 30_000;
-const PING_TIMEOUT_MS = 10_000; // issue #240: 5_000 → 10_000 に緩和
+const PING_TIMEOUT_MS = 10_000; // issue #240: 5_000 → 10_000 (voice-gateway 等低速環境の誤検知緩和)
 const PING_MAX_RETRIES = 2;
 
 /**
@@ -1680,7 +1682,9 @@ export class MCPServer {
       const keepaliveTimer = setInterval(() => {
         writeSseKeepalive(res);
       }, SSE_KEEPALIVE_INTERVAL_MS);
-      // 接続クローズ時に即時停止 (handleRequest resolve より先に close される場合がある)
+      // 接続クローズ時に即時停止 (handleRequest resolve より先に close される場合がある)。
+      // finally 節でも clearInterval を呼ぶが、clearInterval は clear 済み ID への呼び出しが
+      // no-op のため二重 clear は安全・意図的 (= idempotent)。
       req.on('close', () => clearInterval(keepaliveTimer));
       try {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);
