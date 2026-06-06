@@ -1684,7 +1684,7 @@ def ensure_thread_status_table() -> bool:
                 root_message_id TEXT NOT NULL,
                 tenant_id       TEXT NOT NULL DEFAULT 'default',
                 status          TEXT NOT NULL,
-                updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+                updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 updated_by      TEXT,
                 note            TEXT,
                 PRIMARY KEY (root_message_id, tenant_id)
@@ -1793,7 +1793,7 @@ def set_thread_status(root_id, tenant_id, status, note=None, updated_by=None):
         con.execute(
             """
             INSERT INTO dashboard_thread_status (root_message_id, tenant_id, status, updated_at, note, updated_by)
-            VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?, ?)
+            VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)
             ON CONFLICT (root_message_id, tenant_id) DO UPDATE SET
                 status     = excluded.status,
                 updated_at = excluded.updated_at,
@@ -2640,7 +2640,12 @@ def compute_mor_from_db():
 # ============================================================
 
 def _fmt_relative(now, ts_str):
-    """ISO timestamp → 相対時刻文字列 (例: '今', '3分前', '2時間前', '1日前')。"""
+    """RFC 3339+Z timestamp → 相対時刻文字列 (例: '今', '3分前', '2時間前', '1日前')。
+
+    now は datetime.now(timezone.utc) (UTC-aware) を渡すこと。
+    ts_str は RFC 3339+Z フォーマット ('YYYY-MM-DDTHH:MM:SS.mmmZ') を想定。
+    設計根拠: issue #259 (ecosystem-wide datetime format 統一、migration v12)
+    """
     if not ts_str:
         return "—"
     try:
@@ -2671,7 +2676,7 @@ def _compute_presence_state(now, last_active_at):
     if not last_active_at:
         return "absent"
     try:
-        la = datetime.fromisoformat(last_active_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        la = datetime.fromisoformat(last_active_at.replace("Z", "+00:00"))
         age_min = (now - la).total_seconds() / 60
         if age_min <= 2:
             return "active"
@@ -2697,7 +2702,7 @@ def get_current_view_data():
     """
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
 
     # ── 1. All non-deleted participants ─────────────────────────────────────
     if TENANT is None:

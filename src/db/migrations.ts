@@ -140,7 +140,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 11;
+  const targetVersion = 12;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
@@ -409,6 +409,153 @@ export function applyMigrations(db: Database.Database): void {
         WHERE root_message_id IS NULL AND position = 0;
         INSERT INTO schema_version (version, description)
         VALUES (11, 'add root_message_id to message_causes for O(1) thread search (issue #166)');
+      `,
+    });
+  }
+
+  // v11 → v12: timestamp format を RFC 3339 / ISO 8601+Z に統一 (issue #259)
+  // SQLite strftime DEFAULT を '%Y-%m-%d %H:%M:%f' から '%Y-%m-%dT%H:%M:%fZ' に変更。
+  // 既存レコードを naive UTC → RFC3339+Z へバックフィルしてから各テーブルを再構築。
+  // TypeScript new Date().toISOString() は既に RFC3339+Z 形式のため変更不要。
+  if (currentVersion < 12) {
+    runMigration(db, {
+      version: 12,
+      description: 'unify timestamp format to RFC 3339 / ISO 8601+Z (issue #259)',
+      sql: `
+        PRAGMA foreign_keys = OFF;
+
+        -- ── 1. 既存レコードを RFC 3339+Z へバックフィル ─────────────────────
+        -- 'YYYY-MM-DD HH:MM:SS.mmm' (space, no T, no Z) → add T
+        UPDATE tenants SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
+          WHERE created_at NOT LIKE '%T%';
+        UPDATE tenants SET created_at = created_at || 'Z'
+          WHERE created_at NOT LIKE '%Z';
+
+        UPDATE participants SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
+          WHERE created_at NOT LIKE '%T%';
+        UPDATE participants SET created_at = created_at || 'Z'
+          WHERE created_at NOT LIKE '%Z';
+        UPDATE participants SET last_active_at = substr(last_active_at, 1, 10) || 'T' || substr(last_active_at, 12)
+          WHERE last_active_at IS NOT NULL AND last_active_at NOT LIKE '%T%';
+        UPDATE participants SET last_active_at = last_active_at || 'Z'
+          WHERE last_active_at IS NOT NULL AND last_active_at NOT LIKE '%Z';
+        UPDATE participants SET deleted_at = substr(deleted_at, 1, 10) || 'T' || substr(deleted_at, 12)
+          WHERE deleted_at IS NOT NULL AND deleted_at NOT LIKE '%T%';
+        UPDATE participants SET deleted_at = deleted_at || 'Z'
+          WHERE deleted_at IS NOT NULL AND deleted_at NOT LIKE '%Z';
+
+        UPDATE teams SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
+          WHERE created_at NOT LIKE '%T%';
+        UPDATE teams SET created_at = created_at || 'Z'
+          WHERE created_at NOT LIKE '%Z';
+
+        UPDATE team_members SET joined_at = substr(joined_at, 1, 10) || 'T' || substr(joined_at, 12)
+          WHERE joined_at NOT LIKE '%T%';
+        UPDATE team_members SET joined_at = joined_at || 'Z'
+          WHERE joined_at NOT LIKE '%Z';
+
+        UPDATE messages SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
+          WHERE created_at NOT LIKE '%T%';
+        UPDATE messages SET created_at = created_at || 'Z'
+          WHERE created_at NOT LIKE '%Z';
+
+        UPDATE read_receipts SET read_at = substr(read_at, 1, 10) || 'T' || substr(read_at, 12)
+          WHERE read_at NOT LIKE '%T%';
+        UPDATE read_receipts SET read_at = read_at || 'Z'
+          WHERE read_at NOT LIKE '%Z';
+
+        -- ── 2. テーブル再構築 (DEFAULT 変更のため) ───────────────────────────
+        -- tenants
+        CREATE TABLE tenants_new (
+          domain TEXT PRIMARY KEY,
+          owner TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        INSERT INTO tenants_new SELECT * FROM tenants;
+        DROP TABLE tenants;
+        ALTER TABLE tenants_new RENAME TO tenants;
+
+        -- participants
+        CREATE TABLE participants_new (
+          tenant_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          display_name TEXT,
+          owner TEXT,
+          mode TEXT,
+          deleted_at TEXT,
+          last_active_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          PRIMARY KEY (tenant_id, name)
+        );
+        INSERT INTO participants_new SELECT * FROM participants;
+        DROP TABLE participants;
+        ALTER TABLE participants_new RENAME TO participants;
+
+        -- teams
+        CREATE TABLE teams_new (
+          tenant_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          owner TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          PRIMARY KEY (tenant_id, name),
+          FOREIGN KEY (tenant_id, owner) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO teams_new SELECT * FROM teams;
+        DROP TABLE teams;
+        ALTER TABLE teams_new RENAME TO teams;
+
+        -- team_members
+        CREATE TABLE team_members_new (
+          tenant_id TEXT NOT NULL,
+          team_name TEXT NOT NULL,
+          member_name TEXT NOT NULL,
+          joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          PRIMARY KEY (tenant_id, team_name, member_name),
+          FOREIGN KEY (tenant_id, team_name) REFERENCES teams(tenant_id, name) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id, member_name) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO team_members_new SELECT * FROM team_members;
+        DROP TABLE team_members;
+        ALTER TABLE team_members_new RENAME TO team_members;
+        CREATE INDEX idx_team_members_member ON team_members(tenant_id, member_name);
+
+        -- messages
+        CREATE TABLE messages_new (
+          tenant_id TEXT NOT NULL,
+          id TEXT NOT NULL,
+          sender TEXT NOT NULL,
+          recipient TEXT NOT NULL,
+          body TEXT NOT NULL,
+          sender_login TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          PRIMARY KEY (tenant_id, id),
+          FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO messages_new SELECT * FROM messages;
+        DROP TABLE messages;
+        ALTER TABLE messages_new RENAME TO messages;
+        CREATE INDEX idx_messages_recipient ON messages(tenant_id, recipient);
+        CREATE INDEX idx_messages_sender ON messages(tenant_id, sender);
+        CREATE INDEX idx_messages_created_at ON messages(tenant_id, created_at);
+
+        -- read_receipts
+        CREATE TABLE read_receipts_new (
+          tenant_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          reader TEXT NOT NULL,
+          read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          PRIMARY KEY (tenant_id, message_id, reader),
+          FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
+          FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
+        );
+        INSERT INTO read_receipts_new SELECT * FROM read_receipts;
+        DROP TABLE read_receipts;
+        ALTER TABLE read_receipts_new RENAME TO read_receipts;
+
+        PRAGMA foreign_keys = ON;
+
+        INSERT INTO schema_version (version, description)
+        VALUES (12, 'unify timestamp format to RFC 3339 / ISO 8601+Z (issue #259)');
       `,
     });
   }
