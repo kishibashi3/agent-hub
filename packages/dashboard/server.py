@@ -1502,6 +1502,7 @@ def render_nav_bar(current_view, agent_handle=None):
         ("links",      "Link List",     "/?view=links"),
         ("health",     "🔥 Health",     "/?view=health"),
         ("causaltree", "📎 Causal Tree","/?view=causaltree"),
+        ("current",    "⚡ Now",        "/?view=current"),
     ]
     # Drill-down group (= 個別 handle 観察 view)
     # XSS fix (= PR #104 review Critical 1、 2026-05-20): agent_handle は URL query
@@ -2632,6 +2633,432 @@ def compute_mor_from_db():
         "balance_score":     balance_score,
         "top_meta_senders":  top_meta_senders,
     }
+
+
+# ============================================================
+# Current View (issue #255): Peer Status View + Current Tasks View
+# ============================================================
+
+def _fmt_relative(now, ts_str):
+    """ISO timestamp → 相対時刻文字列 (例: '今', '3分前', '2時間前', '1日前')。"""
+    if not ts_str:
+        return "—"
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        diff = now - ts
+        s = int(diff.total_seconds())
+        if s < 60:
+            return "今"
+        elif s < 3600:
+            return f"{s // 60}分前"
+        elif s < 86400:
+            return f"{s // 3600}時間前"
+        else:
+            return f"{s // 86400}日前"
+    except (ValueError, TypeError):
+        return "—"
+
+
+def _compute_presence_state(now, last_active_at):
+    """last_active_at → presence_state (absent/cold/warm/active)。
+
+    設計: docs/design-dashboard-ux.md §1
+    - active: ≤ 2 分
+    - warm:   ≤ 10 分
+    - cold:   ≤ 60 分
+    - absent: > 60 分 or NULL
+    """
+    if not last_active_at:
+        return "absent"
+    try:
+        la = datetime.fromisoformat(last_active_at.replace("Z", "+00:00"))
+        age_min = (now - la).total_seconds() / 60
+        if age_min <= 2:
+            return "active"
+        elif age_min <= 10:
+            return "warm"
+        elif age_min <= 60:
+            return "cold"
+        else:
+            return "absent"
+    except (ValueError, TypeError):
+        return "absent"
+
+
+def get_current_view_data():
+    """Peer Status View + Current Tasks View 用データを SQLite から取得 (issue #255)。
+
+    Returns:
+        dict with keys:
+          - peers: list of {handle, display_name, presence_state, queue_depth,
+                            current_task_id, current_task_preview, last_active_rel}
+          - tasks: list of {root_id, root_preview, thread_size, last_recipient,
+                            participants, last_active, last_active_rel, is_stuck, stuck_hours}
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    now = datetime.now(timezone.utc)
+
+    # ── 1. All non-deleted participants ─────────────────────────────────────
+    if TENANT is None:
+        cur.execute(
+            "SELECT name, display_name, last_active_at FROM participants "
+            "WHERE deleted_at IS NULL ORDER BY last_active_at DESC"
+        )
+    else:
+        cur.execute(
+            "SELECT name, display_name, last_active_at FROM participants "
+            "WHERE deleted_at IS NULL AND tenant_id = ? ORDER BY last_active_at DESC",
+            (TENANT,),
+        )
+    all_parts = cur.fetchall()  # (name, display_name, last_active_at)
+
+    # ── 2. Queue depth: unread messages per recipient ────────────────────────
+    # Unread = recipient のメッセージに read_receipts エントリが存在しない件数
+    if TENANT is None:
+        cur.execute("""
+            SELECT m.recipient, COUNT(*) AS queue_depth
+            FROM messages m
+            LEFT JOIN read_receipts rr
+                ON rr.tenant_id = m.tenant_id AND rr.message_id = m.id AND rr.reader = m.recipient
+            WHERE rr.message_id IS NULL
+            GROUP BY m.recipient
+        """)
+    else:
+        cur.execute("""
+            SELECT m.recipient, COUNT(*) AS queue_depth
+            FROM messages m
+            LEFT JOIN read_receipts rr
+                ON rr.tenant_id = m.tenant_id AND rr.message_id = m.id AND rr.reader = m.recipient
+            WHERE rr.message_id IS NULL AND m.tenant_id = ?
+            GROUP BY m.recipient
+        """, (TENANT,))
+    queue_map = {row[0]: row[1] for row in cur.fetchall()}
+
+    # ── 3. Latest received message's root_message_id per participant ─────────
+    # Issue #255 canonical query: JOIN 1本、O(1) per participant (index 済み)
+    if TENANT is None:
+        cur.execute("""
+            SELECT m.recipient, mc.root_message_id
+            FROM messages m
+            JOIN message_causes mc
+                ON mc.tenant_id = m.tenant_id AND mc.message_id = m.id
+            ORDER BY m.recipient, m.created_at DESC
+        """)
+    else:
+        cur.execute("""
+            SELECT m.recipient, mc.root_message_id
+            FROM messages m
+            JOIN message_causes mc
+                ON mc.tenant_id = m.tenant_id AND mc.message_id = m.id
+            WHERE m.tenant_id = ?
+            ORDER BY m.recipient, m.created_at DESC
+        """, (TENANT,))
+    latest_task_map = {}  # handle → root_message_id (first = latest per ORDER BY DESC)
+    for recipient, root_id in cur.fetchall():
+        if recipient not in latest_task_map:
+            latest_task_map[recipient] = root_id
+
+    # ── 4. Root message body for all unique root IDs ─────────────────────────
+    unique_roots = list(set(latest_task_map.values()))
+    root_body_map = {}
+    if unique_roots:
+        placeholders = ",".join("?" * len(unique_roots))
+        if TENANT is None:
+            cur.execute(
+                f"SELECT id, body FROM messages WHERE id IN ({placeholders})",
+                unique_roots,
+            )
+        else:
+            cur.execute(
+                f"SELECT id, body FROM messages WHERE tenant_id = ? AND id IN ({placeholders})",
+                [TENANT] + unique_roots,
+            )
+        for msg_id, body in cur.fetchall():
+            root_body_map[msg_id] = body
+
+    # ── 5. Current Tasks View: top 30 threads by last activity ──────────────
+    if TENANT is None:
+        cur.execute("""
+            SELECT
+                mc.root_message_id,
+                COUNT(*) + 1 AS thread_size,
+                MAX(m.created_at) AS last_active,
+                MIN(m.created_at) AS first_active
+            FROM message_causes mc
+            JOIN messages m
+                ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+            GROUP BY mc.root_message_id
+            ORDER BY last_active DESC
+            LIMIT 30
+        """)
+    else:
+        cur.execute("""
+            SELECT
+                mc.root_message_id,
+                COUNT(*) + 1 AS thread_size,
+                MAX(m.created_at) AS last_active,
+                MIN(m.created_at) AS first_active
+            FROM message_causes mc
+            JOIN messages m
+                ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+            WHERE mc.tenant_id = ?
+            GROUP BY mc.root_message_id
+            ORDER BY last_active DESC
+            LIMIT 30
+        """, (TENANT,))
+    thread_rows = cur.fetchall()  # (root_id, thread_size, last_active, first_active)
+
+    stuck_threshold_h = 2  # 2 時間更新なし → 詰まり検出
+    tasks = []
+    for root_id, thread_size, last_active, first_active in thread_rows:
+        # Participants in this thread (sender + recipient 両方)
+        if TENANT is None:
+            cur.execute("""
+                SELECT DISTINCT m.sender, m.recipient
+                FROM message_causes mc
+                JOIN messages m
+                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id = ?
+            """, (root_id,))
+        else:
+            cur.execute("""
+                SELECT DISTINCT m.sender, m.recipient
+                FROM message_causes mc
+                JOIN messages m
+                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id = ? AND mc.tenant_id = ?
+            """, (root_id, TENANT))
+        participants_in_thread = set()
+        for sender, recipient in cur.fetchall():
+            participants_in_thread.add(sender)
+            participants_in_thread.add(recipient)
+
+        # Last recipient = 最後にメッセージを受け取ったエージェント (= 現在 ball-in-court)
+        if TENANT is None:
+            cur.execute("""
+                SELECT m.recipient
+                FROM message_causes mc
+                JOIN messages m
+                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id = ?
+                ORDER BY m.created_at DESC LIMIT 1
+            """, (root_id,))
+        else:
+            cur.execute("""
+                SELECT m.recipient
+                FROM message_causes mc
+                JOIN messages m
+                    ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id
+                WHERE mc.root_message_id = ? AND mc.tenant_id = ?
+                ORDER BY m.created_at DESC LIMIT 1
+            """, (root_id, TENANT))
+        row = cur.fetchone()
+        last_recipient = row[0] if row else "—"
+
+        # Root message body (root_body_map に既にある場合はそちらを使用)
+        if root_id not in root_body_map:
+            if TENANT is None:
+                cur.execute("SELECT body FROM messages WHERE id = ?", (root_id,))
+            else:
+                cur.execute(
+                    "SELECT body FROM messages WHERE id = ? AND tenant_id = ?",
+                    (root_id, TENANT),
+                )
+            rb = cur.fetchone()
+            root_body_map[root_id] = rb[0] if rb else ""
+        root_body = root_body_map.get(root_id, "")
+
+        # 詰まり検出 (issue #255 設計: N 時間以上同じ状態 → ハイライト)
+        is_stuck = False
+        stuck_hours = 0.0
+        if last_active:
+            try:
+                la = datetime.fromisoformat(last_active.replace("Z", "+00:00"))
+                stuck_hours = (now - la).total_seconds() / 3600
+                is_stuck = stuck_hours > stuck_threshold_h
+            except (ValueError, TypeError):
+                pass
+
+        tasks.append({
+            "root_id": root_id,
+            "root_preview": root_body[:80] if root_body else f"[{root_id[:8]}…]",
+            "thread_size": thread_size,
+            "last_recipient": last_recipient,
+            "participants": sorted(participants_in_thread),
+            "last_active": last_active or "",
+            "last_active_rel": _fmt_relative(now, last_active),
+            "is_stuck": is_stuck,
+            "stuck_hours": round(stuck_hours, 1),
+        })
+
+    # ── 6. Compose peer list ─────────────────────────────────────────────────
+    presence_order = {"active": 0, "warm": 1, "cold": 2, "absent": 3}
+    peers = []
+    for name, display_name, last_active_at in all_parts:
+        root_id = latest_task_map.get(name)
+        root_body = root_body_map.get(root_id, "") if root_id else ""
+        if root_body and len(root_body) > 60:
+            task_preview = root_body[:60] + "…"
+        else:
+            task_preview = root_body or "—"
+
+        peers.append({
+            "handle": name,
+            "display_name": display_name or name,
+            "presence_state": _compute_presence_state(now, last_active_at),
+            "queue_depth": queue_map.get(name, 0),
+            "current_task_id": root_id,
+            "current_task_preview": task_preview,
+            "last_active_rel": _fmt_relative(now, last_active_at),
+        })
+
+    # active > warm > cold > absent の順にソート
+    peers.sort(key=lambda p: presence_order.get(p["presence_state"], 4))
+
+    con.close()
+    return {"peers": peers, "tasks": tasks}
+
+
+def render_current_view():
+    """Current View (issue #255): Peer Status + Current Tasks の body HTML を build。
+
+    - Peer Status View: エージェント軸 (誰が今何をしているか)
+      presence_state (absent/cold/warm/active) + queue_depth + current_task
+    - Current Tasks View: タスク軸
+      caused_by chain の最前線ノードを集約、詰まり検出つき
+    """
+    data = get_current_view_data()
+    peers = data["peers"]
+    tasks = data["tasks"]
+
+    # ── presence_state 色定義 ────────────────────────────────────────────────
+    presence_color = {
+        "active":  "#39d353",
+        "warm":    "#ffa657",
+        "cold":    "#8b949e",
+        "absent":  "#484f58",
+    }
+
+    # ── Peer Status テーブル ─────────────────────────────────────────────────
+    if not peers:
+        peer_table = "<p class='dim'>(参加者なし)</p>"
+    else:
+        rows_html = []
+        for p in peers:
+            state = p["presence_state"]
+            color = presence_color.get(state, "#484f58")
+            state_badge = (
+                f"<span style='font-size:11px;padding:2px 6px;border-radius:3px;"
+                f"background:var(--card-bg);color:{color};border:1px solid {color}'>"
+                f"{esc(state)}</span>"
+            )
+            q = p["queue_depth"]
+            queue_badge = (
+                f"<span style='color:#f78166;font-weight:bold'>{q}</span>"
+                if q > 0 else "<span class='dim'>0</span>"
+            )
+            task_id = p["current_task_id"]
+            task_text = esc(p["current_task_preview"])
+            if task_id:
+                task_link_url = esc_attr(f"/?view=causaltree&thread={task_id}")
+                task_cell = (
+                    f"<a href='{task_link_url}' "
+                    f"style='font-size:11px;color:var(--text2)'>{task_text}</a>"
+                )
+            else:
+                task_cell = f"<span class='dim' style='font-size:11px'>{task_text}</span>"
+
+            handle_safe = esc(p["handle"])
+            handle_attr = esc_attr(p["handle"])
+            rows_html.append(
+                f"<tr>"
+                f"<td><a href='/?agent={handle_attr}'>{handle_safe}</a></td>"
+                f"<td>{state_badge}</td>"
+                f"<td style='text-align:right'>{queue_badge}</td>"
+                f"<td style='max-width:320px;overflow:hidden;text-overflow:ellipsis;"
+                f"white-space:nowrap'>{task_cell}</td>"
+                f"<td class='dim' style='font-size:11px;white-space:nowrap'>"
+                f"{esc(p['last_active_rel'])}</td>"
+                f"</tr>"
+            )
+        peer_table = (
+            "<table class='link-list' style='max-width:100%;width:100%'>"
+            "<thead><tr>"
+            "<th>handle</th>"
+            "<th>presence</th>"
+            "<th style='text-align:right'>queue</th>"
+            "<th>current task</th>"
+            "<th>last active</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(rows_html) + "</tbody>"
+            "</table>"
+        )
+
+    # ── Current Tasks テーブル ───────────────────────────────────────────────
+    if not tasks:
+        tasks_html = "<p class='dim'>(タスクなし)</p>"
+    else:
+        task_rows_html = []
+        for t in tasks:
+            stuck_marker = ""
+            if t["is_stuck"]:
+                stuck_h = t["stuck_hours"]
+                stuck_marker = (
+                    f"<span style='color:#f78166;margin-right:4px' "
+                    f"title='{stuck_h}時間 更新なし'>"
+                    f"⚠ {round(stuck_h)}h</span>"
+                )
+            root_url = esc_attr(f"/?view=causaltree&thread={t['root_id']}")
+            short_id = esc(t["root_id"][:8]) + "…"
+            preview = esc(t["root_preview"])
+            last_recip = esc(t["last_recipient"])
+            task_rows_html.append(
+                f"<tr>"
+                f"<td style='font-family:monospace;font-size:10px;white-space:nowrap'>"
+                f"<a href='{root_url}'>{short_id}</a></td>"
+                f"<td style='max-width:300px;overflow:hidden;text-overflow:ellipsis;"
+                f"white-space:nowrap'>{stuck_marker}{preview}</td>"
+                f"<td style='text-align:right'>{t['thread_size']}</td>"
+                f"<td style='font-size:11px'>{last_recip}</td>"
+                f"<td class='dim' style='font-size:10px;white-space:nowrap'>"
+                f"{esc(t['last_active_rel'])}</td>"
+                f"</tr>"
+            )
+        stuck_count = sum(1 for t in tasks if t["is_stuck"])
+        stuck_note = (
+            f" <span style='color:#f78166'>（⚠ {stuck_count} タスクが2時間以上更新なし）</span>"
+            if stuck_count > 0 else ""
+        )
+        tasks_html = (
+            f"<p class='dim' style='margin-bottom:8px'>"
+            f"caused_by chain の最前線ノード（最大30件）{stuck_note}</p>"
+            "<table class='link-list' style='max-width:100%;width:100%'>"
+            "<thead><tr>"
+            "<th>thread</th>"
+            "<th>root message</th>"
+            "<th style='text-align:right'>size</th>"
+            "<th>last recipient</th>"
+            "<th>last active</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(task_rows_html) + "</tbody>"
+            "</table>"
+        )
+
+    return f"""<div class='view-content'>
+<h2>Current View</h2>
+<p class='dim health-note'>
+  ⚡ 今のエコシステム状態 — Peer Status（誰が何をしているか）と Current Tasks（タスク軸）。<br>
+  <code>presence_state</code>: <code>last_active_at</code> から計算（active ≤2分 / warm ≤10分 / cold ≤60分 / absent）。
+  current task: 直近受信メッセージの caused_by ルートを表示（クリックで Causal Tree へ）。
+</p>
+
+<h3 style='margin-top:20px'>Peer Status</h3>
+{peer_table}
+
+<h3 style='margin-top:28px'>Current Tasks</h3>
+{tasks_html}
+</div>"""
 
 
 def render_health():
@@ -3798,6 +4225,12 @@ class Handler(BaseHTTPRequestHandler):
                     view_body = render_ppd_detail(ppd_thread_id)
                 body = render_alt_view_layout(
                     "health", view_body, total_msgs, total_agents, total_links_for_header,
+                )
+            elif view == "current":
+                # issue #255: Current View (Peer Status + Current Tasks)
+                view_body = render_current_view()
+                body = render_alt_view_layout(
+                    "current", view_body, total_msgs, total_agents, total_links_for_header,
                 )
             elif view == "causaltree":
                 # issue #181: ?thread=<id> で詳細読みページ、なければ一覧
