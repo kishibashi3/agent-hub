@@ -1,4 +1,4 @@
--- agent-hub スキーマ v11
+-- agent-hub スキーマ v12
 -- MCP Server 用。参加者・チーム・メッセージ・既読管理 (multi-tenant)。
 -- v3: participants に owner 列を追加（PAT 認証下のハンドル所有者を記録）
 -- v4: participants に mode 列を追加（peer の worker type: stateful/stateless/global）
@@ -19,16 +19,20 @@
 --      - V2: position > 0 で DAG（複数親）に拡張可能。migration 不要。
 -- v11: message_causes に root_message_id カラム追加（O(1) スレッド検索、issue #166）
 --      - 挿入時に caused_by.root_message_id ?? caused_by で計算して保存。WITH RECURSIVE 不要。
+-- v12: timestamp format を RFC 3339 / ISO 8601+Z に統一 (issue #259)
+--      - 全テーブルの DEFAULT を strftime('%Y-%m-%dT%H:%M:%fZ', 'now') に変更
+--      - TypeScript new Date().toISOString() と同一フォーマット
+--      - 既存レコードは migration でバックフィル
 
 -- スキーマバージョン管理
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   description TEXT NOT NULL
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (11, 'agent-hub v11: add root_message_id to message_causes for O(1) thread search (issue #166)');
+VALUES (12, 'agent-hub v12: unify timestamp format to RFC 3339 / ISO 8601+Z (issue #259)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -37,7 +41,7 @@ VALUES (11, 'agent-hub v11: add root_message_id to message_causes for O(1) threa
 CREATE TABLE tenants (
   domain TEXT PRIMARY KEY,
   owner TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 -- 雑談室を pre-create
@@ -53,7 +57,7 @@ CREATE TABLE participants (
   mode TEXT,                       -- 'stateful' | 'stateless' | 'global' | NULL
   deleted_at TEXT,                 -- soft delete 時刻。NULL = active
   last_active_at TEXT,             -- v7: productive activity timestamp (= 5 tool 経由で update)。NULL = 未活動 / v7 以前 register
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (tenant_id, name)
 );
 
@@ -62,7 +66,7 @@ CREATE TABLE teams (
   tenant_id TEXT NOT NULL,
   name TEXT NOT NULL,              -- '@project-x' 形式
   owner TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (tenant_id, name),
   FOREIGN KEY (tenant_id, owner) REFERENCES participants(tenant_id, name)
 );
@@ -72,7 +76,7 @@ CREATE TABLE team_members (
   tenant_id TEXT NOT NULL,
   team_name TEXT NOT NULL,
   member_name TEXT NOT NULL,
-  joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (tenant_id, team_name, member_name),
   FOREIGN KEY (tenant_id, team_name) REFERENCES teams(tenant_id, name) ON DELETE CASCADE,
   FOREIGN KEY (tenant_id, member_name) REFERENCES participants(tenant_id, name)
@@ -89,7 +93,7 @@ CREATE TABLE messages (
   recipient TEXT NOT NULL,
   body TEXT NOT NULL,
   sender_login TEXT,               -- v8/v9: auth login (PAT owner 等、forensic audit)。NULL = migration 前の既存 row のみ
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
 );
@@ -125,7 +129,7 @@ CREATE TABLE read_receipts (
   tenant_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
   reader TEXT NOT NULL,
-  read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (tenant_id, message_id, reader),
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
   FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
