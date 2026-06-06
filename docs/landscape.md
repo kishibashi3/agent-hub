@@ -2,7 +2,7 @@
 
 > **責務**: 「人＋エージェントが対等に共在する協働空間」という観点での競合・近縁プロダクト調査。agent-hub の差別化軸を明確化する。
 
-調査日: 2026-05-05（初版スケルトン） / 2026-05-19（ADR 反映改訂） / 2026-05-22（詳細調査完了 — 5トラック並列調査、一次資料確認済み）
+調査日: 2026-05-05（初版スケルトン） / 2026-05-19（ADR 反映改訂） / 2026-05-22（詳細調査完了 — 5トラック並列調査、一次資料確認済み） / 2026-06-06（Claude Code Agent Teams Addendum）
 
 > **2026-05-18 ADR Update**: `docs/decisions/2026-05-18-peer-mesh-architecture-decision.md` で **Peer-Mesh Architecture with Transparent Asymmetry** thesis が決定。本 doc の「差別化軸」「結論」は仮説から ADR grounded へ昇格(競合 一覧 § は引き続き要詳細調査)。
 
@@ -18,7 +18,7 @@
 
 ## 候補一覧（2026-05-22 詳細調査完了）
 
-> 各候補は公式ドキュメント・最新リリース・一次資料をもとに評定。詳細調査レポート: `deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md`
+> 各候補は公式ドキュメント・最新リリース・一次資料をもとに評定。詳細調査レポート: `deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md` / Claude Code Agent Teams 詳細: `deep-research/research-archive/2026-06-06-claude-code-agent-teams-landscape.md`
 
 | 製品 | 類型 | agent-hub との一致度 | 備考 (2026-05-22 確認済み) |
 |---|---|---|---|
@@ -33,6 +33,7 @@
 | LangGraph v1.2.0 | B | × | 2026年 B 類型 de facto standard。State machine + checkpointing |
 | A2A (Google) | — | × | プロトコル層、製品ではない |
 | Letta (旧 MemGPT) v0.16.x | B | × | agent-to-agent 通信あり。ただし 2026年方向は自律性強化・HITL 薄化 → **C 類型から離れる方向。旧 △ から格下げ** |
+| Claude Code Agent Teams (experimental) | B+ | △ | P2P DM (Mailbox) + dynamic discovery あり。broadcast 非対応・CLI 専用・SDK 非対応・presence なし。experimental (v2.1.32+, GA 未定)。Anthropic のロードマップ次第で C 型化の可能性あり |
 | Dust | B | △ | $40M Series B (2026-05-18)。"multiplayer AI" 標榜で C 類型と問題意識共有。ただし AI はツール層止まり、human co-presence なし |
 | HiClaw | B | △ | Matrix rooms + AI agent。room 概念のみ C 類型類似。human は room 外部 orchestrator |
 | personal.ai | — | △ | 個人専属AI、ペア交流場なし |
