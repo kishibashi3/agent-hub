@@ -2671,7 +2671,7 @@ def _compute_presence_state(now, last_active_at):
     if not last_active_at:
         return "absent"
     try:
-        la = datetime.fromisoformat(last_active_at.replace("Z", "+00:00"))
+        la = datetime.fromisoformat(last_active_at.replace("Z", "+00:00")).replace(tzinfo=None)
         age_min = (now - la).total_seconds() / 60
         if age_min <= 2:
             return "active"
@@ -2697,7 +2697,7 @@ def get_current_view_data():
     """
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # ── 1. All non-deleted participants ─────────────────────────────────────
     if TENANT is None:
