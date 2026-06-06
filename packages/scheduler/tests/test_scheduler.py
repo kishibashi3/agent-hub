@@ -542,3 +542,78 @@ class TestCausedBy:
         # fired_args[0] = fire to @planner, fired_args[1] = [OK] reply to sender
         assert fired_args[0]["to"] == "@planner"
         assert fired_args[0]["caused_by"] == "run-cmd-msg-id"
+
+    # ----------------------------------------------------------
+    # main loop fire パス (issue #228)
+    # ----------------------------------------------------------
+
+    def _run_main_with_entry(self, tmp_path: Path, entry: dict) -> list:
+        """
+        指定 entry を 1 件持つ config で main() を起動し、
+        send_dm の呼び出し引数リストを返す。
+
+        main loop が entry を fire した直後に _shutdown_event を set して
+        main() を終了させる。
+        """
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text(json.dumps([entry]), encoding="utf-8")
+
+        fired_args: list = []
+        sched._shutdown_event.clear()
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            fired_args.append({"to": to, "message": message, "caused_by": caused_by})
+            sched._shutdown_event.set()
+            return {}
+
+        try:
+            with patch.object(sched, "build_headers", return_value={}), \
+                 patch.object(sched, "resolve_user_id", return_value="@test-user"), \
+                 patch.object(sched, "init_session", return_value="test-sess"), \
+                 patch.object(sched, "send_dm", side_effect=fake_send_dm), \
+                 patch.object(sched, "save_schedules"), \
+                 patch("threading.Thread"), \
+                 patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
+                sched.main()
+        finally:
+            sched._shutdown_event.clear()
+
+        return fired_args
+
+    def test_main_loop_fire_passes_caused_by(self, tmp_path: Path) -> None:
+        """main loop: caused_by 設定済み one-shot entry fire → send_dm に caused_by が渡される。"""
+        past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+        entry = {
+            "name": "test-fire-cb",
+            "run_at": past,
+            "to": "@planner",
+            "message": "scheduled-hello",
+            "owner": "@ope",
+            "one_shot": True,
+            "caused_by": "orig-msg-id-xyz",
+        }
+
+        fired_args = self._run_main_with_entry(tmp_path, entry)
+
+        assert len(fired_args) == 1
+        assert fired_args[0]["to"] == "@planner"
+        assert fired_args[0]["caused_by"] == "orig-msg-id-xyz"
+
+    def test_main_loop_fire_no_caused_by_when_absent(self, tmp_path: Path) -> None:
+        """main loop: caused_by なし one-shot entry fire → send_dm に caused_by=None が渡される。"""
+        past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+        entry = {
+            "name": "test-fire-no-cb",
+            "run_at": past,
+            "to": "@planner",
+            "message": "scheduled-hello",
+            "owner": "@ope",
+            "one_shot": True,
+            # caused_by なし
+        }
+
+        fired_args = self._run_main_with_entry(tmp_path, entry)
+
+        assert len(fired_args) == 1
+        assert fired_args[0]["to"] == "@planner"
+        assert fired_args[0]["caused_by"] is None
