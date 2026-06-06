@@ -140,7 +140,7 @@ export function applyMigrations(db: Database.Database): void {
   console.log(`[Migration] Current database version: ${currentVersion}`);
 
   // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 11;
+  const targetVersion = 12;
 
   if (currentVersion >= targetVersion) {
     console.log('[Migration] Database is up to date');
