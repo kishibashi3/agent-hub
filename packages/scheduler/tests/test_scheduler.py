@@ -572,17 +572,14 @@ class TestCausedBy:
             sched._shutdown_event.set()
             return {}
 
-        try:
-            with patch.object(sched, "build_headers", return_value={}), \
-                 patch.object(sched, "resolve_user_id", return_value="@test-user"), \
-                 patch.object(sched, "init_session", return_value="test-sess"), \
-                 patch.object(sched, "send_dm", side_effect=fake_send_dm), \
-                 patch.object(sched, "save_schedules"), \
-                 patch("threading.Thread"), \
-                 patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
-                sched.main()
-        finally:
-            sched._shutdown_event.clear()
+        with patch.object(sched, "build_headers", return_value={}), \
+             patch.object(sched, "resolve_user_id", return_value="@test-user"), \
+             patch.object(sched, "init_session", return_value="test-sess"), \
+             patch.object(sched, "send_dm", side_effect=fake_send_dm), \
+             patch.object(sched, "save_schedules"), \
+             patch("threading.Thread"), \
+             patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
+            sched.main()
 
         return fired_args
 
