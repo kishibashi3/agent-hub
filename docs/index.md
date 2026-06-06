@@ -24,11 +24,13 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [design-ephemeral-flag.md](./design-ephemeral-flag.md) — `send_message` への `ephemeral` flag 追加設計 (#29、 read-once-and-gone DM for secret delivery)
 - [design-plugin-auto-reconnect.md](./design-plugin-auto-reconnect.md) — server-side stateless session reissuance 設計 (#68、 server restart 後の Claude Code session 維持 + 全 bridge 透過対応)
 - [command-message-convention.md](./command-message-convention.md) — `/<cmd>` prefix convention (#92、 SDK built-in `/ping`/`/pong`/`/unknown` + peer 実装 + scheduler `/` 移行 breaking change 方針)
+- [design-dashboard-ux.md](./design-dashboard-ux.md) — Dashboard UX 設計 (#246、 Peer Status View / Message Flow View の mockup + 実装 priority)
 
 ## 設計判断 / Decisions (ADR)
 
 - [decisions/2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — ADR-001: Peer-Mesh Architecture with Transparent Asymmetry (scope: ecosystem, Adopted)
 - [decisions/2026-05-31-bridge-claude-otlp-span.md](./decisions/2026-05-31-bridge-claude-otlp-span.md) — ADR-005: bridge-claude OTLP span emit (observability #1) (scope: ecosystem, Adopted)
+- [decisions/2026-06-06-bridge-memory-interface.md](./decisions/2026-06-06-bridge-memory-interface.md) — ADR: Bridge Memory Interface — context persistence across sessions (scope: bridges, Proposed)
 
 新規 ADR の書き方: [decisions/README.md](./decisions/README.md)
 

@@ -135,7 +135,8 @@ agent-hub には LLM API bridge 以外にも、直接 GitHub repo に住む peer
 - **multi-tenant** (CE のみ): 1 deployment が複数 tenant を抱える。`X-Tenant-Id` header で識別。1 tenant = 1 GitHub user 所有 (= 1 PAT)、未指定なら `default` tenant (= 雑談室)。PE では tenant 概念なし (= default 1 つだけ)
 - **DB**: SQLite (better-sqlite3) でメッセージ・参加者・チーム・既読を永続化、全テーブル tenant_id で隔離
 - **inbox subscribe**: MCP resource subscription で push 通知
-- **presence (depth A)**: `get_participants` の `is_online` で「自分の inbox を subscribe 中 = push 受信可能」な participant を一覧から識別できる (tenant 内で集計)
+- **presence (depth A)**: `get_participants` の `is_online` + `last_active_at` で「subscribe 中で active か」「subscribe 中だが idle か」を識別できる。`queue_depth` (= 未読メッセージ数) は on-demand spawn トリガー判断等に利用できる (tenant 内で集計)
+- **SSE keepalive**: 15 秒間隔の `: keepalive` コメントで fly.io 等のプロキシ idle timeout をリセット。MCP ping-pong (30 秒間隔、10 秒 timeout) により zombie session を自動回収
 
 詳しくは [`docs/decisions/2026-05-18-peer-mesh-architecture-decision.md`](docs/decisions/2026-05-18-peer-mesh-architecture-decision.md) を参照。
 
