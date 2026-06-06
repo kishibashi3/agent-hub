@@ -86,6 +86,16 @@ function parseSqlStatements(sql: string): string[] {
 /**
  * 単一のマイグレーションを実行
  * トランザクション内で実行し、失敗時は自動ロールバック
+ *
+ * ### PRAGMA foreign_keys の扱いについて
+ * SQLite の仕様: PRAGMA foreign_keys は **トランザクション内では no-op**。
+ * (https://www.sqlite.org/foreignkeys.html)
+ * db.transaction() が BEGIN を発行した後に PRAGMA foreign_keys = OFF を実行しても
+ * 設定は変わらず、FK 制約が ON のままテーブル再構築の INSERT が走る。
+ *
+ * 対策: migration SQL 内の `PRAGMA foreign_keys = OFF/ON` 文を抽出し、
+ * トランザクション開始前/後に db.pragma() で実行する。
+ * トランザクション内の SQL リストからは除外する。
  */
 export function runMigration(
   db: Database.Database,
@@ -95,12 +105,24 @@ export function runMigration(
     `[Migration] Applying version ${migration.version}: ${migration.description}`
   );
 
+  // SQL ステートメントを解析
+  const allStatements = parseSqlStatements(migration.sql);
+
+  // PRAGMA foreign_keys 文をトランザクション外で実行するために分離
+  const fkPragmaRe = /^pragma\s+foreign_keys\s*=/i;
+  const fkOffRe = /^pragma\s+foreign_keys\s*=\s*off/i;
+
+  const sqlStatements = allStatements.filter(stmt => !fkPragmaRe.test(stmt.trim()));
+  const needsFkOff = allStatements.some(stmt => fkOffRe.test(stmt.trim()));
+
+  // PRAGMA foreign_keys = OFF はトランザクション開始前に実行する必要がある
+  if (needsFkOff) {
+    db.pragma('foreign_keys = OFF');
+  }
+
   // トランザクション開始
   const transaction = db.transaction(() => {
-    // SQLステートメントを解析して実行
-    const statements = parseSqlStatements(migration.sql);
-
-    for (const statement of statements) {
+    for (const statement of sqlStatements) {
       try {
         db.prepare(statement).run();
       } catch (error) {
@@ -110,9 +132,6 @@ export function runMigration(
       }
     }
 
-    // マイグレーション記録を更新
-    // schema_version テーブルが既に存在する前提
-    // （初回マイグレーションでテーブル作成とINSERTが含まれている）
     console.log(
       `[Migration] Version ${migration.version} applied successfully`
     );
@@ -126,6 +145,11 @@ export function runMigration(
       error
     );
     throw error;
+  } finally {
+    // FK を必ず ON に戻す（成功・失敗どちらでも）
+    if (needsFkOff) {
+      db.pragma('foreign_keys = ON');
+    }
   }
 }
 
