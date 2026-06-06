@@ -14,7 +14,7 @@
     AGENT_HUB_GITHUB_PAT   PAT auth mode の場合
     AGENT_HUB_TENANT       テナント名 (optional)
     ANTHROPIC_API_KEY      Claude classifier 使用時 (required)
-    ANTHROPIC_MODEL        使用モデル (default: claude-3-haiku-20240307)
+    ANTHROPIC_MODEL        使用モデル (required)
     MONITOR_POLL_INTERVAL  ポーリング間隔 秒 (default: 60)
     MONITOR_ALERT_TARGET   アラート送信先 handle (default: @ope-ultp1635)
     MONITOR_HISTORY_LIMIT  参加者ごとの取得履歴件数 (default: 100)

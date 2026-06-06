@@ -106,7 +106,7 @@ class ClaudeClassifier(ClassifierInterface):
 
     環境変数:
         ANTHROPIC_API_KEY  (required)
-        ANTHROPIC_MODEL    使用モデル (default: claude-3-haiku-20240307)
+        ANTHROPIC_MODEL    使用モデル (required)
 
     使用例::
 
