@@ -426,11 +426,16 @@ export function applyMigrations(db: Database.Database): void {
 
         -- ── 1. 既存レコードを RFC 3339+Z へバックフィル ─────────────────────
         -- 'YYYY-MM-DD HH:MM:SS.mmm' (space, no T, no Z) → add T
+        -- NULL ハンドリング: NULL は NOT LIKE でスキップされるため先に埋める
+        UPDATE tenants SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE created_at IS NULL;
         UPDATE tenants SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
           WHERE created_at NOT LIKE '%T%';
         UPDATE tenants SET created_at = created_at || 'Z'
           WHERE created_at NOT LIKE '%Z';
 
+        UPDATE participants SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE created_at IS NULL;
         UPDATE participants SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
           WHERE created_at NOT LIKE '%T%';
         UPDATE participants SET created_at = created_at || 'Z'
@@ -444,21 +449,29 @@ export function applyMigrations(db: Database.Database): void {
         UPDATE participants SET deleted_at = deleted_at || 'Z'
           WHERE deleted_at IS NOT NULL AND deleted_at NOT LIKE '%Z';
 
+        UPDATE teams SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE created_at IS NULL;
         UPDATE teams SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
           WHERE created_at NOT LIKE '%T%';
         UPDATE teams SET created_at = created_at || 'Z'
           WHERE created_at NOT LIKE '%Z';
 
+        UPDATE team_members SET joined_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE joined_at IS NULL;
         UPDATE team_members SET joined_at = substr(joined_at, 1, 10) || 'T' || substr(joined_at, 12)
           WHERE joined_at NOT LIKE '%T%';
         UPDATE team_members SET joined_at = joined_at || 'Z'
           WHERE joined_at NOT LIKE '%Z';
 
+        UPDATE messages SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE created_at IS NULL;
         UPDATE messages SET created_at = substr(created_at, 1, 10) || 'T' || substr(created_at, 12)
           WHERE created_at NOT LIKE '%T%';
         UPDATE messages SET created_at = created_at || 'Z'
           WHERE created_at NOT LIKE '%Z';
 
+        UPDATE read_receipts SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE read_at IS NULL;
         UPDATE read_receipts SET read_at = substr(read_at, 1, 10) || 'T' || substr(read_at, 12)
           WHERE read_at NOT LIKE '%T%';
         UPDATE read_receipts SET read_at = read_at || 'Z'
@@ -487,7 +500,10 @@ export function applyMigrations(db: Database.Database): void {
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
           PRIMARY KEY (tenant_id, name)
         );
-        INSERT INTO participants_new SELECT * FROM participants;
+        -- SELECT * は列順依存で誤マッピングが起きるため明示的に列を指定する
+        -- (last_active_at が ALTER TABLE ADD で末尾追加されており new table と順序が異なる)
+        INSERT INTO participants_new (tenant_id, name, display_name, owner, mode, deleted_at, last_active_at, created_at)
+          SELECT tenant_id, name, display_name, owner, mode, deleted_at, last_active_at, created_at FROM participants;
         DROP TABLE participants;
         ALTER TABLE participants_new RENAME TO participants;
 
@@ -531,7 +547,10 @@ export function applyMigrations(db: Database.Database): void {
           PRIMARY KEY (tenant_id, id),
           FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
         );
-        INSERT INTO messages_new SELECT * FROM messages;
+        -- SELECT * は列順依存で誤マッピングが起きるため明示的に列を指定する
+        -- (sender_login が ALTER TABLE ADD で末尾追加されており new table と順序が異なる)
+        INSERT INTO messages_new (tenant_id, id, sender, recipient, body, sender_login, created_at)
+          SELECT tenant_id, id, sender, recipient, body, sender_login, created_at FROM messages;
         DROP TABLE messages;
         ALTER TABLE messages_new RENAME TO messages;
         CREATE INDEX idx_messages_recipient ON messages(tenant_id, recipient);
