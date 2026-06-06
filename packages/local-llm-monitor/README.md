@@ -41,7 +41,7 @@ export AGENT_HUB_GITHUB_PAT="ghp_..."               # PAT auth の場合
 export AGENT_HUB_TENANT=""                           # テナント名 (optional)
 
 export ANTHROPIC_API_KEY="sk-ant-..."               # required (ClaudeClassifier)
-export ANTHROPIC_MODEL="claude-3-haiku-20240307"    # default
+export ANTHROPIC_MODEL="claude-3-haiku-20240307"    # required
 
 export MONITOR_POLL_INTERVAL=60                     # ポーリング間隔 秒 (default: 60)
 export MONITOR_ALERT_TARGET="@ope-ultp1635"         # アラート送信先 (default)
@@ -80,7 +80,7 @@ cd packages/local-llm-monitor
 uv run --with pytest --with pytest-mock --with requests --with anthropic pytest tests/ -v
 ```
 
-全 22 テスト、ネットワーク・LLM API 不要で動作します。
+全 25 テスト、ネットワーク・LLM API 不要で動作します。
 
 ## ファイル構成
 
@@ -93,7 +93,7 @@ packages/local-llm-monitor/
 ├── requirements-dev.txt # 開発・テスト依存
 └── tests/
     ├── __init__.py
-    └── test_monitor.py  # 単体テスト (22 tests)
+    └── test_monitor.py  # 単体テスト (25 tests)
 ```
 
 ## 将来の拡張
