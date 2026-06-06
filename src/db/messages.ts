@@ -491,6 +491,10 @@ export function markAsRead(
  * 送信者 != 受信者 の条件は sendMessage が自分宛を禁止しているため冗長だが
  * 防御的に保持する。
  *
+ * **スコープ**: recipient が個人名 (person) のメッセージのみをカウントする。
+ * チーム宛メッセージ (recipient = @team-xxx) は各メンバーの queue_depth には
+ * 含まれない。チーム宛未読は getUnreadMessages() で取得すること。
+ *
  * @returns Map<participantName, queueDepth>。
  *          未読 0 の参加者はエントリを持たない (呼び出し側で ?? 0 を使うこと)。
  */

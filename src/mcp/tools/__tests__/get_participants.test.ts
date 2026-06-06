@@ -181,6 +181,26 @@ describe('get_participants ツール', () => {
         expect(t).not.toHaveProperty('queue_depth');
       });
     });
+
+    it('cross-tenant: 別テナントのメッセージが queue_depth に混入しない (S1)', async () => {
+      // tenant-a を作成し alice に bob からメッセージを送信
+      db.prepare("INSERT INTO tenants (domain, owner) VALUES (?, ?)").run('tenant-a', 'alice');
+      registerParticipant(db, 'tenant-a', { name: 'alice' });
+      registerParticipant(db, 'tenant-a', { name: 'bob' });
+      sendMessage(db, 'tenant-a', { to: '@alice', message: 'secret' }, '@bob');
+
+      // tenant-b を作成し同名 alice を登録（メッセージなし）
+      db.prepare("INSERT INTO tenants (domain, owner) VALUES (?, ?)").run('tenant-b', 'alice');
+      registerParticipant(db, 'tenant-b', { name: 'alice' });
+
+      // tenant-b の alice の queue_depth は 0 であること
+      const result = await handleGetParticipants(scopeToTenant(db, 'tenant-b'), {}, 'system');
+      const entries = JSON.parse(result.content[0].text);
+      const alice = entries.find((e: any) => e.name === '@alice');
+
+      expect(alice).toBeDefined();
+      expect(alice.queue_depth).toBe(0);
+    });
   });
 
   describe('team metadata 統合 (issue: get_participants team info)', () => {
