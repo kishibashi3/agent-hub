@@ -1,0 +1,22 @@
+# livekit.yaml — LiveKit server configuration (stub)
+#
+# @voice-impl 復帰後に正式設定に差し替えてください。
+# 詳細: https://docs.livekit.io/home/self-hosting/configuration/
+#
+# 注意事項:
+#   - LAN 環境: use_external_ip: false (デフォルト)
+#   - インターネット公開時: use_external_ip: true に変更し、
+#     api_key / api_secret を強い値に差し替えること
+
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  # LAN 内のみ使用する場合は false。公開する場合は true に変更。
+  use_external_ip: false
+
+keys:
+  # TODO: @voice-impl と共有の api_key / api_secret に差し替える
+  # 現在値はプレースホルダ (development 用)
+  devkey: secret
