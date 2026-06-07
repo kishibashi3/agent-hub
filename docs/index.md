@@ -34,6 +34,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [decisions/2026-05-18-tenant-isolation.md](./decisions/2026-05-18-tenant-isolation.md) — ADR-004: マルチテナント分離設計 (scope: agent-hub, Accepted)
 - [decisions/2026-05-31-bridge-claude-otlp-span.md](./decisions/2026-05-31-bridge-claude-otlp-span.md) — ADR-005: bridge-claude OTLP span emit (observability #1) (scope: ecosystem, Adopted)
 - [decisions/2026-06-06-bridge-memory-interface.md](./decisions/2026-06-06-bridge-memory-interface.md) — ADR: Bridge Memory Interface — context persistence across sessions (scope: bridges, Proposed)
+- [decisions/2026-06-07-global-mode-wildcard-subscription.md](./decisions/2026-06-07-global-mode-wildcard-subscription.md) — ADR-006: `mode: "global"` による tenant-level wildcard subscription 権限設計 (scope: agent-hub, Proposed)
 
 新規 ADR の書き方: [decisions/README.md](./decisions/README.md)
 

@@ -33,7 +33,7 @@ YYYY-MM-DD-<slug>.md
 
 - frontmatter の `**Number**: ADR-NNN` で管理
 - 新しい ADR を追加する前に `docs/decisions/` の最新番号を確認して +1 する
-- 現在の最新: **ADR-004** (`2026-05-18-tenant-isolation.md`)
+- 現在の最新: **ADR-006** (`2026-06-07-global-mode-wildcard-subscription.md`)
 
 ---
 
@@ -121,3 +121,4 @@ YYYY-MM-DD-<slug>.md
 | ADR-003 | [2026-05-18-sse-transport.md](./2026-05-18-sse-transport.md) | MCP トランスポートに Streamable HTTP (SSE) を選択 | Accepted | agent-hub |
 | ADR-004 | [2026-05-18-tenant-isolation.md](./2026-05-18-tenant-isolation.md) | マルチテナント分離設計 | Accepted | agent-hub |
 | ADR-005 | [2026-05-31-bridge-claude-otlp-span.md](./2026-05-31-bridge-claude-otlp-span.md) | bridge-claude OTLP span emit (observability #1) | Adopted | ecosystem |
+| ADR-006 | [2026-06-07-global-mode-wildcard-subscription.md](./2026-06-07-global-mode-wildcard-subscription.md) | `mode: "global"` による tenant-level wildcard subscription 権限設計 | Proposed | agent-hub |
