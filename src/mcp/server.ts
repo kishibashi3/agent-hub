@@ -1791,7 +1791,9 @@ export class MCPServer {
     startActivePingLoop();
 
     return new Promise((resolve) => {
-      this.app.listen(this.port, '0.0.0.0', () => {
+      // httpServer を捕捉して TCP keepalive / timeout を設定する (issue #269)。
+      // this.app.listen() の戻り値は http.Server。
+      const httpServer = this.app.listen(this.port, '0.0.0.0', () => {
         const cfg = activeEditionConfig!;
         const org = process.env.AGENT_HUB_GITHUB_ORG;
         console.log(`🚀 agent-hub MCP Server listening on http://0.0.0.0:${this.port}`);
@@ -1812,6 +1814,29 @@ export class MCPServer {
           }
         }
         resolve();
+      });
+
+      // TCP keepalive 設定 (issue #269):
+      //
+      // MCP HTTP Streamable Transport は POST (client→server) と GET/SSE (server→client) で
+      // 別々の TCP 接続を使う。GET/SSE は SSE_KEEPALIVE_INTERVAL_MS (15s) の application-level
+      // keepalive でカバー済みだが、POST 用 TCP persistent connection は tool call 間が idle になり
+      // NAT entry (一般的なデフォルト: 30 分 = 1800s) が expire → RST が発生していた。
+      //
+      // socket.setKeepAlive(true, 60_000):
+      //   OS レベルの TCP keepalive probe を 60 秒ごとに送出し NAT タイマーをリセット。
+      //   application-level keepalive との二重保護となる。
+      //
+      // keepAliveTimeout = 620_000 (620s):
+      //   サーバー側が idle な HTTP keep-alive 接続を閉じるまでの待機時間。
+      //   Node.js デフォルト 5s は NAT timeout (1800s) より短く不整合が生じるため延長。
+      //
+      // headersTimeout = 630_000 (630s):
+      //   Node.js 仕様で headersTimeout > keepAliveTimeout が必須。
+      httpServer.keepAliveTimeout = 620_000;
+      httpServer.headersTimeout = 630_000;
+      httpServer.on('connection', (socket) => {
+        socket.setKeepAlive(true, 60_000);
       });
     });
   }
