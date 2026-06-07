@@ -392,4 +392,153 @@ describe('migration v11 → v12 (issue #259: RFC 3339+Z timestamp unification)',
       .all(12) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
+
+  it('FK 不整合データが存在しても migration v12 が成功する (PRAGMA foreign_keys = OFF が transaction 外で有効になることの確認)', () => {
+    // 再現シナリオ: production DB に FK 不整合データ（sender が participants に存在しない
+    // message など）があった場合、PRAGMA foreign_keys = OFF が no-op だと
+    // migration の INSERT INTO messages_new SELECT ... FROM messages が
+    // FK 制約違反で失敗する。
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = OFF');
+
+    // v11 スキーマを FK なしで作成（不整合データを挿入するため）
+    db.exec(`
+      CREATE TABLE schema_version (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        description TEXT NOT NULL
+      );
+      CREATE TABLE tenants (
+        domain TEXT PRIMARY KEY,
+        owner TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+      );
+      CREATE TABLE participants (
+        tenant_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        display_name TEXT,
+        owner TEXT,
+        mode TEXT,
+        deleted_at TEXT,
+        last_active_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        PRIMARY KEY (tenant_id, name)
+      );
+      CREATE TABLE teams (
+        tenant_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        PRIMARY KEY (tenant_id, name),
+        FOREIGN KEY (tenant_id, owner) REFERENCES participants(tenant_id, name)
+      );
+      CREATE TABLE team_members (
+        tenant_id TEXT NOT NULL,
+        team_name TEXT NOT NULL,
+        member_name TEXT NOT NULL,
+        joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        PRIMARY KEY (tenant_id, team_name, member_name),
+        FOREIGN KEY (tenant_id, team_name) REFERENCES teams(tenant_id, name) ON DELETE CASCADE,
+        FOREIGN KEY (tenant_id, member_name) REFERENCES participants(tenant_id, name)
+      );
+      CREATE INDEX idx_team_members_member ON team_members(tenant_id, member_name);
+      CREATE TABLE messages (
+        tenant_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        recipient TEXT NOT NULL,
+        body TEXT NOT NULL,
+        sender_login TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        PRIMARY KEY (tenant_id, id),
+        FOREIGN KEY (tenant_id, sender) REFERENCES participants(tenant_id, name)
+      );
+      CREATE INDEX idx_messages_recipient ON messages(tenant_id, recipient);
+      CREATE INDEX idx_messages_sender ON messages(tenant_id, sender);
+      CREATE INDEX idx_messages_created_at ON messages(tenant_id, created_at);
+      CREATE TABLE read_receipts (
+        tenant_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        reader TEXT NOT NULL,
+        read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        PRIMARY KEY (tenant_id, message_id, reader),
+        FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
+        FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
+      );
+      CREATE TABLE message_causes (
+        tenant_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        caused_by_id TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        root_message_id TEXT,
+        PRIMARY KEY (tenant_id, message_id, caused_by_id),
+        FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id)
+      );
+      CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
+      CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
+    `);
+    // schema_version を v11 まで埋める
+    for (const v of [6, 7, 8, 9, 10, 11]) {
+      db.prepare(
+        `INSERT INTO schema_version (version, description) VALUES (?, ?)`
+      ).run(v, `v${v} fixture`);
+    }
+
+    // 正常データ
+    db.prepare(`INSERT INTO tenants (domain) VALUES (?)`).run('default');
+    db.prepare(
+      `INSERT INTO participants (tenant_id, name) VALUES (?, ?)`
+    ).run('default', '@alice');
+    db.prepare(
+      `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
+    ).run('default', 'msg-root', '@alice', '@alice', 'root');
+    db.prepare(
+      `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
+    ).run('default', 'msg-reply', '@alice', '@alice', 'reply');
+    db.prepare(
+      `INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position, root_message_id) VALUES (?, ?, ?, ?, ?)`
+    ).run('default', 'msg-reply', 'msg-root', 0, 'msg-root');
+    db.prepare(
+      `INSERT INTO read_receipts (tenant_id, message_id, reader) VALUES (?, ?, ?)`
+    ).run('default', 'msg-root', '@alice');
+
+    // FK 不整合データ: sender が participants に存在しない message
+    // (過去の bug や直接 DB 操作で生じた孤立レコードを模倣)
+    db.prepare(
+      `INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)`
+    ).run('default', 'msg-orphan', '@deleted-bot', '@alice', 'orphan message');
+
+    expect(getCurrentVersion(db)).toBe(11);
+
+    // FK を ON に戻してから migration を実行（本番環境の initDatabase と同じ状態）
+    db.pragma('foreign_keys = ON');
+
+    // PRAGMA foreign_keys = OFF が transaction 外で有効になる修正により、
+    // FK 不整合データがあっても migration が成功することを確認。
+    // (修正前: INSERT INTO messages_new SELECT ... FROM messages で FK 制約違反が発生)
+    expect(() => applyMigrations(db)).not.toThrow();
+    expect(getCurrentVersion(db)).toBe(12);
+
+    // message_causes データが保持されている
+    const cause = db
+      .prepare(
+        `SELECT * FROM message_causes WHERE tenant_id = ? AND message_id = ?`
+      )
+      .get('default', 'msg-reply') as {
+        message_id: string;
+        caused_by_id: string;
+        root_message_id: string;
+      } | undefined;
+    expect(cause).toBeDefined();
+    expect(cause?.caused_by_id).toBe('msg-root');
+    expect(cause?.root_message_id).toBe('msg-root');
+
+    // FK 不整合レコード (msg-orphan) も保持されている（migration は既存データを壊さない）
+    const orphan = db
+      .prepare(`SELECT * FROM messages WHERE tenant_id = ? AND id = ?`)
+      .get('default', 'msg-orphan') as { sender: string } | undefined;
+    expect(orphan).toBeDefined();
+    expect(orphan?.sender).toBe('@deleted-bot');
+  });
 });
