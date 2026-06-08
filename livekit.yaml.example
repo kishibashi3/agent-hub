@@ -1,0 +1,27 @@
+# livekit.yaml.example — LiveKit server configuration template
+#
+# 使用方法:
+#   cp livekit.yaml.example livekit.yaml
+#   # livekit.yaml を編集し、api_key / api_secret を実際の値に差し替える
+#   # livekit.yaml は .gitignore 済み — credential を commit しないこと
+#
+# @voice-impl 復帰後に正式設定に確認・更新してください。
+# 詳細: https://docs.livekit.io/home/self-hosting/configuration/
+#
+# 注意事項:
+#   - LAN 環境: use_external_ip: false (デフォルト)
+#   - インターネット公開時: use_external_ip: true に変更し、
+#     api_key / api_secret を強い値に差し替えること
+
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  # LAN 内のみ使用する場合は false。公開する場合は true に変更。
+  use_external_ip: false
+
+keys:
+  # api_key: api_secret の形式で記述する
+  # 本番環境では十分に強いランダム文字列を使用すること (例: openssl rand -base64 32)
+  YOUR_API_KEY: YOUR_API_SECRET
