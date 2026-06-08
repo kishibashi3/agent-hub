@@ -4,11 +4,18 @@
 # `docker run kishibashi3/agent-hub` と等価だが、 compose は **環境変数 / volume /
 # port mapping を declarative に管理** できるため operator 推奨。
 #
+# ネットワーク設計:
+#   - HTTP サービス (agent-hub / dashboard2 / voice-gateway 等): internal bridge network
+#   - 各 HTTP サービスは 127.0.0.1 のみバインド — nginx が reverse proxy として 80/443 を公開
+#   - livekit + pipecat: profiles: ["voice"] で LAN 限定オプション扱い
+#   - livekit の WebRTC UDP (50000-60000) のみ直接公開が必要 (WebRTC 要件)
+#
 # usage:
 #   1. `.env` ファイルに認証情報 (AGENT_HUB_GITHUB_PAT 等) を記載
-#   2. `docker-compose up -d`
-#   3. `docker-compose logs -f` で server + scheduler の log を tail
-#   4. `docker-compose down` で停止
+#   2. HTTP サービスのみ起動 (推奨):        docker compose up -d
+#   3. voice2 (LAN 環境 / livekit 込み):    docker compose --profile voice up -d
+#   4. ログ確認:                            docker compose logs -f
+#   5. 停止:                               docker compose down
 
 version: "3.8"
 
@@ -18,8 +25,10 @@ services:
     container_name: agent-hub
     restart: unless-stopped
     ports:
-      # MCP HTTP endpoint (= /mcp, /health 両方)
-      - "3000:3000"
+      # MCP HTTP endpoint — 127.0.0.1 のみバインド (nginx が reverse proxy)
+      - "127.0.0.1:3000:3000"
+    networks:
+      - internal
     volumes:
       # 永続化 data (= app.db + schedules.json) を host 側にも保持
       - ./data:/app/data
@@ -45,30 +54,31 @@ services:
       start_period: 30s
       retries: 3
 
-  # ---- dashboard sidecar (= @admin 2026-05-20、 message traffic visualizer) ----
-  # SQLite DB を **read-only mount** で参照、 D3.js force-directed graph +
-  # message matrix heatmap として visualize。 Python stdlib only (= 軽量、 deps なし)。
-  #
-  # `AGENT_HUB_TENANT` 未指定 → 全 tenant aggregate (= ecosystem-wide view)
-  # `AGENT_HUB_TENANT=kaz` 等 set → 当該 tenant のみ filter (= per-deployment forensic)
-  dashboard:
-    image: ghcr.io/kishibashi3/agent-hub-dashboard:latest
-    container_name: agent-hub-dashboard
+  # ---- dashboard2 sidecar (= @ope-ultp1635 委任、 DM 8040e944) ----
+  # dashboard v1 から dashboard2 に完全移行 (DM d6f6f707)。
+  # dashboard の v2 系イメージ。DB / tenant は dashboard v1 と同設定。
+  # nginx: https://192.168.3.45/dashboard2/ → http://localhost:8082/
+  # nginx スニペット: infra/nginx/dashboard2.conf 参照
+  dashboard2:
+    image: ghcr.io/kishibashi3/agent-hub-dashboard2:latest
+    container_name: agent-hub-dashboard2
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # SSE / HTTP — 127.0.0.1 のみバインド (nginx が reverse proxy)
+      - "127.0.0.1:8082:8082"
+    networks:
+      - internal
     volumes:
       # agent-hub と同 host path を read-only 共有 (dashboard は hub DB に書かない)
       - ./data:/app/data:ro
-      # dashboard 専用 RW named volume (= thread status / dashboard_data.db、issue #204)
-      - dashboard_data:/root/.agent-hub
+      # dashboard2 専用 RW named volume (= thread status / dashboard_data.db)
+      - dashboard2_data:/root/.agent-hub
     environment:
       AGENT_HUB_DB_PATH: /app/data/app.db
-      PORT: "8080"
-      # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate (= admin clarification)
+      PORT: "8082"
+      # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
-      # dashboard 専用 RW SQLite (= thread status 等)。named volume に永続化 (issue #204)
-      # AGENT_HUB_ prefix 統一 (issue #209) で AGENT_HUB_DASHBOARD_DB_PATH を使用
+      # dashboard2 専用 RW SQLite (= thread status 等)。named volume に永続化
       AGENT_HUB_DASHBOARD_DB_PATH: /root/.agent-hub/dashboard.db
     depends_on:
       agent-hub:
@@ -86,8 +96,10 @@ services:
     container_name: voice-gateway
     restart: unless-stopped
     ports:
-      # browser WebSocket + HTTP static (LAN 内は ws://、外部は nginx TLS termination 推奨)
-      - "8765:8765"
+      # browser WebSocket + HTTP static — 127.0.0.1 のみバインド (nginx TLS termination 推奨)
+      - "127.0.0.1:8765:8765"
+    networks:
+      - internal
     environment:
       # Gemini Live API 認証 (必須)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
@@ -114,7 +126,45 @@ services:
       start_period: 15s
       retries: 3
 
+  # ---- voice2: livekit (profiles: voice) ─────────────────────────
+  # LAN 環境 (voice2 込み): docker compose --profile voice up -d
+  # インターネット公開時は livekit.yaml の use_external_ip: true に変更すること
+  # @voice-impl 復帰後に livekit.yaml 設定を確認・更新予定
+  livekit:
+    image: livekit/livekit-server
+    profiles: ["voice"]
+    container_name: livekit
+    restart: unless-stopped
+    ports:
+      - "7880:7880"                          # HTTP/WS API
+      - "7881:7881"                          # HTTPS/WSS API
+      # WebRTC UDP — LAN ではそのまま公開 (インターネット公開時は firewall 要)
+      - "50000-60000:50000-60000/udp"
+    networks:
+      - internal
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+  # ---- voice2: pipecat (profiles: voice) ─────────────────────────
+  # TODO: @voice-impl 復帰後に正確な image 名・環境変数を確認する
+  # pipecat ↔ livekit: 同 internal network で name 解決
+  pipecat:
+    image: ghcr.io/kishibashi3/agent-hub-voice:latest  # TODO: confirm with @voice-impl
+    profiles: ["voice"]
+    container_name: pipecat
+    restart: unless-stopped
+    networks:
+      - internal
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+    depends_on:
+      - livekit
+
+networks:
+  internal:
+    driver: bridge
+
 volumes:
-  # dashboard 専用 RW データ永続化 (= thread status 管理用 SQLite)
+  # dashboard2 専用 RW データ永続化 (= thread status 管理用 SQLite)
   # hub の app.db とは別 volume で分離 (= hub DB への write 権限なし設計を維持)
-  dashboard_data:
+  dashboard2_data:
