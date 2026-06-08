@@ -8,3 +8,5 @@ data/
 .claude/
 __pycache__/
 *.pyc
+# livekit credential — テンプレートは livekit.yaml.example を参照
+livekit.yaml
