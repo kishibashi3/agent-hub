@@ -26,7 +26,6 @@ export type Participant = z.infer<typeof participantSchema>;
 export const registerInputSchema = z.object({
   name: z.string().min(1).regex(/^[\w-]+$/, '英数字とハイフンのみ'),
   display_name: z.string().optional(),
-  mode: peerModeSchema.optional(),
 });
 
 export type RegisterInput = z.infer<typeof registerInputSchema>;

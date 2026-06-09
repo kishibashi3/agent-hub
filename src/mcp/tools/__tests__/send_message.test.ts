@@ -113,6 +113,72 @@ describe('send_message tool', () => {
     });
   });
 
+  describe('handleSendMessage - @* broadcast', () => {
+    beforeEach(() => {
+      const now = new Date().toISOString();
+      // global peer
+      db.prepare(
+        'INSERT INTO participants (tenant_id, name, display_name, mode, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).run('default', '@ope', 'Operator', 'global', now);
+      // stateful peer
+      db.prepare(
+        'INSERT INTO participants (tenant_id, name, display_name, mode, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).run('default', '@bridge', 'Bridge', 'stateful', now);
+      // mode=null peer
+      db.prepare(
+        'INSERT INTO participants (tenant_id, name, display_name, created_at) VALUES (?, ?, ?, ?)'
+      ).run('default', '@anon', 'Anon', now);
+    });
+
+    it('global peer can send @* broadcast', async () => {
+      const result = await handleSendMessage(
+        scopeToTenant(db, 'default'),
+        { to: '@*', message: 'hello all' },
+        '@ope'
+      );
+      expect(result.isError).toBeUndefined();
+      const data = JSON.parse(result.content[0].text);
+      expect(data.from).toBe('@ope');
+      expect(data.to).toBe('@*');
+    });
+
+    it('broadcast is visible in recipients inbox (getUnreadMessages)', async () => {
+      await handleSendMessage(
+        scopeToTenant(db, 'default'),
+        { to: '@*', message: 'system notice' },
+        '@ope'
+      );
+      const { getUnreadMessages } = await import('../../../db/messages.js');
+      const bridgeInbox = getUnreadMessages(db, 'default', '@bridge');
+      expect(bridgeInbox.some((m) => m.recipient === '@*' && m.body === 'system notice')).toBe(true);
+      // sender does not receive their own broadcast
+      const opeInbox = getUnreadMessages(db, 'default', '@ope');
+      expect(opeInbox.some((m) => m.recipient === '@*')).toBe(false);
+    });
+
+    it('stateful peer cannot send @* broadcast (403)', async () => {
+      const result = await handleSendMessage(
+        scopeToTenant(db, 'default'),
+        { to: '@*', message: 'hello all' },
+        '@bridge'
+      );
+      expect(result.isError).toBe(true);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.message).toContain('mode=global');
+    });
+
+    it('mode=null peer cannot send @* broadcast (403)', async () => {
+      const result = await handleSendMessage(
+        scopeToTenant(db, 'default'),
+        { to: '@*', message: 'hello all' },
+        '@anon'
+      );
+      expect(result.isError).toBe(true);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.message).toContain('mode=global');
+    });
+  });
+
   describe('handleSendMessage - 異常系', () => {
     beforeEach(() => {
       // 参加者を登録

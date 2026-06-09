@@ -2,8 +2,39 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initDatabase } from '../../../db/migrations.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
-import { handleRegister } from '../register.js';
+import { handleRegister, inferModeFromClientType } from '../register.js';
 import { handleGetParticipants } from '../get_participants.js';
+
+describe('inferModeFromClientType', () => {
+  it('agent-hub-plugin/<handle> → global', () => {
+    expect(inferModeFromClientType('agent-hub-plugin/ope-ultp1635')).toBe('global');
+  });
+
+  it('agent-hub-bridge/<type> → stateful', () => {
+    expect(inferModeFromClientType('agent-hub-bridge/claude')).toBe('stateful');
+    expect(inferModeFromClientType('agent-hub-bridge/gemini')).toBe('stateful');
+  });
+
+  it('agent-hub-client/<type> → stateless', () => {
+    expect(inferModeFromClientType('agent-hub-client/python')).toBe('stateless');
+  });
+
+  it('agent-hub-dashboard2 → global', () => {
+    expect(inferModeFromClientType('agent-hub-dashboard2')).toBe('global');
+  });
+
+  it('agenthubctl → global', () => {
+    expect(inferModeFromClientType('agenthubctl')).toBe('global');
+  });
+
+  it('null → null', () => {
+    expect(inferModeFromClientType(null)).toBeNull();
+  });
+
+  it('unknown value → null', () => {
+    expect(inferModeFromClientType('some-unknown-client')).toBeNull();
+  });
+});
 
 describe('register ツール', () => {
   let db: Database.Database;
@@ -45,6 +76,70 @@ describe('register ツール', () => {
       const content = JSON.parse(result.content[0].text);
       expect(content.name).toBe('@bob');
       expect(content.display_name).toBe('ボブ');
+    });
+
+    it('X-Agent-Hub-Client: agent-hub-bridge/claude で mode=stateful が設定される', async () => {
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'bridge' },
+        '@bridge',
+        'bridge-gh',
+        'agent-hub-bridge/claude'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const content = JSON.parse(result.content[0].text);
+      expect(content.mode).toBe('stateful');
+    });
+
+    it('X-Agent-Hub-Client: agent-hub-plugin/ope で mode=global が設定される', async () => {
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'ope' },
+        '@ope',
+        'ope-gh',
+        'agent-hub-plugin/ope'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const content = JSON.parse(result.content[0].text);
+      expect(content.mode).toBe('global');
+    });
+
+    it('clientType なし（後方互換）で mode=null のまま', async () => {
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'legacy' },
+        '@legacy',
+        'legacy-gh'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const content = JSON.parse(result.content[0].text);
+      expect(content.mode).toBeNull();
+    });
+
+    it('re-register で mode が clientType から更新される', async () => {
+      // 初回: ヘッダーなし → mode=null
+      await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'worker' },
+        '@worker',
+        'worker-gh'
+      );
+
+      // 再登録: bridge ヘッダー付き → mode=stateful
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'worker' },
+        '@worker',
+        'worker-gh',
+        'agent-hub-bridge/claude'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const content = JSON.parse(result.content[0].text);
+      expect(content.mode).toBe('stateful');
     });
 
     it('登録後に get_participants で取得できる', async () => {

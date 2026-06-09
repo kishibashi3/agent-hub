@@ -1,11 +1,12 @@
 import { registerInputSchema } from '../../types/schema.js';
+import type { PeerMode } from '../../types/schema.js';
 import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const registerTool = {
   name: 'register',
   description:
-    '新規参加者を agent-hub に登録する。name は英数字とハイフンのみ。mode で peer の worker type (stateful/stateless/global) を宣言できる。登録後は get_participants の一覧に表示される。',
+    '新規参加者を agent-hub に登録する。name は英数字とハイフンのみ。mode は X-Agent-Hub-Client ヘッダーからサーバーが自動決定する。登録後は get_participants の一覧に表示される。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -17,34 +18,52 @@ export const registerTool = {
         type: 'string',
         description: 'オプションの表示名',
       },
-      mode: {
-        type: 'string',
-        enum: ['stateful', 'stateless', 'global'],
-        description:
-          'peer の worker type 宣言（任意）: stateful=peer 別文脈保持、stateless=単発、global=共有場',
-      },
     },
     required: ['name'],
   },
 };
 
 /**
+ * X-Agent-Hub-Client ヘッダー値から peer mode を推論する (issue #276)。
+ *
+ * prefix マッピング:
+ *   agent-hub-plugin/<handle>  → global
+ *   agent-hub-bridge/<type>    → stateful
+ *   agent-hub-client/<type>    → stateless
+ *   agent-hub-dashboard2       → global
+ *   agenthubctl                → global
+ *   null / 不明               → null (モード未宣言のまま)
+ */
+export function inferModeFromClientType(clientType: string | null): PeerMode | null {
+  if (!clientType) return null;
+  if (clientType.startsWith('agent-hub-plugin/')) return 'global';
+  if (clientType.startsWith('agent-hub-bridge/')) return 'stateful';
+  if (clientType.startsWith('agent-hub-client/')) return 'stateless';
+  if (clientType === 'agent-hub-dashboard2') return 'global';
+  if (clientType === 'agenthubctl') return 'global';
+  return null;
+}
+
+/**
  * register ツールのハンドラー
  *
  * @param scope - tenant scoped DB ハンドル
- * @param args - ツール引数（name, display_name?, mode?）
+ * @param args - ツール引数（name, display_name?）
  * @param _userId - 現在のセッションのハンドル（参考情報）
  * @param githubLogin - PAT で検証された GitHub login。新規登録時の owner として使う
+ * @param clientType - X-Agent-Hub-Client ヘッダー値。mode 自動決定に使用
  */
 export async function handleRegister(
   scope: TenantScope,
   args: unknown,
   _userId: string,
-  githubLogin: string
+  githubLogin: string,
+  clientType: string | null = null
 ): Promise<CallToolResult> {
   try {
     const input = registerInputSchema.parse(args);
     const handleName = `@${input.name}`;
+    const inferredMode = inferModeFromClientType(clientType);
 
     const existing = scope.getParticipantByName(handleName);
 
@@ -73,11 +92,15 @@ export async function handleRegister(
     let participant;
     if (!existing) {
       participant = scope.registerParticipant(input, githubLogin);
+      if (inferredMode !== null) {
+        scope.updateParticipantMode(handleName, inferredMode);
+        participant = scope.getParticipantByName(handleName)!;
+      }
     } else if (existing.owner === githubLogin) {
       // 自分が既に所有 → mode / display_name を更新可能
       let changed = false;
-      if (input.mode !== undefined && input.mode !== existing.mode) {
-        scope.updateParticipantMode(handleName, input.mode);
+      if (inferredMode !== null && inferredMode !== existing.mode) {
+        scope.updateParticipantMode(handleName, inferredMode);
         changed = true;
       }
       if (
@@ -90,8 +113,8 @@ export async function handleRegister(
       participant = changed ? scope.getParticipantByName(handleName)! : existing;
     } else if (existing.owner === null) {
       scope.claimOwnerIfUnowned(handleName, githubLogin);
-      if (input.mode !== undefined) {
-        scope.updateParticipantMode(handleName, input.mode);
+      if (inferredMode !== null) {
+        scope.updateParticipantMode(handleName, inferredMode);
       }
       if (input.display_name !== undefined) {
         scope.updateParticipantDisplayName(handleName, input.display_name);
