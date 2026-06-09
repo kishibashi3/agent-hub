@@ -1403,7 +1403,9 @@ function createMcpServer(): Server {
 
     switch (name) {
       case 'register':
-        return await handleRegister(scope, args, userId, githubLogin, sessionClientType);
+        return await handleRegister(scope, args, userId, githubLogin, sessionClientType, (handleName) =>
+          isParticipantOnline(sessions, tenantDomain, handleName)
+        );
       case 'get_participants':
         return await handleGetParticipants(scope, args, userId, (handleName) =>
           isParticipantOnline(sessions, tenantDomain, handleName)

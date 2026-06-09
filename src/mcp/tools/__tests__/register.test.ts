@@ -239,4 +239,73 @@ describe('register ツール', () => {
       expect(content.name).toBe('@alice');
     });
   });
+
+  describe('is_online 警告 (issue #273)', () => {
+    it('handle が is_online=true のとき warning フィールドが付く', async () => {
+      // 先に alice を登録
+      await handleRegister(scopeToTenant(db, 'default'), { name: 'alice' }, 'alice', 'alice-gh');
+
+      // isOnline が true を返す状態で再 register
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'alice' },
+        'alice',
+        'alice-gh',
+        () => true // is_online=true をシミュレート
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.name).toBe('@alice');
+      expect(body.warning).toBe('handle_already_online');
+      expect(body.warning_message).toContain('@alice');
+    });
+
+    it('handle が is_online=false のとき warning フィールドは付かない', async () => {
+      await handleRegister(scopeToTenant(db, 'default'), { name: 'alice' }, 'alice', 'alice-gh');
+
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'alice' },
+        'alice',
+        'alice-gh',
+        () => false
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.warning).toBeUndefined();
+    });
+
+    it('新規登録時も is_online=true なら warning が付く', async () => {
+      // 新規ハンドル bob を is_online=true 状態で登録（理論上 SSE 在席中で同時起動）
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'bob' },
+        'bob',
+        'bob-gh',
+        (h) => h === '@bob'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.warning).toBe('handle_already_online');
+    });
+
+    it('isOnline コールバック省略時は warning なし（後方互換）', async () => {
+      await handleRegister(scopeToTenant(db, 'default'), { name: 'alice' }, 'alice', 'alice-gh');
+
+      // 5引数目を渡さない（既存の呼び出し方）
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'alice' },
+        'alice',
+        'alice-gh'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.warning).toBeUndefined();
+    });
+  });
 });
