@@ -38,7 +38,7 @@ services:
       AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
       AGENT_HUB_USER: ${AGENT_HUB_USER:-}
       # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
-      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
+      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
       # ---- server 用 edition / auth ----
       # 'community' (default) / 'private' / 'enterprise'
       AGENT_HUB_EDITION: ${AGENT_HUB_EDITION:-}
@@ -108,7 +108,7 @@ services:
       # agent-hub 接続 (hub service と同一 docker network 内)
       AGENT_HUB_URL: http://agent-hub:3000/mcp
       AGENT_HUB_USER: ${AGENT_HUB_VOICE_USER:-voice}
-      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
+      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
       AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
       AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
 
