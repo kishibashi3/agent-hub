@@ -49,7 +49,7 @@ export const updateTeamTool = {
  * 
  * @param db - データベースインスタンス
  * @param args - ツール引数（name, add?, remove?）
- * @param userId - 実行者のユーザーID（X-User-Id ヘッダーから取得）
+ * @param userId - 実行者のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
 export async function handleUpdateTeam(

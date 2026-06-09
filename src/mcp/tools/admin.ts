@@ -14,7 +14,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 /**
- * list_sessions_by_user ハンドラに渡す session の最小 shape。
+ * list_sessions_by_participant ハンドラに渡す session の最小 shape。
  * Session interface (server.ts) から transport / server を除いた observable フィールドのみ。
  * テストでは実 Session を組み立てず純粋関数として検証できる (= PresenceSession と同じ設計方針)。
  */
@@ -61,14 +61,14 @@ function ok(payload: unknown): CallToolResult {
   };
 }
 
-// ---- delete_user ------------------------------------------------------------
+// ---- delete_participant ------------------------------------------------------------
 
-const deleteUserInput = z.object({
+const deleteParticipantInput = z.object({
   name: z.string().min(1, 'name required'),
 });
 
-export const deleteUserTool = {
-  name: 'delete_user',
+export const deleteParticipantTool = {
+  name: 'delete_participant',
   description:
     '[admin] participant を soft delete する (deleted_at をセット、行は残す)。これにより既存メッセージ / チーム / 既読の FK 制約は破られない。@admin は削除不可。所有チームがあっても拒否しない (削除後はそのチームを別 admin が引き継ぐ想定)。',
   inputSchema: {
@@ -80,7 +80,7 @@ export const deleteUserTool = {
   },
 };
 
-export async function handleDeleteUser(
+export async function handleDeleteParticipant(
   scope: TenantScope,
   args: unknown,
   userId: string
@@ -88,12 +88,12 @@ export async function handleDeleteUser(
   const denied = ensureAdmin(userId);
   if (denied) return denied;
 
-  let input: z.infer<typeof deleteUserInput>;
+  let input: z.infer<typeof deleteParticipantInput>;
   try {
-    input = deleteUserInput.parse(args);
+    input = deleteParticipantInput.parse(args);
   } catch (error) {
     return errorResult(
-      'delete_user failed',
+      'delete_participant failed',
       error instanceof Error ? error.message : String(error)
     );
   }
@@ -101,13 +101,13 @@ export async function handleDeleteUser(
   const handleName = input.name.startsWith('@') ? input.name : `@${input.name}`;
 
   if (handleName === '@admin') {
-    return errorResult('delete_user failed', '@admin は削除できません');
+    return errorResult('delete_participant failed', '@admin は削除できません');
   }
 
   const participant = scope.getParticipantByName(handleName);
   if (!participant) {
     return errorResult(
-      'delete_user failed',
+      'delete_participant failed',
       `participant '${handleName}' が見つかりません`
     );
   }
@@ -115,7 +115,7 @@ export async function handleDeleteUser(
   const removed = scope.softDeleteParticipant(handleName);
   if (!removed) {
     return errorResult(
-      'delete_user failed',
+      'delete_participant failed',
       `soft delete に失敗 (既に削除済 or 行なし)`
     );
   }
@@ -123,17 +123,17 @@ export async function handleDeleteUser(
   return ok({ deleted: handleName, mode: 'soft' });
 }
 
-// ---- get_user_history -------------------------------------------------------
+// ---- get_participant_history -------------------------------------------------------
 
-const getUserHistoryInput = z.object({
+const getParticipantHistoryInput = z.object({
   name: z.string().min(1, 'name required'),
   limit: z.number().int().positive().max(500).optional(),
 });
 
-export const getUserHistoryTool = {
-  name: 'get_user_history',
+export const getParticipantHistoryTool = {
+  name: 'get_participant_history',
   description:
-    '[admin] 指定した peer が送受信した全メッセージを時系列で取得する。@admin だけが他人の履歴を覗ける。',
+    '[admin] 指定した participant が送受信した全メッセージを時系列で取得する。@admin だけが他人の履歴を覗ける。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -147,7 +147,7 @@ export const getUserHistoryTool = {
   },
 };
 
-export async function handleGetUserHistory(
+export async function handleGetParticipantHistory(
   scope: TenantScope,
   args: unknown,
   userId: string
@@ -155,12 +155,12 @@ export async function handleGetUserHistory(
   const denied = ensureAdmin(userId);
   if (denied) return denied;
 
-  let input: z.infer<typeof getUserHistoryInput>;
+  let input: z.infer<typeof getParticipantHistoryInput>;
   try {
-    input = getUserHistoryInput.parse(args);
+    input = getParticipantHistoryInput.parse(args);
   } catch (error) {
     return errorResult(
-      'get_user_history failed',
+      'get_participant_history failed',
       error instanceof Error ? error.message : String(error)
     );
   }
@@ -171,7 +171,7 @@ export async function handleGetUserHistory(
   const participant = scope.getParticipantByName(handleName);
   if (!participant) {
     return errorResult(
-      'get_user_history failed',
+      'get_participant_history failed',
       `participant '${handleName}' が見つかりません`
     );
   }
@@ -185,12 +185,12 @@ export async function handleGetUserHistory(
     )
     .all(scope.tenantId, handleName, handleName, limit) as unknown[];
 
-  return ok({ user: handleName, count: messages.length, messages });
+  return ok({ participant: handleName, count: messages.length, messages });
 }
 
-// ---- list_sessions_by_user --------------------------------------------------
+// ---- list_sessions_by_participant --------------------------------------------------
 
-const listSessionsByUserInput = z.object({
+const listSessionsByParticipantInput = z.object({
   name: z.string().min(1, 'name required'),
   /**
    * tenant_id でフィルタ。 null / 省略 = 全 tenant を横断検索。
@@ -199,10 +199,10 @@ const listSessionsByUserInput = z.object({
   tenant: z.string().nullable().optional(),
 });
 
-export const listSessionsByUserTool = {
-  name: 'list_sessions_by_user',
+export const listSessionsByParticipantTool = {
+  name: 'list_sessions_by_participant',
   description:
-    '[admin] 指定ユーザーの active session 一覧を返す。zombie session 蓄積の観測・issue #114 verify・incident response に使用。tenant 省略 = 全 tenant 横断。',
+    '[admin] 指定 participant の active session 一覧を返す。zombie session 蓄積の観測・issue #114 verify・incident response に使用。tenant 省略 = 全 tenant 横断。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -221,7 +221,7 @@ export const listSessionsByUserTool = {
 };
 
 /**
- * list_sessions_by_user ハンドラ。
+ * list_sessions_by_participant ハンドラ。
  *
  * @param scope          - テナントスコープ付き DB ハンドル (last_active_at lookup に使用)
  * @param args           - ツール引数 (name, tenant?)
@@ -229,7 +229,7 @@ export const listSessionsByUserTool = {
  * @param sessionEntries - sessions Map の Iterable (server.ts から渡す)。
  *                         SessionView の superset であれば型互換 (= 実 Session を直接渡せる)。
  */
-export async function handleListSessionsByUser(
+export async function handleListSessionsByParticipant(
   scope: TenantScope,
   args: unknown,
   userId: string,
@@ -238,12 +238,12 @@ export async function handleListSessionsByUser(
   const denied = ensureAdmin(userId);
   if (denied) return denied;
 
-  let input: z.infer<typeof listSessionsByUserInput>;
+  let input: z.infer<typeof listSessionsByParticipantInput>;
   try {
-    input = listSessionsByUserInput.parse(args);
+    input = listSessionsByParticipantInput.parse(args);
   } catch (error) {
     return errorResult(
-      'list_sessions_by_user failed',
+      'list_sessions_by_participant failed',
       error instanceof Error ? error.message : String(error)
     );
   }

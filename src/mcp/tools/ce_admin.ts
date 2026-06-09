@@ -4,7 +4,7 @@
  * 呼び出せるのは **default tenant の `@admin`** のみ。
  * これは CE deployment の operator 役 (TOFU で deploy 直後に claim する)。
  *
- * tenant 内 admin (delete_user / get_user_history、admin.ts 側) と
+ * tenant 内 admin (delete_participant / get_participant_history、admin.ts 側) と
  * 区別すること: あちらは tenant 内の participant 管理、こちらは
  * tenant そのもののライフサイクル管理。
  *

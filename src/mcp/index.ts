@@ -9,7 +9,7 @@ dotenv.config();
  * 
  * agent-hub を起動する
  * - HTTP トランスポートで複数クライアントを受け入れ
- * - X-User-Id ヘッダーで認証
+ * - X-Participant-Id ヘッダーで認証
  * - DB 接続を初期化してメッセージ・参加者を永続化
  */
 async function main() {

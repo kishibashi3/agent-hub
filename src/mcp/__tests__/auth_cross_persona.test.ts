@@ -91,7 +91,7 @@ describe('cross-persona override WARN log conditions (issue #21 Fix 3)', () => {
   });
 
   it('override = githubLogin と同値 (= agent 本人が自分の handle を明示指定) → WARN 不要', () => {
-    // X-User-Id: kishibashi3 で PAT owner=kishibashi3 → persona switch なし
+    // X-Participant-Id: kishibashi3 で PAT owner=kishibashi3 → persona switch なし
     expect(shouldWarnCrossPersona('kishibashi3', 'kishibashi3')).toBe(false);
   });
 });

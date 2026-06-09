@@ -36,7 +36,7 @@ export const markAsReadTool = {
  * 
  * @param db - データベースインスタンス
  * @param args - ツール引数（message_id）
- * @param userId - リクエスターのユーザーID（X-User-Id ヘッダーから取得）
+ * @param userId - リクエスターのユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
 export async function handleMarkAsRead(

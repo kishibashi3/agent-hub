@@ -4,15 +4,15 @@ import { initDatabase } from '../../../db/migrations.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
 import { handleRegister } from '../register.js';
 import {
-  handleDeleteUser,
-  handleGetUserHistory,
-  handleListSessionsByUser,
+  handleDeleteParticipant,
+  handleGetParticipantHistory,
+  handleListSessionsByParticipant,
   type SessionView,
 } from '../admin.js';
 import { handleSendMessage } from '../send_message.js';
 import { handleCreateTeam } from '../create_team.js';
 
-// ---- helpers for list_sessions_by_user tests --------------------------------
+// ---- helpers for list_sessions_by_participant tests --------------------------------
 
 function makeSession(overrides: Partial<SessionView> & { userId: string }): SessionView {
   return {
@@ -43,24 +43,24 @@ describe('admin ツール', () => {
   });
 
   describe('権限チェック (共通)', () => {
-    it('@admin 以外は delete_user を呼べない', async () => {
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: 'alice' }, 'bob');
+    it('@admin 以外は delete_participant を呼べない', async () => {
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: 'alice' }, 'bob');
       expect(r.isError).toBe(true);
       const body = JSON.parse(r.content[0].text as string);
       expect(body.error).toBe('forbidden');
     });
 
-    it('@admin 以外は get_user_history を呼べない', async () => {
-      const r = await handleGetUserHistory(scopeToTenant(db, 'default'), { name: 'alice' }, 'bob');
+    it('@admin 以外は get_participant_history を呼べない', async () => {
+      const r = await handleGetParticipantHistory(scopeToTenant(db, 'default'), { name: 'alice' }, 'bob');
       expect(r.isError).toBe(true);
       const body = JSON.parse(r.content[0].text as string);
       expect(body.error).toBe('forbidden');
     });
   });
 
-  describe('delete_user', () => {
-    it('admin として peer を soft delete できる', async () => {
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
+  describe('delete_participant', () => {
+    it('admin として participant を soft delete できる', async () => {
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
       expect(r.isError).toBeUndefined();
       const body = JSON.parse(r.content[0].text as string);
       expect(body.deleted).toBe('@alice');
@@ -77,14 +77,14 @@ describe('admin ツール', () => {
     });
 
     it('@admin 自身は削除できない', async () => {
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: 'admin' }, '@admin');
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: 'admin' }, '@admin');
       expect(r.isError).toBe(true);
       const body = JSON.parse(r.content[0].text as string);
       expect(body.message).toContain('@admin');
     });
 
-    it('存在しない peer は削除できない', async () => {
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: 'ghost' }, '@admin');
+    it('存在しない participant は削除できない', async () => {
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: 'ghost' }, '@admin');
       expect(r.isError).toBe(true);
       const body = JSON.parse(r.content[0].text as string);
       expect(body.message).toContain("'@ghost'");
@@ -98,7 +98,7 @@ describe('admin ツール', () => {
         'alice'
       );
 
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
       expect(r.isError).toBeUndefined();
 
       // チーム自体は残る (FK 制約のため row は消えない、運用で別 admin が引き継ぐ前提)
@@ -116,7 +116,7 @@ describe('admin ツール', () => {
         'alice'
       );
 
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
       expect(r.isError).toBeUndefined();
 
       // soft delete では messages は残る (audit のため)
@@ -127,19 +127,19 @@ describe('admin ツール', () => {
     });
 
     it('name バリデーション: 空は拒否', async () => {
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: '' }, '@admin');
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: '' }, '@admin');
       expect(r.isError).toBe(true);
     });
 
     it('@ 付き / なし両方受け付ける', async () => {
-      const r = await handleDeleteUser(scopeToTenant(db, 'default'), { name: '@bob' }, '@admin');
+      const r = await handleDeleteParticipant(scopeToTenant(db, 'default'), { name: '@bob' }, '@admin');
       expect(r.isError).toBeUndefined();
       const body = JSON.parse(r.content[0].text as string);
       expect(body.deleted).toBe('@bob');
     });
   });
 
-  describe('get_user_history', () => {
+  describe('get_participant_history', () => {
     beforeEach(async () => {
       // alice → bob, bob → alice の DM を仕込む
       await handleSendMessage(scopeToTenant(db, 'default'), { to: 'bob', message: 'hi bob' }, 'alice');
@@ -147,8 +147,8 @@ describe('admin ツール', () => {
       await handleSendMessage(scopeToTenant(db, 'default'), { to: 'admin', message: 'cc admin' }, 'alice');
     });
 
-    it('admin として peer の履歴 (sent + received) を取得できる', async () => {
-      const r = await handleGetUserHistory(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
+    it('admin として participant の履歴 (sent + received) を取得できる', async () => {
+      const r = await handleGetParticipantHistory(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
       expect(r.isError).toBeUndefined();
       const body = JSON.parse(r.content[0].text as string);
       expect(body.user).toBe('@alice');
@@ -157,29 +157,29 @@ describe('admin ツール', () => {
     });
 
     it('limit を効かせられる', async () => {
-      const r = await handleGetUserHistory(scopeToTenant(db, 'default'), { name: 'alice', limit: 1 }, '@admin');
+      const r = await handleGetParticipantHistory(scopeToTenant(db, 'default'), { name: 'alice', limit: 1 }, '@admin');
       expect(r.isError).toBeUndefined();
       const body = JSON.parse(r.content[0].text as string);
       expect(body.count).toBe(1);
     });
 
-    it('存在しない peer は拒否', async () => {
-      const r = await handleGetUserHistory(scopeToTenant(db, 'default'), { name: 'ghost' }, '@admin');
+    it('存在しない participant は拒否', async () => {
+      const r = await handleGetParticipantHistory(scopeToTenant(db, 'default'), { name: 'ghost' }, '@admin');
       expect(r.isError).toBe(true);
     });
 
     it('limit > 500 は zod で拒否', async () => {
-      const r = await handleGetUserHistory(scopeToTenant(db, 'default'), { name: 'alice', limit: 9999 }, '@admin');
+      const r = await handleGetParticipantHistory(scopeToTenant(db, 'default'), { name: 'alice', limit: 9999 }, '@admin');
       expect(r.isError).toBe(true);
     });
   });
 });
 
 // ============================================================
-// list_sessions_by_user (issue #115)
+// list_sessions_by_participant (issue #115)
 // ============================================================
 
-describe('list_sessions_by_user', () => {
+describe('list_sessions_by_participant', () => {
   let db: Database.Database;
 
   beforeEach(async () => {
@@ -196,7 +196,7 @@ describe('list_sessions_by_user', () => {
 
   it('@admin 以外は forbidden', async () => {
     const entries = makeEntries([]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' }, '@bob', entries
     );
     expect(r.isError).toBe(true);
@@ -205,7 +205,7 @@ describe('list_sessions_by_user', () => {
 
   it('セッションがない場合は空配列を返す', async () => {
     const entries = makeEntries([]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
     );
     expect(r.isError).toBeUndefined();
@@ -222,7 +222,7 @@ describe('list_sessions_by_user', () => {
       [aliceSid, makeSession({ userId: '@alice', tenantDomain: 'default', githubLogin: 'alice-gh' })],
       [bobSid,   makeSession({ userId: '@bob',   tenantDomain: 'default', githubLogin: 'bob-gh'   })],
     ]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
     );
     expect(r.isError).toBeUndefined();
@@ -241,7 +241,7 @@ describe('list_sessions_by_user', () => {
       ['sid-a2', makeSession({ userId: '@alice', createdAt: now - 1000 })],
       ['sid-a3', makeSession({ userId: '@alice', createdAt: now })],
     ]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
     );
     expect(r.isError).toBeUndefined();
@@ -257,7 +257,7 @@ describe('list_sessions_by_user', () => {
       ['sid-default', makeSession({ userId: '@alice', tenantDomain: 'default' })],
       ['sid-other',   makeSession({ userId: '@alice', tenantDomain: 'other-tenant' })],
     ]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'),
       { name: 'alice', tenant: 'default' },
       '@admin',
@@ -275,7 +275,7 @@ describe('list_sessions_by_user', () => {
       ['sid-default', makeSession({ userId: '@alice', tenantDomain: 'default' })],
       ['sid-other',   makeSession({ userId: '@alice', tenantDomain: 'other-tenant' })],
     ]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'),
       { name: 'alice' }, // tenant 省略 = null
       '@admin',
@@ -291,10 +291,10 @@ describe('list_sessions_by_user', () => {
     const entries = makeEntries([
       ['sid-a', makeSession({ userId: '@alice' })],
     ]);
-    const withAt    = await handleListSessionsByUser(
+    const withAt    = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: '@alice' }, '@admin', entries
     );
-    const withoutAt = await handleListSessionsByUser(
+    const withoutAt = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' },  '@admin', entries
     );
     expect(JSON.parse(withAt.content[0].text as string).count).toBe(1);
@@ -313,7 +313,7 @@ describe('list_sessions_by_user', () => {
         subscribedUris: uris,
       })],
     ]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
     );
     expect(r.isError).toBeUndefined();
@@ -337,7 +337,7 @@ describe('list_sessions_by_user', () => {
     const entries = makeEntries([
       ['sid-a', makeSession({ userId: '@alice', tenantDomain: 'default' })],
     ]);
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
     );
     const s = JSON.parse(r.content[0].text as string).sessions[0];
@@ -345,7 +345,7 @@ describe('list_sessions_by_user', () => {
   });
 
   it('name 空文字は zod でエラー', async () => {
-    const r = await handleListSessionsByUser(
+    const r = await handleListSessionsByParticipant(
       scopeToTenant(db, 'default'), { name: '' }, '@admin', makeEntries([])
     );
     expect(r.isError).toBe(true);
