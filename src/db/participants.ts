@@ -14,7 +14,7 @@ export function registerParticipant(
 
   const nameWithPrefix = `@${validated.name}`;
   const displayName = validated.display_name ?? null;
-  const mode = validated.mode ?? null;
+  const mode = null; // mode は X-Agent-Hub-Client ヘッダーからサーバーが決定 (issue #276)
 
   try {
     db.prepare(

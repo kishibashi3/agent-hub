@@ -73,6 +73,7 @@ interface Session {
   userId: string;          // 動作中のハンドル（例: '@alice' or '@kishibashi3'）
   githubLogin: string;     // PAT で検証された GitHub login。trust モードでは userId と同じ
   tenantDomain: string;    // X-Tenant-Id (未指定なら 'default')。session 中は固定
+  clientType: string | null; // X-Agent-Hub-Client ヘッダー値 (issue #276)。未送信なら null
   subscribedUris: Set<string>;
   // issue #114 (= notify dedup): 同 (tenant, userId, uri) の複数 session が存在する場合、
   // 最 recent 1 session のみに push する dedup の **tie-breaker** に使用。
@@ -450,6 +451,14 @@ function checkDeploymentInitGate(
   return false;
 }
 
+/** X-Agent-Hub-Client ヘッダーを正規化して返す。未送信 or 空文字なら null (issue #276)。 */
+function resolveClientType(req: Request): string | null {
+  const h = req.headers['x-agent-hub-client'];
+  if (typeof h !== 'string') return null;
+  const trimmed = h.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 async function authenticateUser(req: Request, res: Response, next: NextFunction) {
   // edition-driven auth mode (= startup resolved、env を直接読まない)
   const mode = getEditionConfig().authMode;
@@ -478,6 +487,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     req.userId = handleName;
     req.githubLogin = githubLogin;
     req.tenantDomain = tenantDomain;
+    req.clientType = resolveClientType(req);
     return next();
   }
 
@@ -591,6 +601,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       req.userId = handleName;
       req.githubLogin = githubLogin;
       req.tenantDomain = tenantDomain;
+      req.clientType = resolveClientType(req);
       return next();
     } catch (err) {
       return res.status(500).json({
@@ -1009,9 +1020,10 @@ async function reissueSessionAndDispatch(
     userId: string;
     githubLogin: string;
     tenantDomain: string;
+    clientType: string | null;
   }
 ): Promise<void> {
-  const { staleSessionId, userId, githubLogin, tenantDomain } = ctx;
+  const { staleSessionId, userId, githubLogin, tenantDomain, clientType } = ctx;
   console.log(
     `[MCP] session ${staleSessionId} unknown (= server restart?), reissuing for ` +
       `userId=${userId} tenant=${tenantDomain}`
@@ -1028,6 +1040,7 @@ async function reissueSessionAndDispatch(
         userId,
         githubLogin,
         tenantDomain,
+        clientType,
         subscribedUris: new Set(),
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
@@ -1369,6 +1382,7 @@ function createMcpServer(): Server {
     const userId = session?.userId;
     const githubLogin = session?.githubLogin;
     const tenantDomain = session?.tenantDomain;
+    const sessionClientType = session?.clientType ?? null;
     if (!userId || !githubLogin || !tenantDomain) {
       throw new Error('session is not authenticated (sessionId missing or session expired)');
     }
@@ -1389,7 +1403,7 @@ function createMcpServer(): Server {
 
     switch (name) {
       case 'register':
-        return await handleRegister(scope, args, userId, githubLogin);
+        return await handleRegister(scope, args, userId, githubLogin, sessionClientType);
       case 'get_participants':
         return await handleGetParticipants(scope, args, userId, (handleName) =>
           isParticipantOnline(sessions, tenantDomain, handleName)
@@ -1571,6 +1585,7 @@ export class MCPServer {
       const userId = req.userId;
       const githubLogin = req.githubLogin;
       const tenantDomain = req.tenantDomain;
+      const clientType = req.clientType ?? null;
 
       try {
         if (sessionId && sessions.has(sessionId)) {
@@ -1604,6 +1619,7 @@ export class MCPServer {
             userId,
             githubLogin,
             tenantDomain,
+            clientType,
           });
           return;
         }
@@ -1627,6 +1643,7 @@ export class MCPServer {
                 userId,
                 githubLogin,
                 tenantDomain,
+                clientType,
                 subscribedUris: new Set(),
                 createdAt: Date.now(),
                 lastActivityAt: Date.now(),
