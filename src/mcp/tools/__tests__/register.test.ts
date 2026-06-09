@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initDatabase } from '../../../db/migrations.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
-import { handleRegister } from '../register.js';
+import { handleRegister, inferModeFromClientType } from '../register.js';
 import { handleGetParticipants } from '../get_participants.js';
 
 describe('register ツール', () => {
@@ -142,6 +142,126 @@ describe('register ツール', () => {
       expect(result.isError).toBeUndefined();
       const content = JSON.parse(result.content[0].text);
       expect(content.name).toBe('@alice');
+    });
+  });
+
+  describe('inferModeFromClientType (issue #276 案A)', () => {
+    it('agent-hub-plugin/* → global', () => {
+      expect(inferModeFromClientType('agent-hub-plugin/ope-ultp1635')).toBe('global');
+      expect(inferModeFromClientType('agent-hub-plugin')).toBe('global');
+    });
+
+    it('agent-hub-bridge/* → stateful', () => {
+      expect(inferModeFromClientType('agent-hub-bridge/claude')).toBe('stateful');
+      expect(inferModeFromClientType('agent-hub-bridge/gemini')).toBe('stateful');
+    });
+
+    it('agent-hub-client/* → stateless', () => {
+      expect(inferModeFromClientType('agent-hub-client/litellm')).toBe('stateless');
+    });
+
+    it('agent-hub-dashboard2 → global', () => {
+      expect(inferModeFromClientType('agent-hub-dashboard2')).toBe('global');
+    });
+
+    it('agenthubctl → global', () => {
+      expect(inferModeFromClientType('agenthubctl')).toBe('global');
+    });
+
+    it('null → null', () => {
+      expect(inferModeFromClientType(null)).toBeNull();
+    });
+
+    it('未知のクライアント → null', () => {
+      expect(inferModeFromClientType('some-unknown-client/1.0')).toBeNull();
+    });
+
+    it('大文字小文字を無視する', () => {
+      expect(inferModeFromClientType('Agent-Hub-Bridge/Claude')).toBe('stateful');
+    });
+  });
+
+  describe('clientType による mode 自動設定 (issue #276)', () => {
+    it('clientType=agent-hub-bridge で register すると mode=stateful が返る', async () => {
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'bridge1' },
+        'bridge1',
+        'bridge1-gh',
+        'agent-hub-bridge/claude'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.mode).toBe('stateful');
+    });
+
+    it('clientType=agent-hub-plugin で register すると mode=global が返る', async () => {
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'pluginuser' },
+        'pluginuser',
+        'pluginuser-gh',
+        'agent-hub-plugin/ope-ultp1635'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.mode).toBe('global');
+    });
+
+    it('clientType=null なら mode=null（後方互換）', async () => {
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'legacyclient' },
+        'legacyclient',
+        'legacyclient-gh',
+        null
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.mode).toBeNull();
+    });
+
+    it('re-register で clientType が変わると mode が更新される', async () => {
+      // 初回: bridge として登録
+      await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'actor' },
+        'actor',
+        'actor-gh',
+        'agent-hub-bridge/claude'
+      );
+
+      // 再登録: plugin として接続し直す → mode が global に変わる
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'actor' },
+        'actor',
+        'actor-gh',
+        'agent-hub-plugin/actor'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      expect(body.mode).toBe('global');
+    });
+
+    it('mode 引数を渡してもスキーマに mode フィールドがないため無視される', async () => {
+      // mode フィールドを含む args を渡す（旧クライアントからの互換テスト）
+      const result = await handleRegister(
+        scopeToTenant(db, 'default'),
+        { name: 'oldclient', mode: 'global' } as unknown as Record<string, string>,
+        'oldclient',
+        'oldclient-gh',
+        null
+      );
+
+      expect(result.isError).toBeUndefined();
+      const body = JSON.parse(result.content[0].text);
+      // mode は null（スキーマに mode がないので clientType=null → null）
+      expect(body.mode).toBeNull();
     });
   });
 });

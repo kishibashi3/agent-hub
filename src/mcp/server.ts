@@ -73,6 +73,9 @@ interface Session {
   userId: string;          // 動作中のハンドル（例: '@alice' or '@kishibashi3'）
   githubLogin: string;     // PAT で検証された GitHub login。trust モードでは userId と同じ
   tenantDomain: string;    // X-Tenant-Id (未指定なら 'default')。session 中は固定
+  // X-Agent-Hub-Client ヘッダー値。mode の自動決定に使用 (issue #276 案A)。
+  // null = ヘッダー未送信（旧クライアント互換）。
+  clientType: string | null;
   subscribedUris: Set<string>;
   // issue #114 (= notify dedup): 同 (tenant, userId, uri) の複数 session が存在する場合、
   // 最 recent 1 session のみに push する dedup の **tie-breaker** に使用。
@@ -450,6 +453,12 @@ function checkDeploymentInitGate(
   return false;
 }
 
+/** X-Agent-Hub-Client ヘッダーを文字列として取得する。未送信は null。 */
+function readClientType(req: Request): string | null {
+  const v = req.headers['x-agent-hub-client'];
+  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+}
+
 async function authenticateUser(req: Request, res: Response, next: NextFunction) {
   // edition-driven auth mode (= startup resolved、env を直接読まない)
   const mode = getEditionConfig().authMode;
@@ -478,6 +487,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     req.userId = handleName;
     req.githubLogin = githubLogin;
     req.tenantDomain = tenantDomain;
+    req.clientType = readClientType(req);
     return next();
   }
 
@@ -591,6 +601,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       req.userId = handleName;
       req.githubLogin = githubLogin;
       req.tenantDomain = tenantDomain;
+      req.clientType = readClientType(req);
       return next();
     } catch (err) {
       return res.status(500).json({
@@ -1028,6 +1039,7 @@ async function reissueSessionAndDispatch(
         userId,
         githubLogin,
         tenantDomain,
+        clientType: req.clientType ?? null,
         subscribedUris: new Set(),
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
@@ -1389,7 +1401,7 @@ function createMcpServer(): Server {
 
     switch (name) {
       case 'register':
-        return await handleRegister(scope, args, userId, githubLogin);
+        return await handleRegister(scope, args, userId, githubLogin, session.clientType);
       case 'get_participants':
         return await handleGetParticipants(scope, args, userId, (handleName) =>
           isParticipantOnline(sessions, tenantDomain, handleName)
@@ -1627,6 +1639,7 @@ export class MCPServer {
                 userId,
                 githubLogin,
                 tenantDomain,
+                clientType: req.clientType ?? null,
                 subscribedUris: new Set(),
                 createdAt: Date.now(),
                 lastActivityAt: Date.now(),

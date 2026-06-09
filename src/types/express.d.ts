@@ -26,5 +26,11 @@ declare module 'express-serve-static-core' {
      * authenticateUser middleware で TOFU + ownership check 通過後にセット。
      */
     tenantDomain?: string;
+    /**
+     * X-Agent-Hub-Client header の値。クライアント種別識別に使用。
+     * authenticateUser middleware でセット。未送信なら null。
+     * 例: "agent-hub-plugin/ope-ultp1635", "agent-hub-bridge/claude", "agenthubctl"
+     */
+    clientType?: string | null;
   }
 }

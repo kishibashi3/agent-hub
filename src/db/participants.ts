@@ -14,13 +14,12 @@ export function registerParticipant(
 
   const nameWithPrefix = `@${validated.name}`;
   const displayName = validated.display_name ?? null;
-  const mode = validated.mode ?? null;
 
   try {
     db.prepare(
       `INSERT INTO participants (tenant_id, name, display_name, owner, mode)
        VALUES (?, ?, ?, ?, ?)`
-    ).run(tenantId, nameWithPrefix, displayName, owner, mode);
+    ).run(tenantId, nameWithPrefix, displayName, owner, null);
 
     const result = db
       .prepare(

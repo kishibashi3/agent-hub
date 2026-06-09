@@ -1,11 +1,12 @@
 import { registerInputSchema } from '../../types/schema.js';
+import type { PeerMode } from '../../types/schema.js';
 import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const registerTool = {
   name: 'register',
   description:
-    '新規参加者を agent-hub に登録する。name は英数字とハイフンのみ。mode で peer の worker type (stateful/stateless/global) を宣言できる。登録後は get_participants の一覧に表示される。',
+    '新規参加者を agent-hub に登録する。name は英数字とハイフンのみ。登録後は get_participants の一覧に表示される。mode はサーバーが X-Agent-Hub-Client ヘッダーから自動決定する（クライアント側の指定不要）。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -17,30 +18,49 @@ export const registerTool = {
         type: 'string',
         description: 'オプションの表示名',
       },
-      mode: {
-        type: 'string',
-        enum: ['stateful', 'stateless', 'global'],
-        description:
-          'peer の worker type 宣言（任意）: stateful=peer 別文脈保持、stateless=単発、global=共有場',
-      },
     },
     required: ['name'],
   },
 };
 
 /**
+ * X-Agent-Hub-Client ヘッダー値から PeerMode を推論する (案A、issue #276)。
+ *
+ * | prefix / value                | mode      |
+ * |-------------------------------|-----------|
+ * | agent-hub-plugin/*            | global    |
+ * | agent-hub-bridge/*            | stateful  |
+ * | agent-hub-client/*            | stateless |
+ * | agent-hub-dashboard2          | global    |
+ * | agenthubctl                   | global    |
+ * | null / unknown                | null      |
+ */
+export function inferModeFromClientType(clientType: string | null): PeerMode | null {
+  if (!clientType) return null;
+  const ct = clientType.toLowerCase();
+  if (ct.startsWith('agent-hub-plugin')) return 'global';
+  if (ct.startsWith('agent-hub-bridge')) return 'stateful';
+  if (ct.startsWith('agent-hub-client')) return 'stateless';
+  if (ct === 'agent-hub-dashboard2') return 'global';
+  if (ct === 'agenthubctl') return 'global';
+  return null;
+}
+
+/**
  * register ツールのハンドラー
  *
  * @param scope - tenant scoped DB ハンドル
- * @param args - ツール引数（name, display_name?, mode?）
+ * @param args - ツール引数（name, display_name?）
  * @param _userId - 現在のセッションのハンドル（参考情報）
  * @param githubLogin - PAT で検証された GitHub login。新規登録時の owner として使う
+ * @param clientType - X-Agent-Hub-Client ヘッダー値。mode のサーバー決定に使用（省略時は null）
  */
 export async function handleRegister(
   scope: TenantScope,
   args: unknown,
   _userId: string,
-  githubLogin: string
+  githubLogin: string,
+  clientType: string | null = null
 ): Promise<CallToolResult> {
   try {
     const input = registerInputSchema.parse(args);
@@ -70,14 +90,19 @@ export async function handleRegister(
       };
     }
 
+    const inferredMode = inferModeFromClientType(clientType);
+
     let participant;
     if (!existing) {
       participant = scope.registerParticipant(input, githubLogin);
+      if (inferredMode !== null) {
+        scope.updateParticipantMode(handleName, inferredMode);
+      }
     } else if (existing.owner === githubLogin) {
       // 自分が既に所有 → mode / display_name を更新可能
       let changed = false;
-      if (input.mode !== undefined && input.mode !== existing.mode) {
-        scope.updateParticipantMode(handleName, input.mode);
+      if (inferredMode !== null && inferredMode !== existing.mode) {
+        scope.updateParticipantMode(handleName, inferredMode);
         changed = true;
       }
       if (
@@ -90,8 +115,8 @@ export async function handleRegister(
       participant = changed ? scope.getParticipantByName(handleName)! : existing;
     } else if (existing.owner === null) {
       scope.claimOwnerIfUnowned(handleName, githubLogin);
-      if (input.mode !== undefined) {
-        scope.updateParticipantMode(handleName, input.mode);
+      if (inferredMode !== null) {
+        scope.updateParticipantMode(handleName, inferredMode);
       }
       if (input.display_name !== undefined) {
         scope.updateParticipantDisplayName(handleName, input.display_name);
@@ -121,18 +146,23 @@ export async function handleRegister(
     // 「実際に登録 / 更新が完了した時点」 を意味するようにする。
     scope.updateLastActiveAt(handleName);
 
+    // mode が更新された可能性があるので最新状態を取得
+    const latest = inferredMode !== null
+      ? scope.getParticipantByName(handleName) ?? participant
+      : participant;
+
     return {
       content: [
         {
           type: 'text',
           text: JSON.stringify(
             {
-              name: participant.name,
+              name: latest.name,
               type: 'person',
-              display_name: participant.display_name,
-              owner: participant.owner,
-              mode: participant.mode,
-              created_at: participant.created_at,
+              display_name: latest.display_name,
+              owner: latest.owner,
+              mode: latest.mode,
+              created_at: latest.created_at,
             },
             null,
             2
