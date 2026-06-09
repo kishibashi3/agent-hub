@@ -27,9 +27,9 @@ describe('getAvailableTools (edition × tool list)', () => {
     expect(ns).toContain('get_participants');
     expect(ns).toContain('create_team');
     // admin
-    expect(ns).toContain('delete_user');
-    expect(ns).toContain('get_user_history');
-    expect(ns).toContain('list_sessions_by_user');
+    expect(ns).toContain('delete_participant');
+    expect(ns).toContain('get_participant_history');
+    expect(ns).toContain('list_sessions_by_participant');
     // CE-operator
     expect(ns).toContain('list_tenants');
     expect(ns).toContain('get_tenant');
@@ -60,9 +60,9 @@ describe('getAvailableTools (edition × tool list)', () => {
     expect(ns).toContain('get_history');
     expect(ns).toContain('mark_as_read');
     // admin tools は PE でも保持 (= 1 default tenant 内での admin 操作は意味がある)
-    expect(ns).toContain('delete_user');
-    expect(ns).toContain('get_user_history');
-    expect(ns).toContain('list_sessions_by_user');
+    expect(ns).toContain('delete_participant');
+    expect(ns).toContain('get_participant_history');
+    expect(ns).toContain('list_sessions_by_participant');
   });
 
   it('CE と PE で件数の差 = 3 (= CE-operator tools の数)', () => {

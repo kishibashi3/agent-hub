@@ -44,12 +44,12 @@ import { createTeamTool, handleCreateTeam } from './tools/create_team.js';
 import { updateTeamTool, handleUpdateTeam } from './tools/update_team.js';
 import { deleteTeamTool, handleDeleteTeam } from './tools/delete_team.js';
 import {
-  deleteUserTool,
-  handleDeleteUser,
-  getUserHistoryTool,
-  handleGetUserHistory,
-  listSessionsByUserTool,
-  handleListSessionsByUser,
+  deleteParticipantTool,
+  handleDeleteParticipant,
+  getParticipantHistoryTool,
+  handleGetParticipantHistory,
+  listSessionsByParticipantTool,
+  handleListSessionsByParticipant,
 } from './tools/admin.js';
 import {
   listTenantsTool,
@@ -306,7 +306,7 @@ const PAT_CACHE_TTL_MS = 5 * 60_000; // 5 分
  *   │    - 以降 owner != githubLogin の PAT は 403                      │
  *   ├─────────────────────────────────────────────────────────────────┤
  *   │ 3. handle (= participant 名) の追加                              │
- *   │    - handle base は X-User-Id (override)、無ければ githubLogin    │
+ *   │    - handle base は X-Participant-Id (override)、無ければ githubLogin    │
  *   │    - 同 tenant 内でユニーク、別 tenant の同名は別エンティティ      │
  *   │    - active な行があれば owner 一致 (or null claim) チェック       │
  *   │    - soft-deleted で同 owner なら revive                          │
@@ -378,7 +378,7 @@ function resolveTenant(
       error: 'deployment_not_initialized',
       message:
         'default tenant の @admin (= deployment operator) が未登録です。' +
-        '最初に default tenant (= X-Tenant-Id 未指定) で X-User-Id=admin として接続し、@admin を claim してください。',
+        '最初に default tenant (= X-Tenant-Id 未指定) で X-Participant-Id=admin として接続し、@admin を claim してください。',
     });
     return null;
   }
@@ -442,7 +442,7 @@ function checkDeploymentInitGate(
   res.status(503).json({
     error: 'deployment_not_initialized',
     message:
-      'default tenant の @admin が未登録です。先に X-User-Id=admin で接続して @admin を claim してください。',
+      'default tenant の @admin が未登録です。先に X-Participant-Id=admin で接続して @admin を claim してください。',
   });
   return false;
 }
@@ -498,8 +498,8 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     const tenantDomain = resolveTenant(req, res, githubLogin);
     if (tenantDomain === null) return;
 
-    // X-User-Id が指定されていればハンドル override（マルチペルソナ用）
-    const overrideHeader = req.headers['x-user-id'];
+    // X-Participant-Id が指定されていればハンドル override（マルチペルソナ用）
+    const overrideHeader = req.headers['x-participant-id'];
     const override =
       typeof overrideHeader === 'string'
         ? overrideHeader.trim().replace(/^@/, '')
@@ -526,7 +526,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
         message:
           `AGENT_HUB_STRICT_HANDLE_OWNERSHIP: cross-persona override is not allowed. ` +
           `PAT owner=${githubLogin} cannot connect as @${override}. ` +
-          `Unset X-User-Id to connect as @${githubLogin}, or disable strict mode.`,
+          `Unset X-Participant-Id to connect as @${githubLogin}, or disable strict mode.`,
       });
     }
 
@@ -887,7 +887,7 @@ export function isAutoReissueDisabled(): boolean {
  * Fix 2 (issue #21): strict handle ownership mode。
  *
  * `AGENT_HUB_STRICT_HANDLE_OWNERSHIP` が set (= 空文字以外) の場合、
- * PAT auth で `X-User-Id` override による cross-persona 接続を **拒否**。
+ * PAT auth で `X-Participant-Id` override による cross-persona 接続を **拒否**。
  * override 元 githubLogin と override 先 handle の owner が一致しない場合は 403。
  *
  * 未設定 or 空文字 = 旧動作 (= override 許可、マルチペルソナ運用可能)。
@@ -1292,9 +1292,9 @@ export function getAvailableTools(editionConfig: EditionConfig): Array<unknown> 
     getThreadTool,
     markAsReadTool,
     // admin tools (only callable by @admin)
-    deleteUserTool,
-    getUserHistoryTool,
-    listSessionsByUserTool,
+    deleteParticipantTool,
+    getParticipantHistoryTool,
+    listSessionsByParticipantTool,
   ];
   if (editionConfig.exposesCeAdminTools) {
     baseTools.push(listTenantsTool, getTenantTool, deleteTenantTool);
@@ -1380,12 +1380,12 @@ function createMcpServer(): Server {
         return await handleGetThread(scope, args, userId);
       case 'mark_as_read':
         return await handleMarkAsRead(scope, args, userId);
-      case 'delete_user':
-        return await handleDeleteUser(scope, args, userId);
-      case 'get_user_history':
-        return await handleGetUserHistory(scope, args, userId);
-      case 'list_sessions_by_user':
-        return await handleListSessionsByUser(scope, args, userId, sessions);
+      case 'delete_participant':
+        return await handleDeleteParticipant(scope, args, userId);
+      case 'get_participant_history':
+        return await handleGetParticipantHistory(scope, args, userId);
+      case 'list_sessions_by_participant':
+        return await handleListSessionsByParticipant(scope, args, userId, sessions);
       case 'list_tenants':
         return await handleListTenants(scope, args, userId);
       case 'get_tenant':
@@ -1478,7 +1478,7 @@ function createMcpServer(): Server {
  *
  * agent-hub の中核：メッセージの保管・配信を担う通信ハブ
  * - HTTP（Streamable HTTP, stateful）で複数クライアントを同時接続
- * - X-User-Id ヘッダーでユーザー認証、sessionId 単位で保持
+ * - X-Participant-Id ヘッダーでユーザー認証、sessionId 単位で保持
  * - DB 接続を初期化して永続化層を提供
  */
 export class MCPServer {

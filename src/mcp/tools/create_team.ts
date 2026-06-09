@@ -41,7 +41,7 @@ export const createTeamTool = {
  * 
  * @param db - データベースインスタンス
  * @param args - ツール引数（name, members）
- * @param userId - 作成者のユーザーID（X-User-Id ヘッダーから取得）
+ * @param userId - 作成者のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
 export async function handleCreateTeam(

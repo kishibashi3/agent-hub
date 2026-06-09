@@ -40,7 +40,7 @@ export const deleteTeamTool = {
  * 
  * @param db - データベースインスタンス
  * @param args - ツール引数（name）
- * @param userId - 実行者のユーザーID（X-User-Id ヘッダーから取得）
+ * @param userId - 実行者のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
 export async function handleDeleteTeam(

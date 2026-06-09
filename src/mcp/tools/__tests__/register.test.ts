@@ -52,7 +52,7 @@ describe('register ツール', () => {
       const result = await handleRegister(
         scopeToTenant(db, 'default'),
         { name: 'alice' },
-        'alice', // X-User-Id
+        'alice', // X-Participant-Id
         'alice-gh'
       );
 
@@ -221,10 +221,10 @@ describe('register ツール', () => {
       expect(error.message).toContain('英数字とハイフンのみ');
     });
 
-    // 旧仕様の「X-User-Id と name が一致しない場合は拒否」はオーナー制ベースに
+    // 旧仕様の「X-Participant-Id と name が一致しない場合は拒否」はオーナー制ベースに
     // 移行したため削除（auth 層で hostname → handle のマッピングが行われる）。
 
-    it('X-User-Id が @ 付きでも正規化して検証される', async () => {
+    it('X-Participant-Id が @ 付きでも正規化して検証される', async () => {
       // @ 付き userId でも正規化されて検証される
       const result = await handleRegister(
         scopeToTenant(db, 'default'),

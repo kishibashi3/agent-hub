@@ -77,7 +77,7 @@ export type ParticipantEntry =
  *
  * @param scope - tenant scoped DB ハンドル
  * @param _args - ツール引数（なし）
- * @param _userId - X-User-Id ヘッダーから取得したユーザーID（未使用）
+ * @param _userId - X-Participant-Id ヘッダーから取得したユーザーID（未使用）
  * @param isOnline - 各 participant が online (= SSE 在席中) かを判定するコールバック。
  *                   未指定なら全員 offline を返す (DB 単独テスト用フォールバック)。
  * @returns MCP CallToolResult

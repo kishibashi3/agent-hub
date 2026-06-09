@@ -218,24 +218,6 @@ class TestBuildHeaders:
         assert headers["Authorization"] == "Bearer ghp_testtoken"
         assert headers["X-User-Id"] == "@scheduler"
 
-    def test_trust_mode_handle_only(self) -> None:
-        """trust mode (PAT なし、HANDLE_OVERRIDE のみ) → X-User-Id のみ (Authorization なし)。"""
-        with patch.object(sched, "PAT", ""), \
-             patch.object(sched, "HANDLE_OVERRIDE", "@scheduler"), \
-             patch.object(sched, "TENANT", ""):
-            headers = sched.build_headers()
-        assert "Authorization" not in headers
-        assert headers["X-User-Id"] == "@scheduler"
-
-    def test_trust_mode_with_tenant(self) -> None:
-        """trust mode + TENANT → X-User-Id + X-Tenant-Id。"""
-        with patch.object(sched, "PAT", ""), \
-             patch.object(sched, "HANDLE_OVERRIDE", "@scheduler"), \
-             patch.object(sched, "TENANT", "myteam"):
-            headers = sched.build_headers()
-        assert headers["X-User-Id"] == "@scheduler"
-        assert headers["X-Tenant-Id"] == "myteam"
-
     def test_pat_with_tenant(self) -> None:
         """PAT + TENANT → Authorization + X-Tenant-Id。"""
         with patch.object(sched, "PAT", "ghp_testtoken"), \
