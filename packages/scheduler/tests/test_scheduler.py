@@ -620,3 +620,173 @@ class TestCausedBy:
         assert len(fired_args) == 1
         assert fired_args[0]["to"] == "@planner"
         assert fired_args[0]["caused_by"] is None
+
+
+# ============================================================
+# issue #282: 発火メッセージ返信先付与 + 非コマンドメッセージ拒否
+# ============================================================
+
+class TestIssue282:
+    """issue #282: 発火メッセージ末尾に返信先付与、非コマンドメッセージにエラー応答。"""
+
+    @pytest.fixture(autouse=True)
+    def fresh_shutdown_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sched, "_shutdown_event", threading.Event())
+
+    def _make_shared_state(self):
+        return [], [], []
+
+    # ----------------------------------------------------------
+    # _build_fire_message
+    # ----------------------------------------------------------
+
+    def test_build_fire_message_appends_reply_to(self) -> None:
+        """_build_fire_message → メッセージ末尾に返信先セクションが付与される。"""
+        result = sched._build_fire_message("hello", "@ope")
+        assert result == "hello\n\n---\n返信先: @ope"
+
+    def test_build_fire_message_preserves_original(self) -> None:
+        """_build_fire_message → 元メッセージ本文は変更されない。"""
+        msg = "テストメッセージです"
+        result = sched._build_fire_message(msg, "@alice")
+        assert result.startswith(msg)
+        assert "返信先: @alice" in result
+
+    # ----------------------------------------------------------
+    # handle_inbox_command: 非コマンドメッセージ拒否
+    # ----------------------------------------------------------
+
+    def test_non_command_message_sends_error_reply(self, tmp_path: Path) -> None:
+        """`/` で始まらないメッセージ → エラー応答を返す。"""
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        schedules, iters, next_times = self._make_shared_state()
+
+        sent: list = []
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            sent.append({"to": to, "message": message})
+            return {}
+
+        with patch.object(sched, "send_dm", side_effect=fake_send_dm):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@user1",
+                body="こんにちは",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+            )
+
+        assert len(sent) == 1
+        assert sent[0]["to"] == "@user1"
+        assert "@scheduler は自由メッセージは受け付けません" in sent[0]["message"]
+        assert "/help" in sent[0]["message"]
+
+    def test_non_command_empty_body_sends_error_reply(self, tmp_path: Path) -> None:
+        """空文字列メッセージ → エラー応答を返す。"""
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        schedules, iters, next_times = self._make_shared_state()
+
+        sent: list = []
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            sent.append({"to": to, "message": message})
+            return {}
+
+        with patch.object(sched, "send_dm", side_effect=fake_send_dm):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@user1",
+                body="",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+            )
+
+        assert len(sent) == 1
+        assert sent[0]["to"] == "@user1"
+
+    # ----------------------------------------------------------
+    # main loop: 発火メッセージに返信先付与
+    # ----------------------------------------------------------
+
+    def _run_main_with_entry(self, tmp_path: Path, entry: dict) -> list:
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text(json.dumps([entry]), encoding="utf-8")
+        fired_args: list = []
+        sched._shutdown_event.clear()
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            fired_args.append({"to": to, "message": message, "caused_by": caused_by})
+            sched._shutdown_event.set()
+            return {}
+
+        with patch.object(sched, "build_headers", return_value={}), \
+             patch.object(sched, "resolve_user_id", return_value="@test-user"), \
+             patch.object(sched, "init_session", return_value="test-sess"), \
+             patch.object(sched, "send_dm", side_effect=fake_send_dm), \
+             patch.object(sched, "save_schedules"), \
+             patch("threading.Thread"), \
+             patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
+            sched.main()
+
+        return fired_args
+
+    def test_main_loop_fire_appends_reply_to(self, tmp_path: Path) -> None:
+        """main loop 発火 → メッセージ末尾に「返信先: @<owner>」が付与される。"""
+        past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+        entry = {
+            "name": "test-reply-to",
+            "run_at": past,
+            "to": "@planner",
+            "message": "scheduled-hello",
+            "owner": "@ope",
+            "one_shot": True,
+        }
+
+        fired_args = self._run_main_with_entry(tmp_path, entry)
+
+        assert len(fired_args) == 1
+        assert fired_args[0]["message"] == "scheduled-hello\n\n---\n返信先: @ope"
+
+    # ----------------------------------------------------------
+    # handle_inbox_command: /run コマンドの発火メッセージに返信先付与
+    # ----------------------------------------------------------
+
+    def test_run_command_appends_reply_to(self, tmp_path: Path) -> None:
+        """/run <name> 即時 fire → 発火メッセージ末尾に返信先が付与される。"""
+        from datetime import timezone, timedelta
+        cfg = tmp_path / "schedules.json"
+        future = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+        entry = _valid_oneshot_entry(name="myshot", message="run-me", owner="@alice")
+        schedules = [entry]
+        iters = [None]
+        next_times = [future]
+
+        fired_args: list = []
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            fired_args.append({"to": to, "message": message})
+            return {}
+
+        with patch.object(sched, "send_dm", side_effect=fake_send_dm):
+            sched.handle_inbox_command(
+                headers={},
+                session_id="sess-1",
+                sender="@alice",
+                body="/run myshot",
+                schedules=schedules,
+                iters=iters,
+                next_times=next_times,
+                config_path=cfg,
+            )
+
+        # fired_args[0] = fire to @planner, fired_args[1] = [OK] reply to @alice
+        assert fired_args[0]["to"] == "@planner"
+        assert fired_args[0]["message"] == "run-me\n\n---\n返信先: @alice"
