@@ -478,6 +478,16 @@ def _format_schedule_entry(
     )
 
 
+def _build_fire_message(message: str, owner: str) -> str:
+    """発火メッセージに返信先を付与する (issue #282)。
+
+    cron / run_at / run_in / /run コマンドで発火する際、受信者が返信先を把握できるよう
+    メッセージ末尾に `---\n返信先: @<登録者>` セクションを付与する。
+    owner は schedules.json の `owner` field (= `@handle` 形式)。
+    """
+    return f"{message}\n\n---\n返信先: {owner}"
+
+
 def handle_inbox_command(
     headers: dict[str, str],
     session_id: str,
@@ -497,8 +507,8 @@ def handle_inbox_command(
     - cyclic cron (= /add)
 
     v2.0 (= issue #92 `/` prefix migration、 breaking change):
-    全 command が `/` prefix を要求。 `/` で始まらない body は **silently ignore**
-    (= scheduler は command-only peer、 LLM bypass)、 未知 `/<cmd>` は `/unknown <cmd>`
+    全 command が `/` prefix を要求。 `/` で始まらない body は **エラー応答を返す**
+    (= issue #282、 旧 silently ignore から変更)、 未知 `/<cmd>` は `/unknown <cmd>`
     で明示返答 (= `docs/command-message-convention.md` §3)。
 
     issue #221: `msg_id` を受け取り、 /run_in / /run_at で作成する one-shot entry の
@@ -516,18 +526,23 @@ def handle_inbox_command(
     - `/run <name>`                                 : one-shot 即時 fire (= owner check、 entry は変更なし)
     - `/help`                                       : command 一覧 self-document
     - 未知 `/<cmd>`                                  : `/unknown <cmd>` 返答
-    - 非 `/` body                                   : silently ignore (= LLM bypass、 scheduler は command-only)
+    - 非 `/` body                                   : エラー応答を返す (= issue #282)
     """
     body_stripped = body.strip()
     parts = body_stripped.split()
     cmd_first = parts[0].lower() if parts else ""
 
-    # v2.0 (= issue #92): `/` で始まらない body は silently ignore。
-    # scheduler は command-only peer (= LLM 不要)、 自然言語 message を受領しても
-    # 反応しない (= 「黙る」 path、 docs/command-message-convention.md §2 整合)。
-    # 既存の bare command (= v1.x の `ping` / `list` 等) は v2.0 で **削除**、
-    # 旧 user が bare command を打っても無反応となる (= breaking change、 README §Inbox command 参照)。
+    # issue #282: `/` で始まらない body はエラー応答を返す (= 旧 silently ignore から変更)。
+    # scheduler は command-only peer、 自然言語 message を受領しても LLM 処理は行わない。
+    # 送信者に「コマンドのみ受け付ける」旨を明示することで意図しない無反応を防ぐ。
     if not cmd_first.startswith("/"):
+        send_dm(
+            headers,
+            session_id,
+            sender,
+            "@scheduler は自由メッセージは受け付けません。コマンドは /help で確認してください。",
+            caused_by=msg_id,
+        )
         return
 
     try:
@@ -716,7 +731,8 @@ def handle_inbox_command(
                     )
                     return
                 fire_to = s["to"]
-                fire_msg = s["message"]
+                fire_owner = s["owner"]
+                fire_msg = _build_fire_message(s["message"], fire_owner)  # issue #282
             try:
                 # issue #221: /run 即時 fire でも caused_by を現在の依頼 msg_id に設定
                 send_dm(headers, session_id, fire_to, fire_msg, caused_by=msg_id)
@@ -1462,7 +1478,7 @@ def main() -> None:
             s = schedules[fire_target_idx]
             fire_name = s["name"]
             fire_to = s["to"]
-            fire_msg = s["message"]
+            fire_msg = _build_fire_message(s["message"], s["owner"])  # issue #282
             fire_caused_by: str | None = s.get("caused_by")  # issue #221
             is_one_shot = bool(s.get("one_shot")) or (
                 bool(s.get("run_at")) and not s.get("cron")
