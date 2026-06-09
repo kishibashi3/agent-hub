@@ -21,8 +21,8 @@ export function sendMessage(
   const senderName = sender.startsWith('@') ? sender : `@${sender}`;
   const recipientName = input.to.startsWith('@') ? input.to : `@${input.to}`;
 
-  // 自分宛メッセージは禁止
-  if (senderName === recipientName) {
+  // 自分宛メッセージは禁止（@* ブロードキャストは自分も含むため除外）
+  if (recipientName !== '@*' && senderName === recipientName) {
     throw new Error('自分宛にメッセージを送信することはできません');
   }
 
@@ -34,27 +34,31 @@ export function sendMessage(
     throw new Error(`送信者 ${senderName} は登録されていません`);
   }
 
-  // 宛先の存在確認（個人またはチーム）
-  const recipientIsParticipant = db
-    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
-    .get(tenantId, recipientName);
-  const recipientIsTeam = db
-    .prepare('SELECT name FROM teams WHERE tenant_id = ? AND name = ?')
-    .get(tenantId, recipientName);
+  // @* ブロードキャストは宛先存在確認・メンバー確認をスキップ
+  // (mode=global チェックは handler 層 send_message.ts で実施済み)
+  if (recipientName !== '@*') {
+    // 宛先の存在確認（個人またはチーム）
+    const recipientIsParticipant = db
+      .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+      .get(tenantId, recipientName);
+    const recipientIsTeam = db
+      .prepare('SELECT name FROM teams WHERE tenant_id = ? AND name = ?')
+      .get(tenantId, recipientName);
 
-  if (!recipientIsParticipant && !recipientIsTeam) {
-    throw new Error(`宛先 ${recipientName} は存在しません`);
-  }
+    if (!recipientIsParticipant && !recipientIsTeam) {
+      throw new Error(`宛先 ${recipientName} は存在しません`);
+    }
 
-  // チーム宛の場合、送信者がメンバーか確認
-  if (recipientIsTeam) {
-    const isMember = db
-      .prepare(
-        'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
-      )
-      .get(tenantId, recipientName, senderName);
-    if (!isMember) {
-      throw new Error(`チーム ${recipientName} に送信できるのはメンバーのみです`);
+    // チーム宛の場合、送信者がメンバーか確認
+    if (recipientIsTeam) {
+      const isMember = db
+        .prepare(
+          'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
+        )
+        .get(tenantId, recipientName, senderName);
+      if (!isMember) {
+        throw new Error(`チーム ${recipientName} に送信できるのはメンバーのみです`);
+      }
     }
   }
 
@@ -153,13 +157,14 @@ export function getMessage(
 
   const isSender = message.sender === requesterName;
   const isRecipient = message.recipient === requesterName;
+  const isBroadcast = message.recipient === '@*';
   const isTeamMember = db
     .prepare(
       'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
     )
     .get(tenantId, message.recipient, requesterName);
 
-  if (!isSender && !isRecipient && !isTeamMember) {
+  if (!isSender && !isRecipient && !isBroadcast && !isTeamMember) {
     throw new Error(`メッセージ ${messageId} を閲覧する権限がありません`);
   }
 
@@ -199,6 +204,7 @@ export function getUnreadMessages(
          AND rr.message_id IS NULL
          AND (
            m.recipient = ?
+           OR m.recipient = '@*'
            OR m.recipient IN (
              SELECT team_name FROM team_members
              WHERE tenant_id = ? AND member_name = ?
@@ -466,13 +472,14 @@ export function markAsRead(
   }
 
   const isRecipient = message.recipient === readerName;
+  const isBroadcast = message.recipient === '@*';
   const isTeamMember = db
     .prepare(
       'SELECT 1 FROM team_members WHERE tenant_id = ? AND team_name = ? AND member_name = ?'
     )
     .get(tenantId, message.recipient, readerName);
 
-  if (!isRecipient && !isTeamMember) {
+  if (!isRecipient && !isBroadcast && !isTeamMember) {
     throw new Error(`メッセージ ${messageId} を既読にできるのは受信者のみです`);
   }
 

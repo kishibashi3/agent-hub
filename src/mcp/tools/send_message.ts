@@ -5,25 +5,28 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
  * send_message ツール定義
- * 
+ *
  * DM またはチーム宛にメッセージを送信する。
  * - DM: to が @個人名 の場合、1対1のメッセージ
  * - チーム: to が @チーム名 の場合、メンバー全員に配信（送信者自身は除く）
- * 
+ * - ブロードキャスト: to が @* の場合、tenant 内全参加者に配信（mode=global のみ許可）
+ *
  * 権限:
  * - DM: 登録済みなら誰でも送信可能
  * - チーム: メンバーのみ送信可能
+ * - @* ブロードキャスト: mode=global の peer のみ許可
  */
 export const sendMessageTool = {
   name: 'send_message',
   description:
-    'DM またはチーム宛にメッセージを送信する。to が @個人名 なら DM、@チーム名 ならチーム全体に配信される。',
+    'DM またはチーム宛にメッセージを送信する。to が @個人名 なら DM、@チーム名 ならチーム全体に配信される。' +
+    'to に @* を指定すると tenant 内全参加者にブロードキャスト送信（mode=global の peer のみ許可）。',
   inputSchema: {
     type: 'object',
     properties: {
       to: {
         type: 'string',
-        description: '宛先（@個人名 または @チーム名）',
+        description: '宛先（@個人名、@チーム名、または @* でブロードキャスト）',
       },
       message: {
         type: 'string',
@@ -65,6 +68,14 @@ export async function handleSendMessage(
     // userId は authenticateUser middleware が canonical `@<name>` でセット済
     const sender = userId;
 
+    // @* ブロードキャスト: mode=global のみ許可 (issue #275)
+    if (input.to === '@*') {
+      const senderParticipant = scope.getParticipantByName(sender);
+      if (senderParticipant?.mode !== 'global') {
+        throw new Error('broadcast (@*) は mode=global の peer のみ許可されています');
+      }
+    }
+
     // productive activity 観察 (= issue #26)、 send は確実に productive
     scope.updateLastActiveAt(sender);
 
@@ -75,12 +86,20 @@ export async function handleSendMessage(
     // Inbox URI に tenant 識別子は載せず、dispatch 側で scope.tenantId と
     // session.tenantDomain を突き合わせて tenant leak を防ぐ (issue #7)。
     try {
-      const teamMembers = scope.getTeamMembers(message.recipient);
-      const recipients =
-        teamMembers.length > 0
-          ? teamMembers.filter((m) => m !== sender) // チーム宛: メンバー全員（送信者除く）
-          : [message.recipient]; // DM 宛
-      for (const r of recipients) {
+      let notifyTargets: string[];
+      if (message.recipient === '@*') {
+        // ブロードキャスト: 全参加者（送信者除く）に通知
+        notifyTargets = scope.getParticipants()
+          .map((p) => p.name)
+          .filter((n) => n !== sender);
+      } else {
+        const teamMembers = scope.getTeamMembers(message.recipient);
+        notifyTargets =
+          teamMembers.length > 0
+            ? teamMembers.filter((m) => m !== sender) // チーム宛: メンバー全員（送信者除く）
+            : [message.recipient]; // DM 宛
+      }
+      for (const r of notifyTargets) {
         notifyResourceUpdated(inboxUriFor(r), scope.tenantId);
       }
     } catch (notifyErr) {
