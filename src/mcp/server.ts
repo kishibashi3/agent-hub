@@ -272,14 +272,10 @@ const notificationEventStore = isResourceNotifyFilterDisabled()
     });
 
 /**
- * 認証ミドルウェア
+ * 認証ミドルウェア (PAT モード固定、issue #271 で trust モード廃止)
  *
- * AGENT_HUB_AUTH_MODE 環境変数で挙動を切り替える:
- * - `trust` (デフォルト): localhost 互換モード。X-User-Id ヘッダーをそのまま信頼。
- *   **インターネット公開禁止**（任意の人が任意のヘッダー値でなりすませる）
- * - `pat`: Authorization: Bearer <github-pat> を受け取り、GitHub API で検証して userId を解決
- *
- * `pat` モードでは、ユーザーが GitHub Settings → Developer settings →
+ * Authorization: Bearer <github-pat> を受け取り、GitHub API で検証して userId を解決。
+ * ユーザーが GitHub Settings → Developer settings →
  * Personal access tokens で発行した token を `.mcp.json` の Authorization
  * ヘッダーに載せる。必要 scope は `read:user`（+ Org 制限する場合は `read:org`）。
  *
@@ -460,39 +456,7 @@ function resolveClientType(req: Request): string | null {
 }
 
 async function authenticateUser(req: Request, res: Response, next: NextFunction) {
-  // edition-driven auth mode (= startup resolved、env を直接読まない)
-  const mode = getEditionConfig().authMode;
-
-  if (mode === 'trust') {
-    const userId = req.headers['x-user-id'];
-    if (typeof userId !== 'string' || userId.trim() === '') {
-      return res.status(401).json({
-        error: 'Unauthorized',
-        message: 'AGENT_HUB_AUTH_MODE=trust: X-User-Id header is required',
-      });
-    }
-    const trimmed = userId.trim();
-    const handleName = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
-    const githubLogin = handleName.slice(1);
-
-    const tenantDomain = resolveTenant(req, res, githubLogin);
-    if (tenantDomain === null) return;
-
-    if (!checkDeploymentInitGate(res, tenantDomain, handleName)) return;
-
-    // issue #28: 「見えない幽霊」 bug detection (= AGENT_HUB_TENANT 伝播失敗の signal)。
-    // session block しない diagnostic only。
-    maybeWarnGhostSession(getDatabase(), handleName, tenantDomain, githubLogin);
-
-    req.userId = handleName;
-    req.githubLogin = githubLogin;
-    req.tenantDomain = tenantDomain;
-    req.clientType = resolveClientType(req);
-    return next();
-  }
-
-  if (mode === 'pat') {
-    const auth = req.headers.authorization;
+  const auth = req.headers.authorization;
     if (!auth || !auth.toLowerCase().startsWith('bearer ')) {
       res.setHeader('WWW-Authenticate', 'Bearer realm="agent-hub"');
       return res.status(401).json({
@@ -595,7 +559,7 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
       }
 
       // issue #28: 「見えない幽霊」 bug detection (= AGENT_HUB_TENANT 伝播失敗 signal)。
-      // session block しない diagnostic only。 trust 経路と同じ judgement。
+      // session block しない diagnostic only。
       maybeWarnGhostSession(getDatabase(), handleName, tenantDomain, githubLogin);
 
       req.userId = handleName;
@@ -611,16 +575,6 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
         }`,
       });
     }
-  }
-
-  // edition resolver が AuthMode を 'trust' | 'pat' に narrow しているため
-  // この分岐に来ることは無いが、型の網羅性 (exhaustiveness) のための fallback。
-  // istanbul ignore next
-  const _unreachable: never = mode;
-  return res.status(500).json({
-    error: 'ServerMisconfigured',
-    message: `unknown AGENT_HUB_AUTH_MODE: ${_unreachable}. Use 'trust' or 'pat'.`,
-  });
 }
 
 /** `inbox://[@]<name>` 形式の URI から name を取り出す。返り値は @ 無し */
