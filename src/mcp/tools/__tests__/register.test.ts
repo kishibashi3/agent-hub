@@ -251,6 +251,7 @@ describe('register ツール', () => {
         { name: 'alice' },
         'alice',
         'alice-gh',
+        null,
         () => true // is_online=true をシミュレート
       );
 
@@ -269,6 +270,7 @@ describe('register ツール', () => {
         { name: 'alice' },
         'alice',
         'alice-gh',
+        null,
         () => false
       );
 
@@ -284,6 +286,7 @@ describe('register ツール', () => {
         { name: 'bob' },
         'bob',
         'bob-gh',
+        null,
         (h) => h === '@bob'
       );
 
