@@ -260,13 +260,21 @@ export function isResourceNotifyFilterDisabled(): boolean {
  * StreamableHTTPServerTransport の eventStore option に渡す。
  *
  * - GET 切断中の通知を保持 (= 再接続時 replay)
- * - bound: stream あたり 200 件 / TTL 10 分
+ * - bound: stream あたり 200 件 / TTL 30 分 (issue #290; AGENT_HUB_EVENT_STORE_TTL_MS で override 可)
  * - 永続化なし (= server restart で全消失、それで OK な前提)
  * - `notifications/resources/updated` は replay フィルタで除外 (= issue #117 fix)
  */
+function resolveEventStoreTtlMs(): { ttlMs: number } | Record<string, never> {
+  const raw = process.env.AGENT_HUB_EVENT_STORE_TTL_MS;
+  if (!raw) return {};
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? { ttlMs: n } : {};
+}
+
 const notificationEventStore = isResourceNotifyFilterDisabled()
-  ? new BoundedInMemoryEventStore()
+  ? new BoundedInMemoryEventStore({ ...resolveEventStoreTtlMs() })
   : new BoundedInMemoryEventStore({
+      ...resolveEventStoreTtlMs(),
       replayFilter: (msg) =>
         !('method' in msg && msg.method === 'notifications/resources/updated'),
     });
