@@ -58,7 +58,7 @@ export interface BoundedInMemoryEventStoreOptions {
 }
 
 const DEFAULT_MAX_EVENTS_PER_STREAM = 200;
-const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 分
+const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 分 (issue #290)
 
 export class BoundedInMemoryEventStore implements EventStore {
   private readonly streams = new Map<StreamId, StoredEvent[]>();
