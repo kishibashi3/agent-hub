@@ -52,13 +52,15 @@ export function inferModeFromClientType(clientType: string | null): PeerMode | n
  * @param _userId - 現在のセッションのハンドル（参考情報）
  * @param githubLogin - PAT で検証された GitHub login。新規登録時の owner として使う
  * @param clientType - X-Agent-Hub-Client ヘッダー値。mode 自動決定に使用
+ * @param isOnline - ハンドルが現在 SSE 在席中かを判定するコールバック（省略時は常に false）
  */
 export async function handleRegister(
   scope: TenantScope,
   args: unknown,
   _userId: string,
   githubLogin: string,
-  clientType: string | null = null
+  clientType: string | null = null,
+  isOnline: (handleName: string) => boolean = () => false
 ): Promise<CallToolResult> {
   try {
     const input = registerInputSchema.parse(args);
@@ -144,22 +146,29 @@ export async function handleRegister(
     // 「実際に登録 / 更新が完了した時点」 を意味するようにする。
     scope.updateLastActiveAt(handleName);
 
+    // issue #273: 同一ハンドルが既に is_online=true の場合は警告フィールドを付与する。
+    // bridge 側はこの warning を受けて起動中止できる。isError は立てない（破壊的変更回避）。
+    const alreadyOnline = isOnline(handleName);
+    const responseBody: Record<string, unknown> = {
+      name: participant.name,
+      type: 'person',
+      display_name: participant.display_name,
+      owner: participant.owner,
+      mode: participant.mode,
+      created_at: participant.created_at,
+    };
+    if (alreadyOnline) {
+      responseBody.warning = 'handle_already_online';
+      responseBody.warning_message =
+        `ハンドル ${handleName} は既に is_online=true (SSE 接続中) です。` +
+        '重複 bridge が起動した可能性があります。bridge 側は起動を中止してください。';
+    }
+
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(
-            {
-              name: participant.name,
-              type: 'person',
-              display_name: participant.display_name,
-              owner: participant.owner,
-              mode: participant.mode,
-              created_at: participant.created_at,
-            },
-            null,
-            2
-          ),
+          text: JSON.stringify(responseBody, null, 2),
         },
       ],
     };
