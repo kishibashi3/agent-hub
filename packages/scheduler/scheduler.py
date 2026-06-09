@@ -541,6 +541,7 @@ def handle_inbox_command(
             session_id,
             sender,
             "@scheduler は自由メッセージは受け付けません。コマンドは /help で確認してください。",
+            caused_by=msg_id,
         )
         return
 
