@@ -7,8 +7,8 @@ import { randomUUID } from 'crypto';
  * - DM: to が個人名の場合
  * - チーム: to がチーム名の場合、メンバー全員に配信（送信者自身は除く）
  *
- * @param senderLogin - auth login (PAT owner 等、forensic audit 用、issue #127)。
- *   production server は PAT/trust 両 mode で non-null を渡す (trust mode: handle name = login)。
+ * @param senderLogin - auth login (PAT owner、forensic audit 用、issue #127)。
+ *   production server は non-null を渡す。
  *   省略 or null の場合は NULL として記録される (= migration 前の既存 row との互換保持)。
  */
 export function sendMessage(

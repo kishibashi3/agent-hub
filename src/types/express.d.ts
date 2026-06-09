@@ -18,7 +18,7 @@ declare module 'express-serve-static-core' {
     userId?: string;
     /**
      * GitHub login (例: "kishibashi3")、`@` なし。
-     * PAT モードでは PAT を verify した結果、trust モードでは X-User-Id と同じ。
+     * PAT を verify した結果のログイン名。
      */
     githubLogin?: string;
     /**

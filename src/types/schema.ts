@@ -62,8 +62,8 @@ export const messageSchema = z.object({
   sender: z.string(),
   recipient: z.string(),
   body: z.string(),
-  // v9: auth login (PAT owner 等)。NULL = migration 前の既存 row のみ (issue #127)
-  // production server は PAT/trust 両 mode で non-null を書き込む (trust mode: login = handle name)
+  // v9: auth login (PAT owner)。NULL = migration 前の既存 row のみ (issue #127)
+  // production server は non-null を書き込む
   sender_login: z.string().nullable(),
   // v10: 直接の親メッセージ ID (issue #162)。message_causes(position=0) の JOIN 結果として付与。
   // messages テーブル自体には存在しない — SELECT * では取得できず、LEFT JOIN で解決する。

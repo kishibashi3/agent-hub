@@ -248,11 +248,9 @@ describe('sendMessage sender_login write (issue #127)', () => {
     expect(row.sender_login).toBe('kishibashi3');
   });
 
-  it('trust mode: senderLogin = handle name (non-null) で記録される', () => {
-    // trust mode (server.ts L443): login = handleName.slice(1) = handle の @ 除去形
-    // → production server は trust mode でも non-null を書き込む
-    const input: SendMessageInput = { to: 'bob', message: 'trust mode message' };
-    const msg = sendMessage(db, 'default', input, 'alice', 'alice'); // senderLogin = handle name
+  it('senderLogin = handle name (non-null) で記録される', () => {
+    const input: SendMessageInput = { to: 'bob', message: 'pat mode message (handle as login)' };
+    const msg = sendMessage(db, 'default', input, 'alice', 'alice');
 
     const row = db
       .prepare('SELECT sender_login FROM messages WHERE tenant_id = ? AND id = ?')
