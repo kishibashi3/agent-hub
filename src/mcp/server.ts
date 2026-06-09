@@ -268,7 +268,12 @@ function resolveEventStoreTtlMs(): { ttlMs: number } | Record<string, never> {
   const raw = process.env.AGENT_HUB_EVENT_STORE_TTL_MS;
   if (!raw) return {};
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? { ttlMs: n } : {};
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(
+      `AGENT_HUB_EVENT_STORE_TTL_MS must be a positive integer (ms). Got: "${raw}"`
+    );
+  }
+  return { ttlMs: n };
 }
 
 const notificationEventStore = isResourceNotifyFilterDisabled()
