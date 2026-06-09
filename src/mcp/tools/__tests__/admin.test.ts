@@ -151,7 +151,7 @@ describe('admin ツール', () => {
       const r = await handleGetParticipantHistory(scopeToTenant(db, 'default'), { name: 'alice' }, '@admin');
       expect(r.isError).toBeUndefined();
       const body = JSON.parse(r.content[0].text as string);
-      expect(body.user).toBe('@alice');
+      expect(body.participant).toBe('@alice');
       // alice が sender か recipient のメッセージ全部 (3 件)
       expect(body.count).toBe(3);
     });
@@ -210,7 +210,7 @@ describe('list_sessions_by_participant', () => {
     );
     expect(r.isError).toBeUndefined();
     const body = JSON.parse(r.content[0].text as string);
-    expect(body.user).toBe('@alice');
+    expect(body.participant).toBe('@alice');
     expect(body.count).toBe(0);
     expect(body.sessions).toEqual([]);
   });

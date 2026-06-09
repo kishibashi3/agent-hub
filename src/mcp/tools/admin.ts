@@ -291,5 +291,5 @@ export async function handleListSessionsByParticipant(
   // created_at DESC (最近 create された session を先頭に)
   results.sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  return ok({ user: handleName, tenant: tenantFilter, count: results.length, sessions: results });
+  return ok({ participant: handleName, tenant: tenantFilter, count: results.length, sessions: results });
 }

@@ -49,7 +49,7 @@ v2.0 (= issue #92 `/` prefix migration、 breaking change):
 環境変数:
   AGENT_HUB_URL      MCP endpoint (default: http://localhost:3000/mcp)
   GITHUB_PAT         GitHub Personal Access Token (pat mode、 推奨)
-  AGENT_HUB_USER     handle 名 (trust mode で識別、 pat mode で handle override)
+  AGENT_HUB_USER     handle 名 (pat mode で handle override)
   AGENT_HUB_TENANT   tenant 識別子 (CE 接続時、 未設定なら default tenant)
 
 依存:
@@ -140,12 +140,9 @@ def build_headers() -> dict[str, str]:
         if HANDLE_OVERRIDE:
             # PAT mode + persona override (= multi-persona、 同 owner で別 handle)
             headers["X-User-Id"] = HANDLE_OVERRIDE
-    elif HANDLE_OVERRIDE:
-        # Trust mode (= localhost のみ、 server-side AUTH_MODE=trust が前提)
-        headers["X-User-Id"] = HANDLE_OVERRIDE
     else:
         print(
-            "[ERR] Set AGENT_HUB_GITHUB_PAT (pat mode) or AGENT_HUB_USER (trust mode)",
+            "[ERR] Set AGENT_HUB_GITHUB_PAT (pat mode)",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1386,7 +1383,7 @@ def main() -> None:
         sys.exit(1)
 
     print(
-        f"[boot] mode={'pat' if PAT else 'trust'} user={user_id} "
+        f"[boot] mode=pat user={user_id} "
         f"tenant={TENANT or 'default'} hub={HUB_URL} "
         f"schedules={len(schedules)} session={session_id[:8]}..."
     )
