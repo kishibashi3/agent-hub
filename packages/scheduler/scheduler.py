@@ -139,7 +139,7 @@ def build_headers() -> dict[str, str]:
         headers["Authorization"] = f"Bearer {PAT}"
         if HANDLE_OVERRIDE:
             # PAT mode + persona override (= multi-persona、 同 owner で別 handle)
-            headers["X-User-Id"] = HANDLE_OVERRIDE
+            headers["X-Participant-Id"] = HANDLE_OVERRIDE
     else:
         print(
             "[ERR] Set AGENT_HUB_GITHUB_PAT (pat mode)",
