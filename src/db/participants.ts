@@ -233,7 +233,7 @@ export function updateLastActiveAt(
 ): void {
   db.prepare(
     `UPDATE participants
-       SET last_active_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+       SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE tenant_id = ? AND name = ?`
   ).run(tenantId, name);
 }
