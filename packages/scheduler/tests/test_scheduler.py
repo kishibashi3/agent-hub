@@ -200,23 +200,23 @@ class TestBuildHeaders:
     """
 
     def test_pat_only(self) -> None:
-        """PAT のみ → Authorization: Bearer <pat> のみ (X-User-Id なし)。"""
+        """PAT のみ → Authorization: Bearer <pat> のみ (X-Participant-Id なし)。"""
         with patch.object(sched, "PAT", "ghp_testtoken"), \
              patch.object(sched, "HANDLE_OVERRIDE", ""), \
              patch.object(sched, "TENANT", ""):
             headers = sched.build_headers()
         assert headers["Authorization"] == "Bearer ghp_testtoken"
-        assert "X-User-Id" not in headers
+        assert "X-Participant-Id" not in headers
         assert "X-Tenant-Id" not in headers
 
     def test_pat_with_handle_override(self) -> None:
-        """PAT + HANDLE_OVERRIDE → Authorization + X-User-Id。"""
+        """PAT + HANDLE_OVERRIDE → Authorization + X-Participant-Id。"""
         with patch.object(sched, "PAT", "ghp_testtoken"), \
              patch.object(sched, "HANDLE_OVERRIDE", "@scheduler"), \
              patch.object(sched, "TENANT", ""):
             headers = sched.build_headers()
         assert headers["Authorization"] == "Bearer ghp_testtoken"
-        assert headers["X-User-Id"] == "@scheduler"
+        assert headers["X-Participant-Id"] == "@scheduler"
 
     def test_pat_with_tenant(self) -> None:
         """PAT + TENANT → Authorization + X-Tenant-Id。"""
