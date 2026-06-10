@@ -61,8 +61,8 @@ describe('last_active_at (issue #26)', () => {
 
       const after = readLastActiveAt('default', '@alice');
       expect(after).not.toBeNull();
-      // strftime('%Y-%m-%d %H:%M:%f', 'now') 出力 (= YYYY-MM-DD HH:MM:SS.mmm)
-      expect(after).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
+      // strftime('%Y-%m-%dT%H:%M:%fZ', 'now') 出力 (= RFC 3339 Z 形式)
+      expect(after).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     });
 
     it('get_messages 呼出後、 caller の last_active_at が update される (= empty fetch 含む)', async () => {
@@ -209,7 +209,7 @@ describe('last_active_at (issue #26)', () => {
       );
 
       expect(byName['@alice'].last_active_at).toMatch(
-        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
       );
       expect(byName['@bob'].last_active_at).toBeNull();
     });
@@ -277,7 +277,7 @@ describe('last_active_at (issue #26)', () => {
       // alice を soft delete
       db.prepare(
         `UPDATE participants
-           SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+           SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
            WHERE tenant_id = ? AND name = ?`
       ).run('default', '@alice');
 
