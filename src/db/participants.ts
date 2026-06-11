@@ -135,7 +135,7 @@ export function softDeleteParticipant(
 ): boolean {
   const stmt = db.prepare(
     `UPDATE participants
-       SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+       SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE tenant_id = ? AND name = ? AND deleted_at IS NULL`
   );
   const info = stmt.run(tenantId, name);

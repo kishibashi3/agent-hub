@@ -459,7 +459,7 @@ describe('teams CRUD', () => {
 
       // bob を soft-delete (= participants.deleted_at = now)
       db.prepare(
-        "UPDATE participants SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE tenant_id = ? AND name = ?"
+        "UPDATE participants SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE tenant_id = ? AND name = ?"
       ).run('default', '@bob');
 
       // post-condition: bob は除外、 active member のみ返る
@@ -482,7 +482,7 @@ describe('teams CRUD', () => {
 
       // alice / bob 両方を soft-delete
       db.prepare(
-        "UPDATE participants SET deleted_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE tenant_id = ?"
+        "UPDATE participants SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE tenant_id = ?"
       ).run('default');
 
       const members = getTeamMembers(db, 'default', 'team');
