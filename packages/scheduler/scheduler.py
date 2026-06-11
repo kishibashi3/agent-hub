@@ -49,7 +49,7 @@ v2.0 (= issue #92 `/` prefix migration、 breaking change):
 環境変数:
   AGENT_HUB_URL      MCP endpoint (default: http://localhost:3000/mcp)
   GITHUB_PAT         GitHub Personal Access Token (pat mode、 推奨)
-  AGENT_HUB_USER     handle 名 (pat mode で handle override)
+  AGENT_HUB_PARTICIPANT  handle 名 (pat mode で handle override、旧名 AGENT_HUB_USER はフォールバック)
   AGENT_HUB_TENANT   tenant 識別子 (CE 接続時、 未設定なら default tenant)
 
 依存:
@@ -113,7 +113,7 @@ def _on_signal(signum: int, _frame: Any) -> None:
 
 HUB_URL = os.environ.get("AGENT_HUB_URL", "http://localhost:3000/mcp")
 PAT = os.environ.get("AGENT_HUB_GITHUB_PAT", "")
-HANDLE_OVERRIDE = os.environ.get("AGENT_HUB_USER", "")
+HANDLE_OVERRIDE = os.environ.get("AGENT_HUB_PARTICIPANT") or os.environ.get("AGENT_HUB_USER", "")
 TENANT = os.environ.get("AGENT_HUB_TENANT", "")
 
 # Default to schedules.json next to this script
