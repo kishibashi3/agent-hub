@@ -511,12 +511,15 @@ async function authenticateUser(req: Request, res: Response, next: NextFunction)
     const tenantDomain = resolveTenant(req, res, githubLogin);
     if (tenantDomain === null) return;
 
-    // X-Participant-Id が指定されていればハンドル override（マルチペルソナ用）
-    const overrideHeader = req.headers['x-participant-id'];
-    const override =
-      typeof overrideHeader === 'string'
-        ? overrideHeader.trim().replace(/^@/, '')
-        : '';
+    // X-Participant-Id が指定されていればハンドル override（マルチペルソナ用）。
+    // 旧 X-User-Id は deprecation 警告付きでフォールバック受理する (issue #301)。
+    const { override, legacyHeaderUsed } = resolveParticipantOverride(req.headers);
+    if (legacyHeaderUsed) {
+      console.warn(
+        `[auth] DEPRECATED: X-User-Id ヘッダーで接続 (owner=${githubLogin} → handle=@${override}, tenant=${tenantDomain})。` +
+          ` X-Participant-Id へ移行してください。X-User-Id サポートは将来の minor で削除予定 (issue #301)`
+      );
+    }
     const handleBase = override || githubLogin;
     const handleName = `@${handleBase}`;
 
@@ -912,6 +915,34 @@ export function isAutoReissueDisabled(): boolean {
 export function isStrictHandleOwnershipEnabled(): boolean {
   return process.env.AGENT_HUB_STRICT_HANDLE_OWNERSHIP !== undefined &&
     process.env.AGENT_HUB_STRICT_HANDLE_OWNERSHIP !== '';
+}
+
+/**
+ * Identity override ヘッダーの解決 (issue #301)。
+ *
+ * v0.3.0 の用語統一 (#286/#287) で `X-User-Id` → `X-Participant-Id` に改名されたが、
+ * 旧ヘッダーを送る client が fleet に多数残存しており、server が旧ヘッダーを
+ * サイレント無視すると handle override が効かず PAT owner に縮退する
+ * (= 2026-06-11 の @admin/@scheduler queue 滞留障害の根因)。
+ *
+ * 解決規則:
+ * - `X-Participant-Id` が非空ならそれを採用 (正式ヘッダー優先)
+ * - 無ければ旧 `X-User-Id` にフォールバックして受理 (`legacyHeaderUsed: true`)
+ * - 値は trim + 先頭 `@` 除去で正規化。配列 (= 重複ヘッダー) は未指定扱い
+ *
+ * フォールバック受理は移行期の互換レイヤー。client 側の移行完了後に
+ * `X-User-Id` サポートごと削除する (将来 minor、issue #301 参照)。
+ */
+export function resolveParticipantOverride(
+  headers: Record<string, string | string[] | undefined>
+): { override: string; legacyHeaderUsed: boolean } {
+  const normalize = (v: string | string[] | undefined): string =>
+    typeof v === 'string' ? v.trim().replace(/^@/, '') : '';
+  const participant = normalize(headers['x-participant-id']);
+  if (participant !== '') return { override: participant, legacyHeaderUsed: false };
+  const legacy = normalize(headers['x-user-id']);
+  if (legacy !== '') return { override: legacy, legacyHeaderUsed: true };
+  return { override: '', legacyHeaderUsed: false };
 }
 
 /**
