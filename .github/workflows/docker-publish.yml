@@ -29,6 +29,7 @@ on:
     # build break を merge 前に catch。
     paths:
       - "Dockerfile.bundle"
+      - "Dockerfile.scheduler"
       - "docker/**"
       - "packages/dashboard/**"
       - ".github/workflows/docker-publish.yml"
@@ -63,6 +64,11 @@ jobs:
             dockerfile: packages/dashboard/Dockerfile
             context: packages/dashboard
             # dashboard は server.py 単体、 commit info build-arg 不要
+            use_build_args: false
+          - image: agent-hub-scheduler
+            dockerfile: Dockerfile.scheduler
+            context: .
+            # scheduler は python only、 commit info build-arg 不要
             use_build_args: false
     steps:
       - name: Checkout

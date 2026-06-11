@@ -56,21 +56,17 @@ services:
       retries: 3
 
   # ---- scheduler (issue #300: hub / scheduler 完全分離) ----
-  # hub image とは完全独立。Dockerfile.scheduler (python:3.11-slim + deps) をビルド。
-  # scheduler ソースは volume mount で提供 — image rebuild なしでコード変更を反映できる。
+  # hub image とは完全独立。ghcr.io/kishibashi3/agent-hub-scheduler:latest を pull して起動。
+  # Pi5 では `docker compose pull && docker compose up -d` のみで完結 (ローカルビルド不要)。
   # `docker compose restart agent-hub-scheduler` で hub 無停止のまま再起動可能。
   agent-hub-scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile.scheduler
+    image: ghcr.io/kishibashi3/agent-hub-scheduler:latest
     container_name: agent-hub-scheduler
     restart: unless-stopped
     working_dir: /app/packages/scheduler
     networks:
       - internal
     volumes:
-      # scheduler ソースを live mount (コード変更時に image rebuild 不要)
-      - ./packages/scheduler:/app/packages/scheduler
       # schedules.json + data を hub と共有 (同 host path)
       - ./data:/app/data
     command: python scheduler.py

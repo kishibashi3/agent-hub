@@ -15,9 +15,12 @@ FROM python:3.11-slim
 
 WORKDIR /app/packages/scheduler
 
-# deps only — source は volume mount で提供するため COPY しない
+# deps layer — requirements.txt だけ先にコピーしてキャッシュ効かせる
 COPY packages/scheduler/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && rm requirements.txt
+
+# source — ghcr.io push 後は image 内に scheduler.py を焼き込む (volume mount 不要)
+COPY packages/scheduler/scheduler.py .
 
 # schedules.json が volume に存在しない場合に [] で bootstrap してから python を exec する
 # entrypoint (= scheduler.py は file not found で sys.exit(1) するため初回起動時に必須)
