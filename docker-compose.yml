@@ -75,13 +75,19 @@ services:
       AGENT_HUB_URL: http://agent-hub:3000/mcp
       # ---- scheduler 用認証情報 (= 必須、 .env で渡す) ----
       # GitHub PAT (read:user scope)
-      AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
+      AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT}
       # handle override (= pat mode で scheduler の handle を明示指定する場合)
       AGENT_HUB_USER: ${AGENT_HUB_USER:-}
       # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
       # schedules.json の永続化先 (= ./data volume 内に統一)
       SCHEDULER_CONFIG: /app/data/schedules.json
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os, sys; sys.exit(0 if os.path.exists(os.environ['SCHEDULER_CONFIG']) else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     depends_on:
       agent-hub:
         condition: service_healthy
