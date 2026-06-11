@@ -1,10 +1,11 @@
-# agent-hub compose (issue #300: hub / scheduler 分離)
+# agent-hub compose (issue #300: hub / scheduler 完全分離)
 #
-# `docker-compose up -d` で hub server + scheduler を **別 service** として起動。
-# - agent-hub:           MCP server のみ (supervisord を経由しない直接起動)
-# - agent-hub-scheduler: 同一 image から scheduler のみを起動 (entrypoint-scheduler.sh)
+# `docker-compose up -d` で hub server + scheduler を **別 service・別 image** として起動。
+# - agent-hub:           ghcr.io/kishibashi3/agent-hub:latest (MCP server のみ直接起動)
+# - agent-hub-scheduler: Dockerfile.scheduler ベースの独立 Python service
 #
 # 分離の利点:
+#   - hub image は scheduler を一切知らない (完全独立)
 #   - `docker compose restart agent-hub-scheduler` で hub 無停止のまま scheduler 単体再起動
 #   - 各 service のログ・リソース・再起動ポリシーを独立管理
 #
@@ -54,19 +55,25 @@ services:
       start_period: 30s
       retries: 3
 
-  # ---- scheduler sidecar (issue #300: hub / scheduler 分離) ----
-  # 同一 bundle image を使い、entrypoint-scheduler.sh で scheduler のみ起動。
+  # ---- scheduler (issue #300: hub / scheduler 完全分離) ----
+  # hub image とは完全独立。Dockerfile.scheduler (python:3.11-slim + deps) をビルド。
+  # scheduler ソースは volume mount で提供 — image rebuild なしでコード変更を反映できる。
   # `docker compose restart agent-hub-scheduler` で hub 無停止のまま再起動可能。
   agent-hub-scheduler:
-    image: ghcr.io/kishibashi3/agent-hub:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
     container_name: agent-hub-scheduler
     restart: unless-stopped
-    entrypoint: ["/usr/local/bin/entrypoint-scheduler.sh"]
+    working_dir: /app/packages/scheduler
     networks:
       - internal
     volumes:
-      # agent-hub と同 host path を共有 (schedules.json + app.db のパスを維持)
+      # scheduler ソースを live mount (コード変更時に image rebuild 不要)
+      - ./packages/scheduler:/app/packages/scheduler
+      # schedules.json + data を hub と共有 (同 host path)
       - ./data:/app/data
+    command: python scheduler.py
     environment:
       # hub service に MCP 接続する URL (docker network 内での name 解決)
       AGENT_HUB_URL: http://agent-hub:3000/mcp
@@ -77,6 +84,8 @@ services:
       AGENT_HUB_USER: ${AGENT_HUB_USER:-}
       # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
+      # schedules.json の永続化先 (= ./data volume 内に統一)
+      SCHEDULER_CONFIG: /app/data/schedules.json
     depends_on:
       agent-hub:
         condition: service_healthy

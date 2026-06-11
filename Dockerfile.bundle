@@ -62,11 +62,10 @@ COPY packages/scheduler ./packages/scheduler
 # DB ファイル + schedules.json の永続化先 (= compose や docker run の volume mount 想定)
 RUN mkdir -p /app/data
 
-# ---- supervisord config + entrypoints ----
+# ---- supervisord config + entrypoint ----
 COPY docker/supervisord.conf /etc/supervisor/conf.d/agent-hub.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY docker/entrypoint-scheduler.sh /usr/local/bin/entrypoint-scheduler.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/entrypoint-scheduler.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # ---- build args (= issue #47: /health version info) ----
 # tag-based publish 時に GIT_COMMIT / GIT_COMMIT_AT を流す (= GitHub Actions で
