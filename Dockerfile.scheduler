@@ -1,0 +1,31 @@
+# agent-hub scheduler image (issue #300: 完全分離設計)
+#
+# hub image (Dockerfile.bundle) とは完全に独立した Python only image。
+# scheduler.py の依存 (croniter + requests) だけを pre-install し、
+# ソースコードは compose の volume mount で提供する (= image rebuild 不要でコード変更反映)。
+#
+# compose での使い方:
+#   agent-hub-scheduler:
+#     build: { context: ., dockerfile: Dockerfile.scheduler }
+#     volumes:
+#       - ./packages/scheduler:/app/packages/scheduler
+#       - ./data:/app/data
+
+FROM python:3.11-slim
+
+WORKDIR /app/packages/scheduler
+
+# deps layer — requirements.txt だけ先にコピーしてキャッシュ効かせる
+COPY packages/scheduler/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && rm requirements.txt
+
+# source — ghcr.io push 後は image 内に scheduler.py を焼き込む (volume mount 不要)
+COPY packages/scheduler/scheduler.py .
+
+# schedules.json が volume に存在しない場合に [] で bootstrap してから python を exec する
+# entrypoint (= scheduler.py は file not found で sys.exit(1) するため初回起動時に必須)
+RUN printf '#!/bin/sh\nset -eu\nif [ -z "${SCHEDULER_CONFIG:-}" ]; then\n  echo "[ERR] SCHEDULER_CONFIG must be set" >&2\n  exit 1\nfi\nS="$SCHEDULER_CONFIG"\n[ -f "$S" ] || (mkdir -p "$(dirname "$S")" && echo "[]" > "$S")\nexec "$@"\n' \
+    > /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["python", "scheduler.py"]
