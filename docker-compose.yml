@@ -1,8 +1,12 @@
-# agent-hub all-in-one bundle (= issue #95)
+# agent-hub compose (issue #300: hub / scheduler 分離)
 #
-# `docker-compose up -d` で hub server + scheduler が同 container 内で並走。
-# `docker run kishibashi3/agent-hub` と等価だが、 compose は **環境変数 / volume /
-# port mapping を declarative に管理** できるため operator 推奨。
+# `docker-compose up -d` で hub server + scheduler を **別 service** として起動。
+# - agent-hub:           MCP server のみ (supervisord を経由しない直接起動)
+# - agent-hub-scheduler: 同一 image から scheduler のみを起動 (entrypoint-scheduler.sh)
+#
+# 分離の利点:
+#   - `docker compose restart agent-hub-scheduler` で hub 無停止のまま scheduler 単体再起動
+#   - 各 service のログ・リソース・再起動ポリシーを独立管理
 #
 # ネットワーク設計:
 #   - HTTP サービス (agent-hub / dashboard2 / voice-gateway 等): internal bridge network
@@ -24,21 +28,17 @@ services:
     image: ghcr.io/kishibashi3/agent-hub:latest
     container_name: agent-hub
     restart: unless-stopped
+    # supervisord を経由せず MCP server のみを直接起動 (issue #300)
+    entrypoint: ["npm", "run", "mcp:start"]
     ports:
       # MCP HTTP endpoint — 127.0.0.1 のみバインド (nginx が reverse proxy)
       - "127.0.0.1:3000:3000"
     networks:
       - internal
     volumes:
-      # 永続化 data (= app.db + schedules.json) を host 側にも保持
+      # 永続化 data (= app.db) を host 側にも保持
       - ./data:/app/data
     environment:
-      # ---- scheduler 用認証情報 (= 必須、 .env で渡す) ----
-      # GitHub PAT (read:user scope) または AGENT_HUB_USER (= trust mode、 dev only)
-      AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
-      AGENT_HUB_USER: ${AGENT_HUB_USER:-}
-      # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
-      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
       # ---- server 用 edition / auth ----
       # 'community' (default) / 'private' / 'enterprise'
       AGENT_HUB_EDITION: ${AGENT_HUB_EDITION:-}
@@ -53,6 +53,33 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+
+  # ---- scheduler sidecar (issue #300: hub / scheduler 分離) ----
+  # 同一 bundle image を使い、entrypoint-scheduler.sh で scheduler のみ起動。
+  # `docker compose restart agent-hub-scheduler` で hub 無停止のまま再起動可能。
+  agent-hub-scheduler:
+    image: ghcr.io/kishibashi3/agent-hub:latest
+    container_name: agent-hub-scheduler
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/entrypoint-scheduler.sh"]
+    networks:
+      - internal
+    volumes:
+      # agent-hub と同 host path を共有 (schedules.json + app.db のパスを維持)
+      - ./data:/app/data
+    environment:
+      # hub service に MCP 接続する URL (docker network 内での name 解決)
+      AGENT_HUB_URL: http://agent-hub:3000/mcp
+      # ---- scheduler 用認証情報 (= 必須、 .env で渡す) ----
+      # GitHub PAT (read:user scope)
+      AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
+      # handle override (= pat mode で scheduler の handle を明示指定する場合)
+      AGENT_HUB_USER: ${AGENT_HUB_USER:-}
+      # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
+      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
+    depends_on:
+      agent-hub:
+        condition: service_healthy
 
   # ---- dashboard2 sidecar (= @ope-ultp1635 委任、 DM 8040e944) ----
   # dashboard v1 から dashboard2 に完全移行 (DM d6f6f707)。
