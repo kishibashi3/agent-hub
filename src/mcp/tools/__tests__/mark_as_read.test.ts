@@ -249,6 +249,120 @@ describe('mark_as_read ツール', () => {
     });
   });
 
+  describe('message_ids bulk operation', () => {
+    const MSG_003 = '33333333-3333-3333-3333-333333333333';
+
+    beforeEach(() => {
+      db.prepare(
+        'INSERT INTO messages (tenant_id, id, sender, recipient, body) VALUES (?, ?, ?, ?, ?)'
+      ).run('default', MSG_003, '@alice', '@bob', 'Third message');
+    });
+
+    it('message_ids で複数メッセージを 1 call で既読化できる', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_ids: [MSG_001, MSG_003] },
+        '@bob'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      expect(response.results).toHaveLength(2);
+      expect(response.results[0]).toEqual({ message_id: MSG_001, reader: '@bob', read: true });
+      expect(response.results[1]).toEqual({ message_id: MSG_003, reader: '@bob', read: true });
+
+      // DB 確認
+      const receipts = db
+        .prepare('SELECT message_id FROM read_receipts WHERE tenant_id = ? AND reader = ?')
+        .all('default', '@bob') as { message_id: string }[];
+      const readIds = receipts.map((r) => r.message_id);
+      expect(readIds).toContain(MSG_001);
+      expect(readIds).toContain(MSG_003);
+    });
+
+    it('message_ids の結果フォーマットは { results: [...] }', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_ids: [MSG_001] },
+        '@bob'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      expect(response).toHaveProperty('results');
+      expect(Array.isArray(response.results)).toBe(true);
+    });
+
+    it('message_id 単体指定は旧レスポンス形式（後方互換）', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_id: MSG_001 },
+        '@bob'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      // 旧形式: トップレベルに message_id, reader, read
+      expect(response.message_id).toBe(MSG_001);
+      expect(response.reader).toBe('@bob');
+      expect(response.read).toBe(true);
+      expect(response.results).toBeUndefined();
+    });
+
+    it('message_id と message_ids を同時指定できる（重複除去）', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_id: MSG_001, message_ids: [MSG_001, MSG_003] },
+        '@bob'
+      );
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      // message_ids あるので bulk レスポンス形式
+      expect(response.results).toHaveLength(2); // MSG_001 重複除去
+    });
+
+    it('message_ids に存在しないメッセージが含まれる場合エラー', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_ids: [MSG_001, '00000000-0000-0000-0000-000000000000'] },
+        '@bob'
+      );
+
+      expect(result.isError).toBe(true);
+      const response = JSON.parse(result.content[0].text);
+      expect(response.message).toContain('存在しません');
+    });
+
+    it('message_ids に UUID でない値が含まれる場合エラー', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_ids: ['not-a-uuid'] },
+        '@bob'
+      );
+
+      expect(result.isError).toBe(true);
+      const response = JSON.parse(result.content[0].text);
+      expect(response.message).toContain('UUID 形式');
+    });
+
+    it('message_ids が空配列の場合エラー', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_ids: [] },
+        '@bob'
+      );
+
+      expect(result.isError).toBe(true);
+    });
+
+    it('message_id も message_ids も指定しない場合エラー', async () => {
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), {}, '@bob');
+
+      expect(result.isError).toBe(true);
+    });
+  });
+
   describe('エッジケース', () => {
     it('UUID の大文字小文字は区別しない', async () => {
       // 大文字の UUID を挿入
