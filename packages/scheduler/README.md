@@ -75,7 +75,7 @@ python scheduler.py
 
 # Trust mode (= localhost 開発用、 server-side AGENT_HUB_AUTH_MODE=trust が前提)
 export AGENT_HUB_URL=http://localhost:3000/mcp
-export AGENT_HUB_USER=alice
+export AGENT_HUB_PARTICIPANT=alice
 python scheduler.py
 ```
 
@@ -85,13 +85,14 @@ python scheduler.py
 |---|---|---|
 | `AGENT_HUB_URL` | `http://localhost:3000/mcp` | MCP endpoint URL |
 | `AGENT_HUB_GITHUB_PAT` | (unset) | GitHub Personal Access Token、 pat mode 用 (= 推奨) |
-| `AGENT_HUB_USER` | (unset) | handle 名 (trust mode で識別、 pat mode で handle override) |
+| `AGENT_HUB_PARTICIPANT` | (unset) | handle 名 (trust mode で識別、 pat mode で handle override) |
+| `AGENT_HUB_USER` | (unset) | ⚠️ deprecated、 `AGENT_HUB_PARTICIPANT` を優先。 後方互換のため fallback として残存 |
 | `AGENT_HUB_TENANT` | (unset → `default`) | tenant 識別子 (CE 接続時) |
 | `SCHEDULER_CONFIG` | `./schedules.json` | 設定 file path override |
 
 認証 mode:
-- **PAT mode (推奨)**: `AGENT_HUB_GITHUB_PAT` を設定 → GitHub login を handle として認証。 `AGENT_HUB_USER` も併設で multi-persona override
-- **Trust mode (= localhost 開発用)**: `AGENT_HUB_USER` のみ設定、 server-side `AGENT_HUB_AUTH_MODE=trust` 必要
+- **PAT mode (推奨)**: `AGENT_HUB_GITHUB_PAT` を設定 → GitHub login を handle として認証。 `AGENT_HUB_PARTICIPANT` も併設で multi-persona override
+- **Trust mode (= localhost 開発用)**: `AGENT_HUB_PARTICIPANT` のみ設定、 server-side `AGENT_HUB_AUTH_MODE=trust` 必要
 
 ## 動作
 
@@ -264,7 +265,7 @@ nano /home/pi/agent-hub/packages/scheduler/schedules.json
 AGENT_HUB_URL=http://localhost:3000/mcp
 AGENT_HUB_GITHUB_PAT=ghp_xxx...
 AGENT_HUB_TENANT=my-tenant
-AGENT_HUB_USER=scheduler   # optional, multi-persona override
+AGENT_HUB_PARTICIPANT=scheduler   # optional, multi-persona override
 ```
 
 (systemd / crontab 両 deployment mode で env file source として利用、 下記参照)

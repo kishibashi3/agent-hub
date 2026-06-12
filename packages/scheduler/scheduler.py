@@ -113,7 +113,7 @@ def _on_signal(signum: int, _frame: Any) -> None:
 
 HUB_URL = os.environ.get("AGENT_HUB_URL", "http://localhost:3000/mcp")
 PAT = os.environ.get("AGENT_HUB_GITHUB_PAT", "")
-HANDLE_OVERRIDE = os.environ.get("AGENT_HUB_USER", "")
+HANDLE_OVERRIDE = os.environ.get("AGENT_HUB_PARTICIPANT") or os.environ.get("AGENT_HUB_USER", "")  # AGENT_HUB_USER is deprecated
 TENANT = os.environ.get("AGENT_HUB_TENANT", "")
 
 # Default to schedules.json next to this script
