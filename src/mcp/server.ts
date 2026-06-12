@@ -629,7 +629,7 @@ export function inboxUriFor(name: string): string {
 export function assertSubscribeOwnership(userId: string, uri: string): void {
   const owner = uriToInboxOwner(uri);
   if (!owner) return; // inbox URI でなければスキップ
-  const ownerHandle = owner.startsWith('@') ? owner : `@${owner}`;
+  const ownerHandle = `@${owner}`;
   if (ownerHandle !== userId) {
     throw new Error(`forbidden: cannot subscribe another user's inbox`);
   }
