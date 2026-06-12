@@ -620,6 +620,21 @@ export function inboxUriFor(name: string): string {
   return `inbox://${stripped}`;
 }
 
+/**
+ * Subscribe 要求の inbox 所有権チェック (issue #303)。
+ * `userId` と `uri` の inbox 所有者が一致しない場合は forbidden エラーを投げる。
+ * inbox:// 以外の URI はチェックをスキップ（将来の拡張に備えて）。
+ * unit test から直接呼ぶために export する。
+ */
+export function assertSubscribeOwnership(userId: string, uri: string): void {
+  const owner = uriToInboxOwner(uri);
+  if (!owner) return; // inbox URI でなければスキップ
+  const ownerHandle = `@${owner}`;
+  if (ownerHandle !== userId) {
+    throw new Error(`forbidden: cannot subscribe another user's inbox`);
+  }
+}
+
 // ============================================================
 // Active ping-based presence (= issue #91)
 // ============================================================
@@ -1498,6 +1513,7 @@ function createMcpServer(): Server {
       throw new Error('session not found');
     }
     const canonical = canonicalizeInboxUri(request.params.uri);
+    assertSubscribeOwnership(session.userId, canonical);
     session.subscribedUris.add(canonical);
     console.log(`[MCP] subscribe: sid=${sid} uri=${request.params.uri} (canonical=${canonical})`);
     return {};
