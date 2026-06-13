@@ -77,6 +77,11 @@ services:
       # GitHub PAT (read:user scope)
       AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT}
       # handle override (= pat mode で scheduler の handle を明示指定する場合)
+      # issue #299/#305 で AGENT_HUB_USER → AGENT_HUB_PARTICIPANT に改名。
+      # scheduler.py は PARTICIPANT 優先・USER フォールバック (scheduler.py:116) なので
+      # 両方 forward して .env が PARTICIPANT/USER どちらでも壊れないようにする。
+      AGENT_HUB_PARTICIPANT: ${AGENT_HUB_PARTICIPANT:-}
+      # deprecated: 旧名フォールバック (.env が AGENT_HUB_PARTICIPANT 統一後に削除可)
       AGENT_HUB_USER: ${AGENT_HUB_USER:-}
       # multi-tenant CE 接続時に指定 (= 未指定なら default tenant)
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
