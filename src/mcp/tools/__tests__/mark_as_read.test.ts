@@ -427,4 +427,89 @@ describe('mark_as_read ツール', () => {
       expect(result.isError).toBe(true);
     });
   });
+
+  describe('all モード（全件既読化, issue #312）', () => {
+    it('all: true で未読を全件既読化できる（DM + team 宛）', async () => {
+      // @bob の未読: MSG_001 (DM) + MSG_002 (team-alpha) の 2 件
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), { all: true }, '@bob');
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      expect(response).toEqual({ marked: 2 });
+
+      // DB 確認: DM と team の両方が既読化されている
+      const readIds = (
+        db
+          .prepare('SELECT message_id FROM read_receipts WHERE tenant_id = ? AND reader = ?')
+          .all('default', '@bob') as { message_id: string }[]
+      ).map((r) => r.message_id);
+      expect(readIds).toContain(MSG_001);
+      expect(readIds).toContain(MSG_002);
+    });
+
+    it('未読ゼロでもエラーにせず { marked: 0 } を返す', async () => {
+      // 先に全件既読化
+      await handleMarkAsRead(scopeToTenant(db, 'default'), { all: true }, '@bob');
+
+      // 2 回目は未読ゼロ
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), { all: true }, '@bob');
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      expect(response).toEqual({ marked: 0 });
+    });
+
+    it('all は他人の未読を対象にしない（自分宛のみ）', async () => {
+      // @charlie は MSG_001(DM:alice→bob) / MSG_002(team-alpha 非メンバー) いずれの受信者でもない
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), { all: true }, '@charlie');
+
+      expect(result.isError).toBeUndefined();
+      const response = JSON.parse(result.content[0].text);
+      expect(response).toEqual({ marked: 0 });
+
+      // @bob の未読は手付かずのまま
+      const bobReceipts = db
+        .prepare('SELECT message_id FROM read_receipts WHERE tenant_id = ? AND reader = ?')
+        .all('default', '@bob');
+      expect(bobReceipts).toHaveLength(0);
+    });
+
+    it('all と message_id を同時指定するとエラー（排他）', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { all: true, message_id: MSG_001 },
+        '@bob'
+      );
+
+      expect(result.isError).toBe(true);
+      const response = JSON.parse(result.content[0].text);
+      expect(response.message).toContain('同時に指定できません');
+    });
+
+    it('all と message_ids を同時指定するとエラー（排他）', async () => {
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { all: true, message_ids: [MSG_001] },
+        '@bob'
+      );
+
+      expect(result.isError).toBe(true);
+      const response = JSON.parse(result.content[0].text);
+      expect(response.message).toContain('同時に指定できません');
+    });
+
+    it('all: false は ID 指定がなければエラー（refine）', async () => {
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), { all: false }, '@bob');
+
+      expect(result.isError).toBe(true);
+    });
+
+    it('未登録ユーザーが all: true を呼ぶとエラー', async () => {
+      const result = await handleMarkAsRead(scopeToTenant(db, 'default'), { all: true }, '@unknown');
+
+      expect(result.isError).toBe(true);
+      const response = JSON.parse(result.content[0].text);
+      expect(response.message).toContain('登録されていません');
+    });
+  });
 });

@@ -18,7 +18,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const markAsReadTool = {
   name: 'mark_as_read',
   description:
-    'メッセージを既読にする。自分宛のメッセージ（DM またはチーム）のみ既読可能。message_id（単数）または message_ids（複数）のいずれかを指定すること。',
+    'メッセージを既読にする。自分宛のメッセージ（DM またはチーム）のみ既読可能。message_id（単数）／message_ids（複数）／all（全件）のいずれかを指定すること。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -30,6 +30,11 @@ export const markAsReadTool = {
         type: 'array',
         items: { type: 'string' },
         description: '既読にするメッセージの ID 一覧（UUID 形式）。複数件を 1 call で既読化する。',
+      },
+      all: {
+        type: 'boolean',
+        description:
+          'true を指定すると呼び出し元の未読（DM + 所属チーム宛）を全件既読化し件数を返す。ID 指定は不要。message_id / message_ids とは同時指定不可。',
       },
     },
   },
@@ -51,6 +56,25 @@ export async function handleMarkAsRead(
   try {
     const input = markAsReadInputSchema.parse(args);
 
+    // userId は authenticateUser middleware が canonical `@<name>` でセット済
+    const reader = userId;
+
+    // productive activity 観察 (= issue #26)、 mark_as_read は inbox triage = active engagement
+    scope.updateLastActiveAt(reader);
+
+    // all モード: 呼び出し元の未読を全件既読化（issue #312）。
+    // ID は server 側で getUnreadMessages により列挙するため呼び出し側の指定は不要。
+    // 列挙対象は reader 自身の未読（DM + 所属チーム宛）に限定されるため所有権制約は自明に満たされる。
+    if (input.all === true) {
+      const unread = scope.getUnreadMessages(reader);
+      for (const message of unread) {
+        scope.markAsRead(message.id, reader);
+      }
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ marked: unread.length }, null, 2) }],
+      };
+    }
+
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
     // 単数・複数を統合（重複除去）
@@ -70,12 +94,6 @@ export async function handleMarkAsRead(
         throw new Error(`message_id "${id}" は UUID 形式である必要があります`);
       }
     }
-
-    // userId は authenticateUser middleware が canonical `@<name>` でセット済
-    const reader = userId;
-
-    // productive activity 観察 (= issue #26)、 mark_as_read は inbox triage = active engagement
-    scope.updateLastActiveAt(reader);
 
     // 各メッセージの存在・権限確認と既読記録
     // all-or-nothing: 1 件でも throw すれば全 INSERT が rollback される。

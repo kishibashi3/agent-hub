@@ -106,12 +106,22 @@ export const markAsReadInputSchema = z
   .object({
     message_id: z.string().min(1).optional(),
     message_ids: z.array(z.string().min(1)).optional(),
+    // all: true で呼び出し元の未読（DM + 所属チーム宛）を全件既読化する（issue #312）。
+    all: z.boolean().optional(),
   })
   .refine(
     (data) =>
+      data.all === true ||
       data.message_id !== undefined ||
       (data.message_ids !== undefined && data.message_ids.length > 0),
-    { message: 'message_id または message_ids のいずれかを指定してください' }
+    { message: 'message_id, message_ids, または all のいずれかを指定してください' }
+  )
+  // all: true は ID 指定と排他（暗黙の優先順位による silent ignore を避け、誤用を明示エラー化する）。
+  .refine(
+    (data) =>
+      data.all !== true ||
+      (data.message_id === undefined && data.message_ids === undefined),
+    { message: 'all は message_id / message_ids と同時に指定できません' }
   );
 
 export type MarkAsReadInput = z.infer<typeof markAsReadInputSchema>;
