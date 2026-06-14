@@ -47,6 +47,13 @@ services:
       AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
       # GitHub Org 制限 (= optional、 pat mode で組織 membership 検証)
       AGENT_HUB_GITHUB_ORG: ${AGENT_HUB_GITHUB_ORG:-}
+      # ---- active ping-presence loop の無効化 (issue #106 / #26) ----
+      # server の active ping loop は client を ping して presence 判定するが、
+      # bridge-claude2(Go) は polling-only 設計 (issue #26) で ping handler を持たない。
+      # loop を ON にすると polling-only bridge が ping 非応答で false-offline/エラーになる。
+      # polling-only フリートに対しては disabled が正しい config。
+      # (従来 Pi5 compose に手編集で入れていた drift を committed compose に恒久化)
+      AGENT_HUB_MCP_PING_LOOP_DISABLED: "1"
     healthcheck:
       # compose level の health check (= image HEALTHCHECK と二重で robust)
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
