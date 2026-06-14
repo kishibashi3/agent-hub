@@ -134,48 +134,6 @@ services:
       agent-hub:
         condition: service_healthy
 
-  # ---- voice-gateway (= @ope-ultp1635 委任、 issue #223) ----
-  # Gemini Live を使ったスマホ音声インターフェース。
-  # browser WebSocket ↔ Pi5 ↔ Gemini Live の双方向音声中継。
-  # agent-hub MCP ツール (send_message / get_messages 等) を
-  # Gemini Live の function calling として expose。
-  # 認証: OTP ワンタイムコード (operator が @voice に /generate-code を送って取得)
-  # 実装: github.com/kishibashi3/agent-hub-voice (独立 repo)
-  voice-gateway:
-    image: ghcr.io/kishibashi3/agent-hub-voice:latest
-    container_name: voice-gateway
-    restart: unless-stopped
-    ports:
-      # browser WebSocket + HTTP static — 127.0.0.1 のみバインド (nginx TLS termination 推奨)
-      - "127.0.0.1:8765:8765"
-    networks:
-      - internal
-    environment:
-      # Gemini Live API 認証 (必須)
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-live-preview}
-
-      # agent-hub 接続 (hub service と同一 docker network 内)
-      AGENT_HUB_URL: http://agent-hub:3000/mcp
-      AGENT_HUB_USER: ${AGENT_HUB_VOICE_USER:-voice}
-      AGENT_HUB_TENANT: ${AGENT_HUB_TENANT}
-      AGENT_HUB_GITHUB_PAT: ${AGENT_HUB_GITHUB_PAT:-}
-      AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
-
-      # voice-gateway 設定
-      GATEWAY_PORT: "8765"
-      AGENT_HUB_VOICE_PERSONA: ${AGENT_HUB_VOICE_PERSONA:-あなたは agent-hub ecosystem の音声インターフェースです。メッセージの送受信や参加者の確認を声で操作できます。送信前には必ず確認してください。}
-
-    depends_on:
-      agent-hub:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
-
   # ---- voice2: livekit (profiles: voice) ─────────────────────────
   # LAN 環境 (voice2 込み): docker compose --profile voice up -d
   # インターネット公開時は livekit.yaml の use_external_ip: true に変更すること
