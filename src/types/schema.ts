@@ -102,9 +102,17 @@ export const readReceiptSchema = z.object({
 
 export type ReadReceipt = z.infer<typeof readReceiptSchema>;
 
-export const markAsReadInputSchema = z.object({
-  message_id: z.string().min(1),
-});
+export const markAsReadInputSchema = z
+  .object({
+    message_id: z.string().min(1).optional(),
+    message_ids: z.array(z.string().min(1)).optional(),
+  })
+  .refine(
+    (data) =>
+      data.message_id !== undefined ||
+      (data.message_ids !== undefined && data.message_ids.length > 0),
+    { message: 'message_id または message_ids のいずれかを指定してください' }
+  );
 
 export type MarkAsReadInput = z.infer<typeof markAsReadInputSchema>;
 

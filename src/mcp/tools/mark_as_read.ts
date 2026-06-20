@@ -18,16 +18,20 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const markAsReadTool = {
   name: 'mark_as_read',
   description:
-    'メッセージを既読にする。自分宛のメッセージ（DM またはチーム）のみ既読可能。',
+    'メッセージを既読にする。自分宛のメッセージ（DM またはチーム）のみ既読可能。message_id（単数）または message_ids（複数）のいずれかを指定すること。',
   inputSchema: {
     type: 'object',
     properties: {
       message_id: {
         type: 'string',
-        description: '既読にするメッセージの ID（UUID 形式）',
+        description: '既読にするメッセージの ID（UUID 形式）。後方互換用。',
+      },
+      message_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '既読にするメッセージの ID 一覧（UUID 形式）。複数件を 1 call で既読化する。',
       },
     },
-    required: ['message_id'],
   },
 };
 
@@ -45,13 +49,26 @@ export async function handleMarkAsRead(
   userId: string
 ): Promise<CallToolResult> {
   try {
-    // 引数のバリデーション
     const input = markAsReadInputSchema.parse(args);
 
-    // UUID 形式の検証
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(input.message_id)) {
-      throw new Error('message_id は UUID 形式である必要があります');
+
+    // 単数・複数を統合（重複除去）
+    const ids: string[] = [];
+    if (input.message_id !== undefined) {
+      ids.push(input.message_id);
+    }
+    if (input.message_ids !== undefined) {
+      for (const id of input.message_ids) {
+        if (!ids.includes(id)) ids.push(id);
+      }
+    }
+
+    // UUID 形式の検証（全件）
+    for (const id of ids) {
+      if (!uuidRegex.test(id)) {
+        throw new Error(`message_id "${id}" は UUID 形式である必要があります`);
+      }
     }
 
     // userId は authenticateUser middleware が canonical `@<name>` でセット済
@@ -60,44 +77,37 @@ export async function handleMarkAsRead(
     // productive activity 観察 (= issue #26)、 mark_as_read は inbox triage = active engagement
     scope.updateLastActiveAt(reader);
 
-    // メッセージの存在と権限を確認（getMessage で検証）
-    scope.getMessage(input.message_id, reader);
+    // 各メッセージの存在・権限確認と既読記録
+    // all-or-nothing: 1 件でも throw すれば全 INSERT が rollback される。
+    // better-sqlite3 の INSERT OR IGNORE は即 autocommit されるため、
+    // transaction で囲まないと partial-failure 時に先行 INSERT が残り
+    // side-effect と isError レスポンスが乖離する (PR #309 reviewer 指摘 Minor#1)。
+    const results = scope.db.transaction(() =>
+      ids.map((id) => {
+        scope.getMessage(id, reader);
+        const result = scope.markAsRead(id, reader);
+        return { message_id: id, reader, read: result.read };
+      })
+    )();
 
-    // 既読を記録
-    const result = scope.markAsRead(input.message_id, reader);
+    // 後方互換: message_id 単体指定（message_ids なし）の場合は旧レスポンス形式を維持
+    if (input.message_id !== undefined && input.message_ids === undefined) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify(results[0], null, 2) }],
+      };
+    }
 
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              message_id: input.message_id,
-              reader: reader,
-              read: result.read,
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      content: [{ type: 'text', text: JSON.stringify({ results }, null, 2) }],
     };
   } catch (error) {
-    // バリデーションエラーまたはビジネスロジックエラー
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(
-            {
-              error: 'mark_as_read failed',
-              message: errorMessage,
-            },
-            null,
-            2
-          ),
+          text: JSON.stringify({ error: 'mark_as_read failed', message: errorMessage }, null, 2),
         },
       ],
       isError: true,
