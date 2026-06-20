@@ -78,11 +78,17 @@ export async function handleMarkAsRead(
     scope.updateLastActiveAt(reader);
 
     // 各メッセージの存在・権限確認と既読記録
-    const results = ids.map((id) => {
-      scope.getMessage(id, reader);
-      const result = scope.markAsRead(id, reader);
-      return { message_id: id, reader, read: result.read };
-    });
+    // all-or-nothing: 1 件でも throw すれば全 INSERT が rollback される。
+    // better-sqlite3 の INSERT OR IGNORE は即 autocommit されるため、
+    // transaction で囲まないと partial-failure 時に先行 INSERT が残り
+    // side-effect と isError レスポンスが乖離する (PR #309 reviewer 指摘 Minor#1)。
+    const results = scope.db.transaction(() =>
+      ids.map((id) => {
+        scope.getMessage(id, reader);
+        const result = scope.markAsRead(id, reader);
+        return { message_id: id, reader, read: result.read };
+      })
+    )();
 
     // 後方互換: message_id 単体指定（message_ids なし）の場合は旧レスポンス形式を維持
     if (input.message_id !== undefined && input.message_ids === undefined) {

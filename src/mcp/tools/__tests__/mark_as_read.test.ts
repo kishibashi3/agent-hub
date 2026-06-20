@@ -334,6 +334,31 @@ describe('mark_as_read ツール', () => {
       expect(response.message).toContain('存在しません');
     });
 
+    it('partial-failure 時は先行 validID も rollback される（all-or-nothing）', async () => {
+      // MSG_001（有効）→ 不正 ID の順。transaction で囲まれていなければ
+      // MSG_001 が先に既読化されてから throw し、side-effect と isError が乖離する。
+      // transaction で囲めば MSG_001 の INSERT も rollback される (PR #309 Minor#2)。
+      const result = await handleMarkAsRead(
+        scopeToTenant(db, 'default'),
+        { message_ids: [MSG_001, '00000000-0000-0000-0000-000000000000'] },
+        '@bob'
+      );
+
+      expect(result.isError).toBe(true);
+
+      // 先行 validID (MSG_001) が既読化されていない = rollback されたことを確認
+      const receipt = db
+        .prepare('SELECT * FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?')
+        .get('default', MSG_001, '@bob');
+      expect(receipt).toBeUndefined();
+
+      // read_receipts は全件空（部分コミットがないこと）
+      const allReceipts = db
+        .prepare('SELECT * FROM read_receipts WHERE tenant_id = ? AND reader = ?')
+        .all('default', '@bob');
+      expect(allReceipts).toHaveLength(0);
+    });
+
     it('message_ids に UUID でない値が含まれる場合エラー', async () => {
       const result = await handleMarkAsRead(
         scopeToTenant(db, 'default'),
