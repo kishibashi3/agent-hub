@@ -126,6 +126,10 @@ services:
     environment:
       AGENT_HUB_DB_PATH: /app/data/app.db
       PORT: "8082"
+      # サブパス配信 (nginx: /dashboard2/)。app の resolveBasePath が
+      # X-Forwarded-Prefix → BASE_PATH → '' の順に解決する (app PR #26)。
+      # ここで明示しないと再デプロイで '' に戻りリンクが別サービスに飛ぶ。
+      BASE_PATH: /dashboard2
       # AGENT_HUB_TENANT 未指定 → 全 tenant aggregate
       AGENT_HUB_TENANT: ${AGENT_HUB_TENANT:-}
       # dashboard2 専用 RW SQLite (= thread status 等)。named volume に永続化
