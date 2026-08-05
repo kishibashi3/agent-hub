@@ -38,6 +38,7 @@ import { getThreadTool, handleGetThread } from './tools/get_thread.js';
 import { sendMessageTool, handleSendMessage } from './tools/send_message.js';
 import { getMessagesTool, handleGetMessages } from './tools/get_messages.js';
 import { markAsReadTool, handleMarkAsRead } from './tools/mark_as_read.js';
+import { flushMessagesTool, handleFlushMessages } from './tools/flush_messages.js';
 import { registerTool, handleRegister } from './tools/register.js';
 import { getParticipantsTool, handleGetParticipants } from './tools/get_participants.js';
 import { createTeamTool, handleCreateTeam } from './tools/create_team.js';
@@ -1350,6 +1351,7 @@ export function getAvailableTools(editionConfig: EditionConfig): Array<unknown> 
     getHistoryTool,
     getThreadTool,
     markAsReadTool,
+    flushMessagesTool,
     // admin tools (only callable by @admin)
     deleteParticipantTool,
     getParticipantHistoryTool,
@@ -1439,6 +1441,8 @@ function createMcpServer(): Server {
         return await handleGetThread(scope, args, userId);
       case 'mark_as_read':
         return await handleMarkAsRead(scope, args, userId);
+      case 'flush_messages':
+        return await handleFlushMessages(scope, args, userId);
       case 'delete_participant':
         return await handleDeleteParticipant(scope, args, userId);
       case 'get_participant_history':

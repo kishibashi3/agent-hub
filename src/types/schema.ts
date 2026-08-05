@@ -126,6 +126,14 @@ export const markAsReadInputSchema = z
 
 export type MarkAsReadInput = z.infer<typeof markAsReadInputSchema>;
 
+// --- Flush Messages (issue #336) ---
+
+export const flushMessagesInputSchema = z.object({
+  participant: z.string().min(1),
+});
+
+export type FlushMessagesInput = z.infer<typeof flushMessagesInputSchema>;
+
 // --- Thread (issue #181) ---
 
 export const getThreadInputSchema = z.object({
