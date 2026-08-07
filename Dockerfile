@@ -19,6 +19,8 @@ RUN npm ci
 # ソースコード
 COPY src ./src
 COPY tsconfig.json ./
+# docs/peer-howto.md を howto://agent-hub resource が実行時に読むため同梱 (issue #340)
+COPY docs ./docs
 
 # DB ファイル置き場（fly volume をここにマウントする想定）
 RUN mkdir -p /app/data

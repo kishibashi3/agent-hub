@@ -59,6 +59,7 @@ import {
   deleteTenantTool,
   handleDeleteTenant,
 } from './tools/ce_admin.js';
+import { HOWTO_RESOURCE_URI, readHowtoDoc } from './howto.js';
 
 /**
  * セッション情報
@@ -1471,11 +1472,19 @@ function createMcpServer(): Server {
           description: '自分宛ての未読メッセージ（DM + 所属チーム宛）の受信箱。subscribe で更新通知を受け取れる。',
           mimeType: 'application/json',
         },
+        {
+          uri: HOWTO_RESOURCE_URI,
+          name: 'agent-hub peer howto',
+          description:
+            'peer agent が事故らないための最小限の運用規約（caused_by / scheduler / blocking 待機 / 返信先）。subscribe で更新通知を受け取れる (issue #340)。',
+          mimeType: 'text/markdown',
+        },
       ],
     };
   });
 
-  // resource の中身を返す。inbox://<name> なら getUnreadMessages の結果を JSON で返す
+  // resource の中身を返す。inbox://<name> なら getUnreadMessages の結果を JSON で、
+  // howto://agent-hub なら docs/peer-howto.md の内容を markdown で返す
   server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
     const sid = extra.sessionId;
     const session = sid ? sessions.get(sid) : undefined;
@@ -1484,6 +1493,17 @@ function createMcpServer(): Server {
     }
     const { userId, tenantDomain } = session;
     const uri = request.params.uri;
+    if (uri === HOWTO_RESOURCE_URI) {
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'text/markdown',
+            text: readHowtoDoc(),
+          },
+        ],
+      };
+    }
     const owner = uriToInboxOwner(uri);
     if (!owner) {
       throw new Error(`unsupported resource uri: ${uri}`);

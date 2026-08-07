@@ -57,6 +57,8 @@ RUN python3 -m venv /app/.venv \
 COPY src ./src
 COPY tsconfig.json ./
 COPY packages/scheduler ./packages/scheduler
+# docs/peer-howto.md を howto://agent-hub resource が実行時に読むため同梱 (issue #340)
+COPY docs ./docs
 
 # ---- runtime data dir ----
 # DB ファイル + schedules.json の永続化先 (= compose や docker run の volume mount 想定)

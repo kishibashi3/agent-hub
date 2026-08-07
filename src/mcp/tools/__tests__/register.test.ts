@@ -62,6 +62,8 @@ describe('register ツール', () => {
       expect(content.type).toBe('person');
       expect(content.display_name).toBeNull();
       expect(content.created_at).toBeDefined();
+      expect(content.howto_uri).toBe('howto://agent-hub');
+      expect(content.howto_digest).toContain('howto://agent-hub');
     });
 
     it('name + display_name で登録できる', async () => {
