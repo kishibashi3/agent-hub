@@ -710,6 +710,29 @@ export function getPingTimeoutMs(): number {
 }
 
 /**
+ * 指定 sessionId の session を `transport.close()` → `sessions.delete()` の順で明示的に除去する。
+ *
+ * issue #342/#337: GET /mcp の SSE stream が下層 socket 切断で終了しても、SDK の
+ * standalone stream `cancel()` は `transport.onclose` を呼ばないため、この関数を呼ぶ側
+ * (GET /mcp の `req.on('close')`) が唯一の確実な eviction 経路になる。
+ * active ping loop (`runOneActivePingCycle`) の eviction と同じ pattern。
+ */
+export async function evictSessionOnDisconnect(sessionId: string): Promise<boolean> {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  try {
+    await session.transport.close();
+  } catch (_closeErr) {
+    // transport は既にエラー状態 or 切断済み — 無視して delete に進む
+  }
+  if (sessions.has(sessionId)) {
+    sessions.delete(sessionId);
+  }
+  console.log(`[MCP] session evicted on connection close: ${sessionId}`);
+  return true;
+}
+
+/**
  * Session の MCP ping を timeout 付きで実行し、 pong 受信したら true、 timeout / error なら false。
  *
  * MCP SDK `server.ping()` は protocol-level ping (= spec.modelcontextprotocol.io の Ping utility)、
@@ -1736,7 +1759,18 @@ export class MCPServer {
       // 接続クローズ時に即時停止 (handleRequest resolve より先に close される場合がある)。
       // finally 節でも clearInterval を呼ぶが、clearInterval は clear 済み ID への呼び出しが
       // no-op のため二重 clear は安全・意図的 (= idempotent)。
-      req.on('close', () => clearInterval(keepaliveTimer));
+      //
+      // issue #342/#337: bridge プロセスが SIGKILL/OOM で abrupt に落ちた場合、
+      // transport.onclose は SDK の standalone SSE stream cancel() から発火されないため
+      // (cancel() は内部 _streamMapping の掃除のみで onclose を呼ばない)、session が
+      // `sessions` Map に残り続け is_online が true のまま zombie 化する。active ping loop は
+      // bridge-claude2 (Go, ping 未実装) 対応のため本番で無効化されており (docker-compose.yml)、
+      // 唯一残る確実な切断検知が Node の素の `req.on('close')` (= 下層 socket 切断で確実に発火)。
+      // ここで明示的に evictSessionOnDisconnect() を呼び、is_online を即時 false に落とす。
+      req.on('close', () => {
+        clearInterval(keepaliveTimer);
+        void evictSessionOnDisconnect(sessionId);
+      });
       try {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);
       } catch (error) {
