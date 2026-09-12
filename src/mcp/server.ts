@@ -89,6 +89,12 @@ interface Session {
   // セットされる猶予付き eviction timer。GRACE 期間内に同一 session へ GET が再接続すれば
   // cancelPendingEviction() でクリアされ、eviction は実行されない。
   pendingEvictionTimer?: NodeJS.Timeout;
+  // issue #343 レビュー指摘 (race condition) 対応: GET /mcp 接続のたびにインクリメントする
+  // 世代カウンタ。旧接続の close イベントが新接続の connect より後にイベントループへ届く
+  // 逆転順序でも、close 側が「自分が最新世代か」を確認できるようにするための tie-breaker。
+  // 新接続到達時に必ずインクリメントされるため、逆転順序で発火した stale close は
+  // 自分が観測した世代が現世代と一致しないことを検知して schedule 自体をスキップできる。
+  getConnectionGeneration: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -770,10 +776,17 @@ export async function evictSessionOnDisconnect(sessionId: string): Promise<boole
  */
 export function scheduleEvictionOnDisconnect(
   sessionId: string,
+  generation: number,
   graceMs: number = GET_CLOSE_EVICTION_GRACE_MS
 ): void {
   const session = sessions.get(sessionId);
   if (!session || session.pendingEvictionTimer) return;
+  // issue #343 レビュー指摘 (race condition) 対応: この close イベントが発生した時点で
+  // 既に新しい GET 接続が同一 session を引き継いでいれば (= generation が進んでいれば)、
+  // この close は stale であり schedule 自体を行わない。新接続到達時の
+  // cancelPendingEviction() 呼び出しが旧接続の close より先に走った (= 呼び出し順序が
+  // 逆転した) ケースを generation の不一致で検知し、生存 session の誤 evict を防ぐ。
+  if (session.getConnectionGeneration !== generation) return;
   session.pendingEvictionTimer = setTimeout(() => {
     const s = sessions.get(sessionId);
     if (s) delete s.pendingEvictionTimer;
@@ -1141,6 +1154,7 @@ async function reissueSessionAndDispatch(
         subscribedUris: new Set(),
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
+        getConnectionGeneration: 0,
       });
       console.log(
         `[MCP] session reissued: ${newSid} (replaces stale ${staleSessionId}) ` +
@@ -1747,6 +1761,7 @@ export class MCPServer {
                 subscribedUris: new Set(),
                 createdAt: Date.now(),
                 lastActivityAt: Date.now(),
+                getConnectionGeneration: 0,
               });
               console.log(
                 `[MCP] session opened: ${sid} userId=${userId} githubLogin=${githubLogin} tenant=${tenantDomain}`
@@ -1812,6 +1827,10 @@ export class MCPServer {
       // 猶予期間内に成立したケース。前回の close で scheduleEvictionOnDisconnect() した
       // pending timer が残っていればキャンセルする (= bridge 生存の証跡)。
       cancelPendingEviction(sessionId);
+      // レビュー指摘 (race condition) 対応: この接続の世代をインクリメントして記録する。
+      // 下の req.on('close') はこの時点の generation を閉包で捕捉し、発火時に
+      // 「自分が最新世代か」を scheduleEvictionOnDisconnect() 内で確認できるようにする。
+      const connectionGeneration = ++sessions.get(sessionId)!.getConnectionGeneration;
       // fly.io プロキシの request timeout を無効化して SSE 長時間接続を維持する。
       // ref: https://fly.io/docs/networking/request-headers/#fly-timeout-kill-after
       res.setHeader('Fly-Timeout-Kill-After', '0');
@@ -1836,7 +1855,7 @@ export class MCPServer {
       // 猶予期間内に同一 session へ GET が戻れば上の cancelPendingEviction() で確定的にキャンセルされる。
       req.on('close', () => {
         clearInterval(keepaliveTimer);
-        scheduleEvictionOnDisconnect(sessionId);
+        scheduleEvictionOnDisconnect(sessionId, connectionGeneration);
       });
       try {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);

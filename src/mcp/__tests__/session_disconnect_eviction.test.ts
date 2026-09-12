@@ -28,6 +28,7 @@ describe('evictSessionOnDisconnect (issue #342/#337)', () => {
       subscribedUris: new Set(['inbox://@test-user']),
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
+      getConnectionGeneration: 0,
     };
   }
 
@@ -89,6 +90,7 @@ describe('scheduleEvictionOnDisconnect / cancelPendingEviction (issue #343 再�
       subscribedUris: new Set(['inbox://@test-user']),
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
+      getConnectionGeneration: 0,
     };
   }
 
@@ -97,7 +99,7 @@ describe('scheduleEvictionOnDisconnect / cancelPendingEviction (issue #343 再�
     const session = makeMockSession();
     _addSessionForTesting('sid-reconnect', session);
 
-    scheduleEvictionOnDisconnect('sid-reconnect', 60_000);
+    scheduleEvictionOnDisconnect('sid-reconnect', 0, 60_000);
     // GET 再接続が grace period 内に成立 (= 正常な Last-Event-ID reconnect)
     vi.advanceTimersByTime(30_000);
     cancelPendingEviction('sid-reconnect');
@@ -114,7 +116,7 @@ describe('scheduleEvictionOnDisconnect / cancelPendingEviction (issue #343 再�
     const session = makeMockSession();
     _addSessionForTesting('sid-dead', session);
 
-    scheduleEvictionOnDisconnect('sid-dead', 60_000);
+    scheduleEvictionOnDisconnect('sid-dead', 0, 60_000);
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(session.transport.close).toHaveBeenCalledTimes(1);
@@ -127,8 +129,8 @@ describe('scheduleEvictionOnDisconnect / cancelPendingEviction (issue #343 再�
     const session = makeMockSession();
     _addSessionForTesting('sid-dup', session);
 
-    scheduleEvictionOnDisconnect('sid-dup', 60_000);
-    scheduleEvictionOnDisconnect('sid-dup', 60_000); // 2 回目は no-op
+    scheduleEvictionOnDisconnect('sid-dup', 0, 60_000);
+    scheduleEvictionOnDisconnect('sid-dup', 0, 60_000); // 2 回目は no-op
 
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -136,7 +138,30 @@ describe('scheduleEvictionOnDisconnect / cancelPendingEviction (issue #343 再�
   });
 
   it('存在しない sessionId に対しては何もしない (例外を投げない)', () => {
-    expect(() => scheduleEvictionOnDisconnect('does-not-exist', 60_000)).not.toThrow();
+    expect(() => scheduleEvictionOnDisconnect('does-not-exist', 0, 60_000)).not.toThrow();
     expect(() => cancelPendingEviction('does-not-exist')).not.toThrow();
+  });
+
+  it('reviewer 指摘 (PR #343 race): 旧接続の close が新接続の connect より後にイベントループへ届いても、' +
+    '新接続の generation と一致しないため stale close は schedule 自体を行わず、生存 session を誤 evict しない', async () => {
+    vi.useFakeTimers();
+    const session = makeMockSession();
+    _addSessionForTesting('sid-race', session);
+
+    // 旧接続が GET 開始した時点の generation は 0 (makeMockSession の初期値)。
+    // 新接続が先に connect し、GET ハンドラ相当の generation インクリメント + cancelPendingEviction を行う
+    // (この時点では旧接続の close がまだ届いていないので pending timer は存在せず no-op)。
+    session.getConnectionGeneration = 1;
+    cancelPendingEviction('sid-race');
+
+    // その後に旧接続の close イベントが届く。旧接続が捕捉していた generation は 0 のまま。
+    scheduleEvictionOnDisconnect('sid-race', 0, 60_000);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // generation 不一致で schedule 自体がスキップされているため、
+    // grace period 経過後も evict されず session は生存し続ける。
+    expect(session.transport.close).not.toHaveBeenCalled();
+    expect(await evictSessionOnDisconnect('sid-race')).toBe(true);
   });
 });
