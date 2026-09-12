@@ -4,6 +4,7 @@ import {
   applyMigrations,
   getCurrentVersion,
   runMigration,
+  CURRENT_SCHEMA_VERSION,
 } from '../migrations.js';
 import { sendMessage } from '../messages.js';
 import type { SendMessageInput } from '../../types/schema.js';
@@ -178,12 +179,12 @@ describe('migration v7 → v8 (issue #21 Fix 1: messages.sender_github_login)', 
     expect(row.sender_github_login).toBeNull();
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v10 まで上がり sender_login column が存在する', () => {
+  it('v0 (= fresh install) では schema.sql から直接最新まで上がり sender_login column が存在する', () => {
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     // sender_login column が schema.sql 由来で存在する (v9 名)
     const columns = db
@@ -193,18 +194,18 @@ describe('migration v7 → v8 (issue #21 Fix 1: messages.sender_github_login)', 
     expect(columns.map((c) => c.name)).not.toContain('sender_github_login');
   });
 
-  it('v10 → v10 で no-op (= idempotent)', () => {
+  it('latest → latest で no-op (= idempotent)', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // 再適用しても version は 10 のまま
+    // 再適用しても version は変わらない
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // schema_version table は v10 row が重複していない
+    // schema_version table は latest row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(11) as { version: number }[];
+      .all(CURRENT_SCHEMA_VERSION) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

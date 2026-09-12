@@ -8,6 +8,8 @@ import {
   applyMigrations,
   getCurrentVersion,
   runMigration,
+  migrateToV11,
+  CURRENT_SCHEMA_VERSION,
 } from '../migrations.js';
 
 /**
@@ -159,7 +161,7 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     db.close();
   });
 
-  it('v10 DB に applyMigrations を適用すると v11 になり root_message_id カラムが存在する', () => {
+  it('v10 DB に v11 migration を単体適用すると root_message_id カラムが存在する', () => {
     buildV10Schema(db);
     expect(getCurrentVersion(db)).toBe(10);
 
@@ -169,8 +171,8 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
       .all() as { name: string }[];
     expect(v10Columns.map((c) => c.name)).not.toContain('root_message_id');
 
-    // v11 migration 適用
-    applyMigrations(db);
+    // v11 migration のみ単体適用 (= 後続の v12+ を巻き込まない diff test)
+    migrateToV11(db);
     expect(getCurrentVersion(db)).toBe(11);
 
     // root_message_id カラムが追加されている
@@ -214,8 +216,8 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
       `INSERT INTO message_causes (tenant_id, message_id, caused_by_id, position) VALUES (?, ?, ?, 0)`
     ).run('default', reply2Id, reply1Id);
 
-    // v11 migration 適用
-    applyMigrations(db);
+    // v11 migration のみ単体適用 (= 後続の v12+ を巻き込まない diff test)
+    migrateToV11(db);
     expect(getCurrentVersion(db)).toBe(11);
 
     // reply1 の root_message_id = rootId (直接の親がルート)
@@ -231,13 +233,13 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     expect(r2.root_message_id).toBe(rootId);
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v11 まで上がり root_message_id が存在する', () => {
+  it('v0 (= fresh install) では schema.sql から直接最新まで上がり root_message_id が存在する', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     // message_causes テーブルに root_message_id カラムが存在する
     const columns = db
@@ -246,21 +248,21 @@ describe('migration v10 → v11 (issue #166: message_causes.root_message_id)', (
     expect(columns.map((c) => c.name)).toContain('root_message_id');
   });
 
-  it('v11 → v11 で no-op (= idempotent)、v11 row は重複しない', () => {
+  it('latest → latest で no-op (= idempotent)、latest row は重複しない', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // 再適用しても version は 11 のまま
+    // 再適用しても version は変わらない
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // schema_version table は v11 row が重複していない
+    // schema_version table は latest row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(11) as { version: number }[];
+      .all(CURRENT_SCHEMA_VERSION) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

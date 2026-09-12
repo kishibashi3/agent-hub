@@ -9,6 +9,8 @@ import {
   applyMigrations,
   getCurrentVersion,
   runMigration,
+  migrateToV12,
+  CURRENT_SCHEMA_VERSION,
 } from '../migrations.js';
 
 /**
@@ -185,7 +187,7 @@ describe('migration v11 → v12 (issue #259: RFC 3339+Z timestamp unification)',
     db.pragma('foreign_keys = ON');
 
     expect(getCurrentVersion(db)).toBe(11);
-    applyMigrations(db);
+    migrateToV12(db);
     expect(getCurrentVersion(db)).toBe(12);
 
     // RFC 3339+Z 形式に変換されている
@@ -319,7 +321,7 @@ describe('migration v11 → v12 (issue #259: RFC 3339+Z timestamp unification)',
     expect(getCurrentVersion(db)).toBe(11);
 
     // v12 migration が例外なく完了することを確認 (NOT NULL 制約違反が出ないこと)
-    expect(() => applyMigrations(db)).not.toThrow();
+    expect(() => migrateToV12(db)).not.toThrow();
     expect(getCurrentVersion(db)).toBe(12);
 
     // 全レコードの created_at が RFC 3339+Z 形式になっている (NULL でない)
@@ -374,7 +376,7 @@ describe('migration v11 → v12 (issue #259: RFC 3339+Z timestamp unification)',
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
   });
 
   it('v12 → v12 で no-op (= idempotent)、v12 row は重複しない', () => {
@@ -382,14 +384,14 @@ describe('migration v11 → v12 (issue #259: RFC 3339+Z timestamp unification)',
     db.pragma('foreign_keys = ON');
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(12);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(12) as { version: number }[];
+      .all(CURRENT_SCHEMA_VERSION) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 
@@ -517,7 +519,7 @@ describe('migration v11 → v12 (issue #259: RFC 3339+Z timestamp unification)',
     // PRAGMA foreign_keys = OFF が transaction 外で有効になる修正により、
     // FK 不整合データがあっても migration が成功することを確認。
     // (修正前: INSERT INTO messages_new SELECT ... FROM messages で FK 制約違反が発生)
-    expect(() => applyMigrations(db)).not.toThrow();
+    expect(() => migrateToV12(db)).not.toThrow();
     expect(getCurrentVersion(db)).toBe(12);
 
     // message_causes データが保持されている
