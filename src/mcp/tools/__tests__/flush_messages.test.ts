@@ -166,7 +166,7 @@ describe('flush_messages ツール（issue #336）', () => {
       expect(response.error).toBe('flush_messages failed');
     });
 
-    it('呼び出し元自体が未登録の場合エラー', async () => {
+    it('呼び出し元自体が未登録の場合エラー（mode 不一致とはメッセージを区別する、issue #349）', async () => {
       const result = await handleFlushMessages(
         scopeToTenant(db, 'default'),
         { participant: '@bob' },
@@ -174,6 +174,9 @@ describe('flush_messages ツール（issue #336）', () => {
       );
 
       expect(result.isError).toBe(true);
+      const response = JSON.parse(result.content[0].text as string);
+      expect(response.message).toContain('登録されていません');
+      expect(response.message).not.toContain('mode=global');
     });
   });
 });
