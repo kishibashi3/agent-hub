@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version, description)
-VALUES (12, 'agent-hub v12: unify timestamp format to RFC 3339 / ISO 8601+Z (issue #259)');
+VALUES (13, 'agent-hub v13: add read_receipts.acted_by for proxy-flush audit trail (issue #348)');
 
 -- tenant 登録テーブル
 -- domain は X-Tenant-Id header の値。
@@ -125,11 +125,15 @@ CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by
 CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
 
 -- 既読管理
+-- acted_by: 実際に既読操作を実行した caller (issue #348)。reader 本人による通常の
+-- mark_as_read なら acted_by = reader。flush_messages による代理操作なら
+-- acted_by = 操作した operator の userId、reader は対象 (target) のまま。
 CREATE TABLE read_receipts (
   tenant_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
   reader TEXT NOT NULL,
   read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  acted_by TEXT,
   PRIMARY KEY (tenant_id, message_id, reader),
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id),
   FOREIGN KEY (tenant_id, reader) REFERENCES participants(tenant_id, name)
