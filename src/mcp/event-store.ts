@@ -106,7 +106,10 @@ export class BoundedInMemoryEventStore implements EventStore {
     return events.slice(startIdx);
   }
 
-  async storeEvent(streamId: StreamId, message: JSONRPCMessage): Promise<EventId> {
+  // インターフェース EventStore は Promise<EventId> を要求するが、実装は同期的な
+  // in-memory 操作のみで await すべき非同期処理がないため async は付けず
+  // Promise.resolve() で明示的に包んで返す (require-await 対応)。
+  storeEvent(streamId: StreamId, message: JSONRPCMessage): Promise<EventId> {
     const eventId = this.generateEventId(streamId);
     const entry: StoredEvent = {
       eventId,
@@ -129,11 +132,11 @@ export class BoundedInMemoryEventStore implements EventStore {
     }
     this.streams.set(streamId, bucket);
     this.eventIndex.set(eventId, streamId);
-    return eventId;
+    return Promise.resolve(eventId);
   }
 
-  async getStreamIdForEventId(eventId: EventId): Promise<StreamId | undefined> {
-    return this.eventIndex.get(eventId);
+  getStreamIdForEventId(eventId: EventId): Promise<StreamId | undefined> {
+    return Promise.resolve(this.eventIndex.get(eventId));
   }
 
   async replayEventsAfter(

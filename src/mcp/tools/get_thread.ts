@@ -44,16 +44,16 @@ export const getThreadTool = {
 /**
  * get_thread ツールのハンドラー
  */
-export async function handleGetThread(
+export function handleGetThread(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<{
+): {
   content: Array<{
     type: 'text';
     text: string;
   }>;
-}> {
+} {
   try {
     const input = getThreadInputSchema.parse(args);
 

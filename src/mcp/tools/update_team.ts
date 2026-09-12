@@ -52,11 +52,11 @@ export const updateTeamTool = {
  * @param userId - 実行者のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
-export async function handleUpdateTeam(
+export function handleUpdateTeam(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     // 引数のバリデーション
     const input = updateTeamInputSchema.parse(args);

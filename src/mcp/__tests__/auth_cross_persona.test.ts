@@ -12,7 +12,7 @@
  * middleware 全体の integration smoke test は将来 e2e suite に委譲。
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { isStrictHandleOwnershipEnabled } from '../server.js';
 
 // ============================================================

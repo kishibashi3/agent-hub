@@ -8,22 +8,6 @@ import globals from 'globals';
 // (ref: https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-from-the-no-undef-rule-about-various-typescript-features-such-as-classes-and-interfaces)
 const noUndefOverride = { 'no-undef': 'off' };
 
-// 既存 70 件の違反(#320 のスコープ外、別 issue #<TBD> で追跡)は
-// CI を即赤化させないよう baseline として warn 扱いにし、
-// `--max-warnings` で新規増加のみ検知する運用にする。
-const baselineWarnRules = {
-  '@typescript-eslint/no-unused-vars': [
-    'warn',
-    { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
-  ],
-  '@typescript-eslint/require-await': 'warn',
-  '@typescript-eslint/no-unnecessary-type-assertion': 'warn',
-  '@typescript-eslint/no-explicit-any': 'warn',
-  '@typescript-eslint/no-floating-promises': 'warn',
-  '@typescript-eslint/no-unsafe-assignment': 'warn',
-  '@typescript-eslint/no-unsafe-member-access': 'warn',
-};
-
 export default [
   {
     ignores: ['dist/**', 'node_modules/**', '*.config.ts', '*.config.js'],
@@ -50,7 +34,14 @@ export default [
       ...tseslint.configs.recommended.rules,
       ...tseslint.configs['recommended-requiring-type-checking'].rules,
       ...noUndefOverride,
-      ...baselineWarnRules,
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
       '@typescript-eslint/explicit-function-return-type': 'off',
     },
   },
@@ -77,10 +68,13 @@ export default [
       ...tseslint.configs.recommended.rules,
       ...noUndefOverride,
       '@typescript-eslint/no-unused-vars': [
-        'warn',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
       ],
-      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
 ];

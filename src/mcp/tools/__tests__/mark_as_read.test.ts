@@ -4,7 +4,6 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { handleMarkAsRead } from '../mark_as_read.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // UUID 形式の固定 ID（mark_as_read の UUID validation を通すため）
 const MSG_001 = '11111111-1111-1111-1111-111111111111';

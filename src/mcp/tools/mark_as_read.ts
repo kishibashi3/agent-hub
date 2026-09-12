@@ -48,11 +48,11 @@ export const markAsReadTool = {
  * @param userId - リクエスターのユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
-export async function handleMarkAsRead(
+export function handleMarkAsRead(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     const input = markAsReadInputSchema.parse(args);
 

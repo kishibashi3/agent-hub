@@ -460,6 +460,18 @@ function checkDeploymentInitGate(
   return false;
 }
 
+/**
+ * JSON-RPC request body (型は express の Request.body = any) から `id` を安全に取り出す。
+ * body が object でない/id が JSON-RPC の許容型 (string | number) でない場合は null。
+ */
+function extractJsonRpcId(body: unknown): string | number | null {
+  if (body && typeof body === 'object' && 'id' in body) {
+    const id = (body as { id?: unknown }).id;
+    if (typeof id === 'string' || typeof id === 'number') return id;
+  }
+  return null;
+}
+
 /** X-Agent-Hub-Client ヘッダーを正規化して返す。未送信 or 空文字なら null (issue #276)。 */
 function resolveClientType(req: Request): string | null {
   const h = req.headers['x-agent-hub-client'];
@@ -1382,12 +1394,12 @@ function createMcpServer(): Server {
   // ツール一覧 (edition 依存で CE-operator tools を露出 / 非露出)
   // PE では list_tenants / get_tenant / delete_tenant が無意味 (= tenant が 1 つしかない)
   // なので ListTools から落とす。CallTool 側でも防御 (= 同名 call を error で reject)。
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: getAvailableTools(getEditionConfig()),
   }));
 
   // ツール実行
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler(CallToolRequestSchema, (request, extra) => {
     const { name, arguments: args } = request.params;
 
     const sid = extra.sessionId;
@@ -1416,48 +1428,48 @@ function createMcpServer(): Server {
 
     switch (name) {
       case 'register':
-        return await handleRegister(scope, args, userId, githubLogin, sessionClientType, (handleName) =>
+        return handleRegister(scope, args, userId, githubLogin, sessionClientType, (handleName) =>
           isParticipantOnline(sessions, tenantDomain, handleName)
         );
       case 'get_participants':
-        return await handleGetParticipants(scope, args, userId, (handleName) =>
+        return handleGetParticipants(scope, args, userId, (handleName) =>
           isParticipantOnline(sessions, tenantDomain, handleName)
         );
       case 'create_team':
-        return await handleCreateTeam(scope, args, userId);
+        return handleCreateTeam(scope, args, userId);
       case 'update_team':
-        return await handleUpdateTeam(scope, args, userId);
+        return handleUpdateTeam(scope, args, userId);
       case 'delete_team':
-        return await handleDeleteTeam(scope, args, userId);
+        return handleDeleteTeam(scope, args, userId);
       case 'send_message':
-        return await handleSendMessage(scope, args, userId, githubLogin);
+        return handleSendMessage(scope, args, userId, githubLogin);
       case 'get_messages':
-        return await handleGetMessages(scope, args, userId);
+        return handleGetMessages(scope, args, userId);
       case 'get_history':
-        return await handleGetHistory(scope, args, userId);
+        return handleGetHistory(scope, args, userId);
       case 'get_thread':
-        return await handleGetThread(scope, args, userId);
+        return handleGetThread(scope, args, userId);
       case 'mark_as_read':
-        return await handleMarkAsRead(scope, args, userId);
+        return handleMarkAsRead(scope, args, userId);
       case 'delete_participant':
-        return await handleDeleteParticipant(scope, args, userId);
+        return handleDeleteParticipant(scope, args, userId);
       case 'get_participant_history':
-        return await handleGetParticipantHistory(scope, args, userId);
+        return handleGetParticipantHistory(scope, args, userId);
       case 'list_sessions_by_participant':
-        return await handleListSessionsByParticipant(scope, args, userId, sessions);
+        return handleListSessionsByParticipant(scope, args, userId, sessions);
       case 'list_tenants':
-        return await handleListTenants(scope, args, userId);
+        return handleListTenants(scope, args, userId);
       case 'get_tenant':
-        return await handleGetTenant(scope, args, userId);
+        return handleGetTenant(scope, args, userId);
       case 'delete_tenant':
-        return await handleDeleteTenant(scope, args, userId);
+        return handleDeleteTenant(scope, args, userId);
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
   });
 
   // 利用可能 resource 一覧（その session の自分宛て inbox を 1 件露出）
-  server.setRequestHandler(ListResourcesRequestSchema, async (_request, extra) => {
+  server.setRequestHandler(ListResourcesRequestSchema, (_request, extra) => {
     const sid = extra.sessionId;
     const userId = sid ? sessions.get(sid)?.userId : undefined;
     if (!userId) {
@@ -1476,7 +1488,7 @@ function createMcpServer(): Server {
   });
 
   // resource の中身を返す。inbox://<name> なら getUnreadMessages の結果を JSON で返す
-  server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
+  server.setRequestHandler(ReadResourceRequestSchema, (request, extra) => {
     const sid = extra.sessionId;
     const session = sid ? sessions.get(sid) : undefined;
     if (!session) {
@@ -1506,7 +1518,7 @@ function createMcpServer(): Server {
   });
 
   // 購読: その session の subscribedUris に追加するだけ
-  server.setRequestHandler(SubscribeRequestSchema, async (request, extra) => {
+  server.setRequestHandler(SubscribeRequestSchema, (request, extra) => {
     const sid = extra.sessionId;
     const session = sid ? sessions.get(sid) : undefined;
     if (!session) {
@@ -1520,7 +1532,7 @@ function createMcpServer(): Server {
   });
 
   // 購読解除
-  server.setRequestHandler(UnsubscribeRequestSchema, async (request, extra) => {
+  server.setRequestHandler(UnsubscribeRequestSchema, (request, extra) => {
     const sid = extra.sessionId;
     const session = sid ? sessions.get(sid) : undefined;
     if (session) {
@@ -1692,7 +1704,7 @@ export class MCPServer {
             code: -32000,
             message: 'Bad Request: missing/invalid session or method',
           },
-          id: req.body?.id ?? null,
+          id: extractJsonRpcId(req.body),
         });
       } catch (error) {
         console.error('[MCP] POST handleRequest error:', error);
@@ -1703,7 +1715,7 @@ export class MCPServer {
               code: -32603,
               message: 'Internal server error',
             },
-            id: req.body?.id ?? null,
+            id: extractJsonRpcId(req.body),
           });
         }
       }
@@ -1798,7 +1810,7 @@ export class MCPServer {
   }
 
   /** DB 初期化（getDatabase() の初回呼び出しで applyMigrations が走る） */
-  async initDatabase(): Promise<void> {
+  initDatabase(): void {
     getDatabase();
     console.log('✅ Database initialized');
   }
@@ -1817,7 +1829,7 @@ export class MCPServer {
    */
   async start(): Promise<void> {
     activeEditionConfig = resolveEdition(process.env);
-    await this.initDatabase();
+    this.initDatabase();
 
     // Active ping loop 起動 (= issue #91、 server restart 後の即 cycle 開始)。
     // feature flag AGENT_HUB_MCP_PING_LOOP_DISABLED が set されていれば skip (= rollback path)。

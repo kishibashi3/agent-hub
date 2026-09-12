@@ -44,11 +44,11 @@ export const createTeamTool = {
  * @param userId - 作成者のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
-export async function handleCreateTeam(
+export function handleCreateTeam(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     // 引数のバリデーション
     const input = createTeamInputSchema.parse(args);

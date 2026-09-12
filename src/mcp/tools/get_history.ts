@@ -40,16 +40,16 @@ export const getHistoryTool = {
 /**
  * get_history ツールのハンドラー
  */
-export async function handleGetHistory(
+export function handleGetHistory(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<{
+): {
   content: Array<{
     type: 'text';
     text: string;
   }>;
-}> {
+} {
   try {
     // 入力バリデーション
     const input = getHistoryInputSchema.parse(args);

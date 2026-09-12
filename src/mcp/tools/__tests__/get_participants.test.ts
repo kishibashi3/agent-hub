@@ -2,10 +2,25 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initDatabase } from '../../../db/migrations.js';
 import { scopeToTenant } from '../../../db/tenant-scope.js';
-import { handleGetParticipants } from '../get_participants.js';
+import { handleGetParticipants, type ParticipantEntry } from '../get_participants.js';
 import { registerParticipant, softDeleteParticipant } from '../../../db/participants.js';
 import { createTeam } from '../../../db/teams.js';
 import { sendMessage, markAsRead } from '../../../db/messages.js';
+
+type PersonEntry = Extract<ParticipantEntry, { type: 'person' }>;
+type TeamEntry = Extract<ParticipantEntry, { type: 'team' }>;
+
+function isPerson(entry: ParticipantEntry): entry is PersonEntry {
+  return entry.type === 'person';
+}
+
+function isTeam(entry: ParticipantEntry): entry is TeamEntry {
+  return entry.type === 'team';
+}
+
+function parseEntries(result: { content: Array<{ type: string; text?: string }> }): ParticipantEntry[] {
+  return JSON.parse(result.content[0]!.text!) as ParticipantEntry[];
+}
 
 describe('get_participants ツール', () => {
   let db: Database.Database;
@@ -19,7 +34,7 @@ describe('get_participants ツール', () => {
     const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
 
     expect(result.isError).toBeUndefined();
-    const entries = JSON.parse(result.content[0].text);
+    const entries = parseEntries(result);
     expect(entries).toEqual([]);
   });
 
@@ -32,8 +47,8 @@ describe('get_participants ツール', () => {
     const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
     expect(result.isError).toBeUndefined();
 
-    const entries = JSON.parse(result.content[0].text);
-    const persons = entries.filter((e: any) => e.type === 'person');
+    const entries = parseEntries(result);
+    const persons = entries.filter(isPerson);
     expect(persons).toHaveLength(3);
 
     // 作成日時の降順（最新が先）
@@ -43,7 +58,7 @@ describe('get_participants ツール', () => {
     expect(persons[2].name).toBe('@alice');
 
     // 全員 type: person
-    persons.forEach((p: any) => {
+    persons.forEach((p) => {
       expect(p.type).toBe('person');
     });
   });
@@ -52,8 +67,8 @@ describe('get_participants ツール', () => {
     registerParticipant(db, 'default', { name: 'alice' });
 
     const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-    const entries = JSON.parse(result.content[0].text);
-    const persons = entries.filter((e: any) => e.type === 'person');
+    const entries = parseEntries(result);
+    const persons = entries.filter(isPerson);
 
     expect(persons[0].display_name).toBeNull();
   });
@@ -64,11 +79,11 @@ describe('get_participants ツール', () => {
     registerParticipant(db, 'default', { name: 'bob' });
 
     const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-    const entries = JSON.parse(result.content[0].text);
-    const persons = entries.filter((e: any) => e.type === 'person');
+    const entries = parseEntries(result);
+    const persons = entries.filter(isPerson);
 
     expect(persons).toHaveLength(2);
-    persons.forEach((p: any) => {
+    persons.forEach((p) => {
       expect(p.is_online).toBe(false);
     });
   });
@@ -88,10 +103,10 @@ describe('get_participants ツール', () => {
       'system',
       isOnline
     );
-    const entries = JSON.parse(result.content[0].text);
+    const entries = parseEntries(result);
 
     const byName = Object.fromEntries(
-      entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+      entries.filter(isPerson).map((p) => [p.name, p] as const)
     );
     expect(byName['@alice'].is_online).toBe(true);
     expect(byName['@bob'].is_online).toBe(false);
@@ -104,10 +119,10 @@ describe('get_participants ツール', () => {
       registerParticipant(db, 'default', { name: 'bob' });
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
-      const persons = entries.filter((e: any) => e.type === 'person');
+      const entries = parseEntries(result);
+      const persons = entries.filter(isPerson);
 
-      persons.forEach((p: any) => {
+      persons.forEach((p) => {
         expect(p.queue_depth).toBe(0);
       });
     });
@@ -123,9 +138,9 @@ describe('get_participants ツール', () => {
       sendMessage(db, 'default', { to: '@alice', message: 'hi' }, '@bob');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
       const byName = Object.fromEntries(
-        entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+        entries.filter(isPerson).map((p) => [p.name, p] as const)
       );
 
       expect(byName['@bob'].queue_depth).toBe(2);
@@ -137,15 +152,15 @@ describe('get_participants ツール', () => {
       registerParticipant(db, 'default', { name: 'bob' });
 
       const msg1 = sendMessage(db, 'default', { to: '@bob', message: 'msg1' }, '@alice');
-      const msg2 = sendMessage(db, 'default', { to: '@bob', message: 'msg2' }, '@alice');
+      sendMessage(db, 'default', { to: '@bob', message: 'msg2' }, '@alice');
 
       // bob が msg1 を既読にする
       markAsRead(db, 'default', msg1.id, '@bob');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
       const byName = Object.fromEntries(
-        entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+        entries.filter(isPerson).map((p) => [p.name, p] as const)
       );
 
       // msg2 のみ未読
@@ -162,10 +177,10 @@ describe('get_participants ツール', () => {
       markAsRead(db, 'default', msg.id, '@bob');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
-      const bob = entries.find((e: any) => e.name === '@bob');
+      const entries = parseEntries(result);
+      const bob = entries.find((e): e is PersonEntry => isPerson(e) && e.name === '@bob');
 
-      expect(bob.queue_depth).toBe(0);
+      expect(bob?.queue_depth).toBe(0);
     });
 
     it('team entry には queue_depth が含まれない', async () => {
@@ -174,10 +189,10 @@ describe('get_participants ツール', () => {
       createTeam(db, 'default', { name: 'team-alpha', members: ['bob'] }, 'alice');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
-      const teams = entries.filter((e: any) => e.type === 'team');
+      const entries = parseEntries(result);
+      const teams = entries.filter(isTeam);
 
-      teams.forEach((t: any) => {
+      teams.forEach((t) => {
         expect(t).not.toHaveProperty('queue_depth');
       });
     });
@@ -196,9 +211,9 @@ describe('get_participants ツール', () => {
       sendMessage(db, 'default', { to: '@team-alpha', message: 'hi team' }, '@alice');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
       const byName = Object.fromEntries(
-        entries.filter((e: any) => e.type === 'person').map((p: any) => [p.name, p])
+        entries.filter(isPerson).map((p) => [p.name, p] as const)
       );
 
       // team メッセージは個人の queue_depth に加算されない
@@ -221,11 +236,11 @@ describe('get_participants ツール', () => {
       softDeleteParticipant(db, 'default', '@alice');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
-      const persons = entries.filter((e: any) => e.type === 'person');
+      const entries = parseEntries(result);
+      const persons = entries.filter(isPerson);
 
       // soft-delete 済み alice は一覧に現れない
-      expect(persons.map((p: any) => p.name)).not.toContain('@alice');
+      expect(persons.map((p) => p.name)).not.toContain('@alice');
       // bob のみ残る（queue_depth は 0: alice からのメッセージはない）
       expect(persons).toHaveLength(1);
       expect(persons[0].name).toBe('@bob');
@@ -245,11 +260,11 @@ describe('get_participants ツール', () => {
 
       // tenant-b の alice の queue_depth は 0 であること
       const result = await handleGetParticipants(scopeToTenant(db, 'tenant-b'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
-      const alice = entries.find((e: any) => e.name === '@alice');
+      const entries = parseEntries(result);
+      const alice = entries.find((e): e is PersonEntry => isPerson(e) && e.name === '@alice');
 
       expect(alice).toBeDefined();
-      expect(alice.queue_depth).toBe(0);
+      expect(alice?.queue_depth).toBe(0);
     });
   });
 
@@ -258,7 +273,7 @@ describe('get_participants ツール', () => {
       registerParticipant(db, 'default', { name: 'alice' });
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
 
       expect(entries).toHaveLength(1);
       expect(entries[0].type).toBe('person');
@@ -282,9 +297,9 @@ describe('get_participants ツール', () => {
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
       expect(result.isError).toBeUndefined();
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
 
-      const teams = entries.filter((e: any) => e.type === 'team');
+      const teams = entries.filter(isTeam);
       expect(teams).toHaveLength(1);
 
       const team = teams[0];
@@ -310,7 +325,7 @@ describe('get_participants ツール', () => {
       createTeam(db, 'default', { name: 'team-x', members: ['bob'] }, 'alice');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
 
       expect(entries).toHaveLength(3); // person 2 + team 1
       // 先に person、後に team
@@ -329,10 +344,10 @@ describe('get_participants ツール', () => {
       createTeam(db, 'default', { name: 'team2', members: ['charlie'] }, 'bob');
 
       const result = await handleGetParticipants(scopeToTenant(db, 'default'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
 
       const teamsByName = Object.fromEntries(
-        entries.filter((e: any) => e.type === 'team').map((t: any) => [t.name, t])
+        entries.filter(isTeam).map((t) => [t.name, t] as const)
       );
 
       expect(teamsByName['@team1'].owner).toBe('@alice');
@@ -372,19 +387,19 @@ describe('get_participants ツール', () => {
         {},
         'system'
       );
-      const insideEntries = JSON.parse(insideResult.content[0].text);
-      const insideTeams = insideEntries.filter((e: any) => e.type === 'team');
+      const insideEntries = parseEntries(insideResult);
+      const insideTeams = insideEntries.filter(isTeam);
       expect(insideTeams).toHaveLength(1);
       expect(insideTeams[0].name).toBe('@secret');
       expect(insideTeams[0].owner).toBe('@alice');
 
       // (2) negative 側: tenant-b には person 1 件 (@bob) のみ、team は無い
       const result = await handleGetParticipants(scopeToTenant(db, 'tenant-b'), {}, 'system');
-      const entries = JSON.parse(result.content[0].text);
+      const entries = parseEntries(result);
 
-      const persons = entries.filter((e: any) => e.type === 'person');
-      const teams = entries.filter((e: any) => e.type === 'team');
-      expect(persons.map((p: any) => p.name)).toEqual(['@bob']);
+      const persons = entries.filter(isPerson);
+      const teams = entries.filter(isTeam);
+      expect(persons.map((p) => p.name)).toEqual(['@bob']);
       expect(teams).toEqual([]);
     });
   });

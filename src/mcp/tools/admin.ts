@@ -80,11 +80,11 @@ export const deleteParticipantTool = {
   },
 };
 
-export async function handleDeleteParticipant(
+export function handleDeleteParticipant(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   const denied = ensureAdmin(userId);
   if (denied) return denied;
 
@@ -147,11 +147,11 @@ export const getParticipantHistoryTool = {
   },
 };
 
-export async function handleGetParticipantHistory(
+export function handleGetParticipantHistory(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   const denied = ensureAdmin(userId);
   if (denied) return denied;
 
@@ -183,7 +183,7 @@ export async function handleGetParticipantHistory(
        ORDER BY created_at DESC, rowid DESC
        LIMIT ?`
     )
-    .all(scope.tenantId, handleName, handleName, limit) as unknown[];
+    .all(scope.tenantId, handleName, handleName, limit);
 
   return ok({ participant: handleName, count: messages.length, messages });
 }
@@ -229,12 +229,12 @@ export const listSessionsByParticipantTool = {
  * @param sessionEntries - sessions Map の Iterable (server.ts から渡す)。
  *                         SessionView の superset であれば型互換 (= 実 Session を直接渡せる)。
  */
-export async function handleListSessionsByParticipant(
+export function handleListSessionsByParticipant(
   scope: TenantScope,
   args: unknown,
   userId: string,
   sessionEntries: Iterable<readonly [string, SessionView]>
-): Promise<CallToolResult> {
+): CallToolResult {
   const denied = ensureAdmin(userId);
   if (denied) return denied;
 
