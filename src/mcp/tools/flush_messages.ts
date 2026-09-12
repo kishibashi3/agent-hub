@@ -48,7 +48,10 @@ export function handleFlushMessages(
     const input = flushMessagesInputSchema.parse(args);
 
     const caller = scope.getParticipantByName(userId);
-    if (caller?.mode !== 'global') {
+    if (!caller) {
+      throw new Error(`${userId} は登録されていません`);
+    }
+    if (caller.mode !== 'global') {
       throw new Error('flush_messages は mode=global の peer のみ許可されています');
     }
 

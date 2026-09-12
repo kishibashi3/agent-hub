@@ -71,7 +71,10 @@ export function handleSendMessage(
     // @* ブロードキャスト: mode=global のみ許可 (issue #275)
     if (input.to === '@*') {
       const senderParticipant = scope.getParticipantByName(sender);
-      if (senderParticipant?.mode !== 'global') {
+      if (!senderParticipant) {
+        throw new Error(`${sender} は登録されていません`);
+      }
+      if (senderParticipant.mode !== 'global') {
         throw new Error('broadcast (@*) は mode=global の peer のみ許可されています');
       }
     }
