@@ -494,7 +494,8 @@ export function markAsRead(
   db: Database,
   tenantId: string,
   messageId: string,
-  reader: string
+  reader: string,
+  actedBy?: string
 ): { read: true } {
   const readerName = reader.startsWith('@') ? reader : `@${reader}`;
 
@@ -526,9 +527,12 @@ export function markAsRead(
   }
 
   const now = new Date().toISOString();
+  const actedByName = actedBy
+    ? (actedBy.startsWith('@') ? actedBy : `@${actedBy}`)
+    : readerName;
   db.prepare(
-    'INSERT OR IGNORE INTO read_receipts (tenant_id, message_id, reader, read_at) VALUES (?, ?, ?, ?)'
-  ).run(tenantId, messageId, readerName, now);
+    'INSERT OR IGNORE INTO read_receipts (tenant_id, message_id, reader, read_at, acted_by) VALUES (?, ?, ?, ?, ?)'
+  ).run(tenantId, messageId, readerName, now, actedByName);
 
   return { read: true };
 }
