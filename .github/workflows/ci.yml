@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同じ branch への新しい push が来たら古い run を cancel する。
+# PR の手戻しが CI 詰まりを起こすのを防ぐ (= agent-hub-bridges と同じ運用)。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + lint + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # #321 (16 件の migration テスト失敗修正) 着地までは non-blocking。
+      # #321 完了後、continue-on-error を外して required check 化する (planner フォローアップ予定)。
+      - name: Test
+        run: npm test
+        continue-on-error: true

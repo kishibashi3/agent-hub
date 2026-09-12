@@ -55,12 +55,12 @@ export const sendMessageTool = {
  *   省略 or null の場合は NULL として記録される (= migration 前の既存 row との互換保持用)。
  * @returns MCP CallToolResult
  */
-export async function handleSendMessage(
+export function handleSendMessage(
   scope: TenantScope,
   args: unknown,
   userId: string,
   githubLogin?: string | null
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     // 引数のバリデーション
     const input = sendMessageInputSchema.parse(args);

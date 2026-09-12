@@ -90,7 +90,7 @@ describe('teams CRUD', () => {
     it('members が空でも owner が自動的にメンバーになる（最低1人制約）', () => {
       registerParticipants(db, ['alice']);
 
-      const team = createTeam(
+      createTeam(
         db,
         'default',
         { name: 'solo-team', members: [] },
@@ -105,7 +105,7 @@ describe('teams CRUD', () => {
     it('owner が members に含まれていても重複しない', () => {
       registerParticipants(db, ['alice', 'bob']);
 
-      const team = createTeam(
+      createTeam(
         db,
         'default',
         { name: 'team', members: ['alice', 'bob'] },

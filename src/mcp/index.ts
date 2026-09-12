@@ -47,4 +47,7 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-main();
+main().catch((error: unknown) => {
+  console.error('❌ Failed to start agent-hub:', error);
+  process.exit(1);
+});

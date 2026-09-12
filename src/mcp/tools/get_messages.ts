@@ -32,11 +32,11 @@ export const getMessagesTool = {
  * @param userId - リクエスターのユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
-export async function handleGetMessages(
+export function handleGetMessages(
   scope: TenantScope,
   _args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     // productive activity 観察 (= issue #26)、 inbox 消費は active engagement
     // (= empty fetch も polling-style active check を兼ねるため update する)

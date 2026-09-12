@@ -55,14 +55,14 @@ export function inferModeFromClientType(clientType: string | null): PeerMode | n
  * @param clientType - X-Agent-Hub-Client ヘッダー値。mode 自動決定に使用
  * @param isOnline - ハンドルが現在 SSE 在席中かを判定するコールバック（省略時は常に false）
  */
-export async function handleRegister(
+export function handleRegister(
   scope: TenantScope,
   args: unknown,
   _userId: string,
   githubLogin: string,
   clientType: string | null = null,
   isOnline: (handleName: string) => boolean = () => false
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     const input = registerInputSchema.parse(args);
     const handleName = `@${input.name}`;

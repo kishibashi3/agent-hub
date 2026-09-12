@@ -82,12 +82,12 @@ export type ParticipantEntry =
  *                   未指定なら全員 offline を返す (DB 単独テスト用フォールバック)。
  * @returns MCP CallToolResult
  */
-export async function handleGetParticipants(
+export function handleGetParticipants(
   scope: TenantScope,
   _args: unknown,
   _userId: string,
   isOnline: IsOnlineFn = () => false
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     const participants = scope.getParticipants();
     const teams = scope.getTeams();

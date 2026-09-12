@@ -7,7 +7,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src",
     "migrate": "tsx src/db/migrations.ts",
     "mcp:start": "tsx src/mcp/index.ts",
     "mcp:dev": "tsx watch src/mcp/index.ts"
@@ -27,6 +27,8 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "@types/supertest": "^6.0.2",
+    "@eslint/js": "^9.18.0",
+    "globals": "^14.0.0",
     "@typescript-eslint/eslint-plugin": "^8.19.1",
     "@typescript-eslint/parser": "^8.19.1",
     "eslint": "^9.18.0",

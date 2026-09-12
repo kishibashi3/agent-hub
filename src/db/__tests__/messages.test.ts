@@ -10,7 +10,6 @@ import {
   getThread,
   markAsRead,
   getThreadSize,
-  PPD_THREAD_THRESHOLD,
 } from '../messages';
 import type { SendMessageInput, GetHistoryInput } from '../../types/schema';
 
@@ -810,11 +809,11 @@ describe('messages.ts', () => {
       // alice -> bob (root)
       const root = sendMessage(db, 'default', { to: 'bob', message: 'start task' }, 'alice');
       // bob -> alice (reply 1)
-      const reply1 = sendMessage(
+      sendMessage(
         db, 'default', { to: 'alice', message: 'acknowledged', caused_by: root.id }, 'bob'
       );
       // alice -> bob (reply 2)
-      const reply2 = sendMessage(
+      sendMessage(
         db, 'default', { to: 'bob', message: 'next step', caused_by: root.id }, 'alice'
       );
 

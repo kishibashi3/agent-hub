@@ -43,11 +43,11 @@ export const deleteTeamTool = {
  * @param userId - 実行者のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
-export async function handleDeleteTeam(
+export function handleDeleteTeam(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     // 引数のバリデーション
     const input = deleteTeamInputSchema.parse(args);

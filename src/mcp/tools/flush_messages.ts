@@ -39,11 +39,11 @@ export const flushMessagesTool = {
  * @param userId - 呼び出し元のユーザーID（X-Participant-Id ヘッダーから取得）
  * @returns MCP CallToolResult
  */
-export async function handleFlushMessages(
+export function handleFlushMessages(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   try {
     const input = flushMessagesInputSchema.parse(args);
 

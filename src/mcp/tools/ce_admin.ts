@@ -81,11 +81,11 @@ interface TenantSummary {
   message_count: number;
 }
 
-export async function handleListTenants(
+export function handleListTenants(
   scope: TenantScope,
   _args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   const denied = ensureCeOperator(userId, scope.tenantId);
   if (denied) return denied;
 
@@ -140,11 +140,11 @@ interface TenantParticipantRow {
   created_at: string;
 }
 
-export async function handleGetTenant(
+export function handleGetTenant(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   const denied = ensureCeOperator(userId, scope.tenantId);
   if (denied) return denied;
 
@@ -240,11 +240,11 @@ export const deleteTenantTool = {
   },
 };
 
-export async function handleDeleteTenant(
+export function handleDeleteTenant(
   scope: TenantScope,
   args: unknown,
   userId: string
-): Promise<CallToolResult> {
+): CallToolResult {
   const denied = ensureCeOperator(userId, scope.tenantId);
   if (denied) return denied;
 
