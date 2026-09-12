@@ -219,6 +219,48 @@ export function getUnreadMessages(
 }
 
 /**
+ * 未読メッセージを取得する（DM + ブロードキャストのみ、チーム宛は除外）
+ *
+ * flush_messages (issue #336) 用。queue_depth (getQueueDepths) が person 宛
+ * メッセージのみをカウントしているのと scope を揃えるため、team 宛は対象外とする。
+ * - DM: 自分宛のメッセージ
+ * - ブロードキャスト: @* 宛のメッセージ
+ * - 自分が送信したメッセージ・既読済みは除外
+ */
+export function getUnreadDmBroadcastMessages(
+  db: Database,
+  tenantId: string,
+  reader: string
+): Message[] {
+  const readerName = reader.startsWith('@') ? reader : `@${reader}`;
+
+  const readerExists = db
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, readerName);
+  if (!readerExists) {
+    throw new Error(`${readerName} は登録されていません`);
+  }
+
+  const messages = db
+    .prepare(
+      `SELECT m.*, mc.caused_by_id AS caused_by
+       FROM messages m
+       LEFT JOIN message_causes mc
+         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+       LEFT JOIN read_receipts rr
+         ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
+       WHERE m.tenant_id = ?
+         AND rr.message_id IS NULL
+         AND (m.recipient = ? OR m.recipient = '@*')
+         AND m.sender != ?
+       ORDER BY m.created_at ASC`
+    )
+    .all(readerName, tenantId, readerName, readerName) as Message[];
+
+  return messages;
+}
+
+/**
  * 会話履歴を取得する
  */
 export function getHistory(
