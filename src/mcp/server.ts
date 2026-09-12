@@ -85,6 +85,10 @@ interface Session {
   // orphan eviction に誤って引っかかるのを防ぐ。
   // → subscribedUris.size === 0 でも lastActivityAt が新しければ正常 session と判断。
   lastActivityAt: number;
+  // issue #342/#337: GET /mcp の req.on('close') から scheduleEvictionOnDisconnect() で
+  // セットされる猶予付き eviction timer。GRACE 期間内に同一 session へ GET が再接続すれば
+  // cancelPendingEviction() でクリアされ、eviction は実行されない。
+  pendingEvictionTimer?: NodeJS.Timeout;
 }
 
 const sessions = new Map<string, Session>();
@@ -678,6 +682,17 @@ const ORPHAN_IDLE_TTL_MS = 5 * 60_000;
 export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 /**
+ * GET /mcp 切断後、猶予付き eviction (`scheduleEvictionOnDisconnect`) が実際に evict
+ * するまで待つ猶予期間 (issue #343 再設計)。
+ *
+ * keepalive interval の 4 倍 (= 60s)。公式 SDK client の自動 reconnect は指数バックオフ
+ * だが初回 retry は概ね数秒以内に来るため、60s あれば「一時的な GET 切断からの正常な
+ * reconnect」を高い確度で猶予期間内に収められる。かつ「bridge プロセスの実死亡」を
+ * is_online に反映するまでの遅延としても許容範囲 (旧: 即時 / ping loop 有効時: 数分)。
+ */
+export const GET_CLOSE_EVICTION_GRACE_MS = SSE_KEEPALIVE_INTERVAL_MS * 4;
+
+/**
  * SSE レスポンスに keepalive コメントを書き込む (issue #240)。
  *
  * `res.writableEnded` が true の場合は書き込みをスキップする (接続クローズ race 対策)。
@@ -713,13 +728,19 @@ export function getPingTimeoutMs(): number {
  * 指定 sessionId の session を `transport.close()` → `sessions.delete()` の順で明示的に除去する。
  *
  * issue #342/#337: GET /mcp の SSE stream が下層 socket 切断で終了しても、SDK の
- * standalone stream `cancel()` は `transport.onclose` を呼ばないため、この関数を呼ぶ側
- * (GET /mcp の `req.on('close')`) が唯一の確実な eviction 経路になる。
- * active ping loop (`runOneActivePingCycle`) の eviction と同じ pattern。
+ * standalone stream `cancel()` は `transport.onclose` を呼ばないため、GET 切断検知
+ * (`req.on('close')`) がこの eviction を起動できる唯一の経路になる。ただし GET 切断は
+ * 「bridge プロセス死亡」だけでなく「公式 SDK client の正常な reconnect」でも発生するため、
+ * 呼び出し側は原則 `scheduleEvictionOnDisconnect()` 経由の猶予付き eviction を使うこと。
+ * 即時 evict が必要な場面 (= active ping loop の retry 全滅、GET handleRequest 自体の
+ * エラー等、bridge 生存確認が別途取れている場合) でのみ本関数を直接呼ぶ。
  */
 export async function evictSessionOnDisconnect(sessionId: string): Promise<boolean> {
   const session = sessions.get(sessionId);
   if (!session) return false;
+  if (session.pendingEvictionTimer) {
+    clearTimeout(session.pendingEvictionTimer);
+  }
   try {
     await session.transport.close();
   } catch (_closeErr) {
@@ -730,6 +751,46 @@ export async function evictSessionOnDisconnect(sessionId: string): Promise<boole
   }
   console.log(`[MCP] session evicted on connection close: ${sessionId}`);
   return true;
+}
+
+/**
+ * GET /mcp の `req.on('close')` から切断のたびに evict するのではなく、
+ * `GET_CLOSE_EVICTION_GRACE_MS` だけ待って、その間に同一 session への GET reconnect
+ * (`cancelPendingEviction()`) が来なければ evict する猶予付き eviction (issue #343 再設計)。
+ *
+ * 公式 MCP SDK の `StreamableHTTPClientTransport` は GET SSE が予期せず切れると
+ * `Last-Event-ID` 付きで同一 session に自動 reconnect する。即時 evict だと、この正常な
+ * reconnect のたびに session が消え、eventStore による resumable reconnect
+ * (= 切断中に来た notification の再送) が壊れる。grace period を挟むことで、
+ * 「一時的な GET 切断からの正常な reconnect」と「bridge プロセスの実死亡」を区別する。
+ *
+ * 既に pending timer がある場合は再セットしない (= 同一切断に対する多重 schedule 防止。
+ * `req.on('close')` は 1 request につき高々 1 回しか発火しないため通常は起こらないが、
+ * 防御的に guard する)。
+ */
+export function scheduleEvictionOnDisconnect(
+  sessionId: string,
+  graceMs: number = GET_CLOSE_EVICTION_GRACE_MS
+): void {
+  const session = sessions.get(sessionId);
+  if (!session || session.pendingEvictionTimer) return;
+  session.pendingEvictionTimer = setTimeout(() => {
+    const s = sessions.get(sessionId);
+    if (s) delete s.pendingEvictionTimer;
+    void evictSessionOnDisconnect(sessionId);
+  }, graceMs);
+}
+
+/**
+ * `scheduleEvictionOnDisconnect()` でセットされた猶予付き eviction timer をキャンセルする。
+ * 同一 session への GET reconnect 成立時 (= bridge が生きていた証跡) に呼ぶ。
+ */
+export function cancelPendingEviction(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session?.pendingEvictionTimer) return;
+  clearTimeout(session.pendingEvictionTimer);
+  delete session.pendingEvictionTimer;
+  console.log(`[MCP] GET reconnect within grace period, eviction cancelled: ${sessionId}`);
 }
 
 /**
@@ -1747,6 +1808,10 @@ export class MCPServer {
         });
         return;
       }
+      // issue #343 再設計: GET reconnect (= 公式 SDK client の Last-Event-ID 付き自動再接続) が
+      // 猶予期間内に成立したケース。前回の close で scheduleEvictionOnDisconnect() した
+      // pending timer が残っていればキャンセルする (= bridge 生存の証跡)。
+      cancelPendingEviction(sessionId);
       // fly.io プロキシの request timeout を無効化して SSE 長時間接続を維持する。
       // ref: https://fly.io/docs/networking/request-headers/#fly-timeout-kill-after
       res.setHeader('Fly-Timeout-Kill-After', '0');
@@ -1760,16 +1825,18 @@ export class MCPServer {
       // finally 節でも clearInterval を呼ぶが、clearInterval は clear 済み ID への呼び出しが
       // no-op のため二重 clear は安全・意図的 (= idempotent)。
       //
-      // issue #342/#337: bridge プロセスが SIGKILL/OOM で abrupt に落ちた場合、
-      // transport.onclose は SDK の standalone SSE stream cancel() から発火されないため
-      // (cancel() は内部 _streamMapping の掃除のみで onclose を呼ばない)、session が
-      // `sessions` Map に残り続け is_online が true のまま zombie 化する。active ping loop は
+      // issue #342/#337 (診断) + #343 (再設計): bridge プロセスが SIGKILL/OOM で abrupt に
+      // 落ちた場合、transport.onclose は SDK の standalone SSE stream cancel() から発火されない
+      // ため (cancel() は内部 _streamMapping の掃除のみで onclose を呼ばない)、session が
+      // `sessions` Map に残り続け is_online が true のまま zombie 化しうる。active ping loop は
       // bridge-claude2 (Go, ping 未実装) 対応のため本番で無効化されており (docker-compose.yml)、
-      // 唯一残る確実な切断検知が Node の素の `req.on('close')` (= 下層 socket 切断で確実に発火)。
-      // ここで明示的に evictSessionOnDisconnect() を呼び、is_online を即時 false に落とす。
+      // 唯一残る切断検知が Node の素の `req.on('close')` (= 下層 socket 切断で確実に発火)。
+      // ただし GET close は「bridge 死亡」だけでなく公式 SDK client の正常な reconnect でも
+      // 発生するため、即時 evict はせず scheduleEvictionOnDisconnect() で猶予期間を挟む。
+      // 猶予期間内に同一 session へ GET が戻れば上の cancelPendingEviction() で確定的にキャンセルされる。
       req.on('close', () => {
         clearInterval(keepaliveTimer);
-        void evictSessionOnDisconnect(sessionId);
+        scheduleEvictionOnDisconnect(sessionId);
       });
       try {
         await sessions.get(sessionId)!.transport.handleRequest(req, res);
