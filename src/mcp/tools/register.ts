@@ -2,6 +2,7 @@ import { registerInputSchema } from '../../types/schema.js';
 import type { PeerMode } from '../../types/schema.js';
 import type { TenantScope } from '../../db/tenant-scope.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { HOWTO_RESOURCE_URI, HOWTO_DIGEST_SUMMARY } from '../howto.js';
 
 export const registerTool = {
   name: 'register',
@@ -156,6 +157,8 @@ export function handleRegister(
       owner: participant.owner,
       mode: participant.mode,
       created_at: participant.created_at,
+      howto_uri: HOWTO_RESOURCE_URI,
+      howto_digest: HOWTO_DIGEST_SUMMARY,
     };
     if (alreadyOnline) {
       responseBody.warning = 'handle_already_online';

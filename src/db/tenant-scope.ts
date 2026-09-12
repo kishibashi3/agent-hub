@@ -43,6 +43,8 @@ export interface TenantScope {
   sendMessage(input: SendMessageInput, sender: string, senderLogin?: string | null): Message;
   getMessage(messageId: string, requester: string): Message;
   getUnreadMessages(reader: string): Message[];
+  /** DM + ブロードキャストのみの未読を取得（チーム宛除外、flush_messages 用 issue #336） */
+  getUnreadDmBroadcastMessages(reader: string): Message[];
   getHistory(input: GetHistoryInput, requester: string): Message[];
   getThread(input: GetThreadInput, requester: string): { rootId: string; threadSize: number; messages: Message[] };
   markAsRead(messageId: string, reader: string): { read: true };
@@ -91,6 +93,8 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
     getMessage: (messageId, requester) =>
       M.getMessage(db, tenantId, messageId, requester),
     getUnreadMessages: (reader) => M.getUnreadMessages(db, tenantId, reader),
+    getUnreadDmBroadcastMessages: (reader) =>
+      M.getUnreadDmBroadcastMessages(db, tenantId, reader),
     getHistory: (input, requester) =>
       M.getHistory(db, tenantId, input, requester),
     getThread: (input, requester) =>

@@ -154,81 +154,61 @@ export function runMigration(
 }
 
 /**
- * 未適用のマイグレーションを順序通りに適用
- *
- * - 新規 DB (currentVersion === 0): schema.sql を一括実行（最新バージョンで作成）
- * - 既存 DB (currentVersion < targetVersion): 段階的に ALTER 系マイグレーションを適用
+ * schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
+ * applyMigrations() の最終到達バージョン。新しい migration を追加したら
+ * ここを bump し、対応する migrateToVN() を追加する。
  */
-export function applyMigrations(db: Database.Database): void {
-  const currentVersion = getCurrentVersion(db);
-  console.log(`[Migration] Current database version: ${currentVersion}`);
+export const CURRENT_SCHEMA_VERSION = 12;
 
-  // schema.sql のバージョン（ファイル内の INSERT 文と一致させる）
-  const targetVersion = 12;
+// v2 → v3: participants に owner 列を追加
+export function migrateToV3(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 3) return;
+  runMigration(db, {
+    version: 3,
+    description: 'add owner column to participants',
+    sql: `
+      ALTER TABLE participants ADD COLUMN owner TEXT;
+      INSERT INTO schema_version (version, description)
+      VALUES (3, 'add owner column to participants');
+    `,
+  });
+}
 
-  if (currentVersion >= targetVersion) {
-    console.log('[Migration] Database is up to date');
-    return;
-  }
+// v3 → v4: participants に mode 列を追加（worker type 宣言）
+export function migrateToV4(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 4) return;
+  runMigration(db, {
+    version: 4,
+    description: 'add mode column to participants',
+    sql: `
+      ALTER TABLE participants ADD COLUMN mode TEXT;
+      INSERT INTO schema_version (version, description)
+      VALUES (4, 'add mode column to participants');
+    `,
+  });
+}
 
-  // 新規 DB (v0) → 最新スキーマで一括作成
-  if (currentVersion === 0) {
-    runMigration(db, {
-      version: targetVersion,
-      description: 'fresh install at latest schema',
-      sql: loadSchemaFile(),
-    });
-    console.log(
-      `[Migration] Migration completed. Database version: ${targetVersion}`
-    );
-    return;
-  }
+// v4 → v5: participants に deleted_at 列を追加（soft delete 対応）
+export function migrateToV5(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 5) return;
+  runMigration(db, {
+    version: 5,
+    description: 'add deleted_at column to participants',
+    sql: `
+      ALTER TABLE participants ADD COLUMN deleted_at TEXT;
+      INSERT INTO schema_version (version, description)
+      VALUES (5, 'add deleted_at column to participants');
+    `,
+  });
+}
 
-  // v2 → v3: participants に owner 列を追加
-  if (currentVersion < 3) {
-    runMigration(db, {
-      version: 3,
-      description: 'add owner column to participants',
-      sql: `
-        ALTER TABLE participants ADD COLUMN owner TEXT;
-        INSERT INTO schema_version (version, description)
-        VALUES (3, 'add owner column to participants');
-      `,
-    });
-  }
-
-  // v3 → v4: participants に mode 列を追加（worker type 宣言）
-  if (currentVersion < 4) {
-    runMigration(db, {
-      version: 4,
-      description: 'add mode column to participants',
-      sql: `
-        ALTER TABLE participants ADD COLUMN mode TEXT;
-        INSERT INTO schema_version (version, description)
-        VALUES (4, 'add mode column to participants');
-      `,
-    });
-  }
-
-  // v4 → v5: participants に deleted_at 列を追加（soft delete 対応）
-  if (currentVersion < 5) {
-    runMigration(db, {
-      version: 5,
-      description: 'add deleted_at column to participants',
-      sql: `
-        ALTER TABLE participants ADD COLUMN deleted_at TEXT;
-        INSERT INTO schema_version (version, description)
-        VALUES (5, 'add deleted_at column to participants');
-      `,
-    });
-  }
-
-  // v5 → v6: multi-tenant 化 (tenants table + tenant_id 列 + 複合 PK)
-  // SQLite は ALTER で PK 変更できないので、各テーブル recreate + データ backfill。
-  // FK 整合のため foreign_keys を一時 OFF。既存データは tenant_id='default' 扱い。
-  if (currentVersion < 6) {
-    runMigration(db, {
-      version: 6,
+// v5 → v6: multi-tenant 化 (tenants table + tenant_id 列 + 複合 PK)
+// SQLite は ALTER で PK 変更できないので、各テーブル recreate + データ backfill。
+// FK 整合のため foreign_keys を一時 OFF。既存データは tenant_id='default' 扱い。
+export function migrateToV6(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 6) return;
+  runMigration(db, {
+    version: 6,
       description: 'multi-tenant: tenants table + tenant_id columns + composite PKs',
       sql: `
         -- FK を一時無効化 (recreate 中の整合維持のため)
@@ -327,123 +307,129 @@ export function applyMigrations(db: Database.Database): void {
         INSERT INTO schema_version (version, description)
         VALUES (6, 'multi-tenant: tenants table + tenant_id columns + composite PKs');
       `,
-    });
-  }
+  });
+}
 
-  // v6 → v7: participants に last_active_at 列を追加 (= productive activity timestamp、 issue #26)
-  if (currentVersion < 7) {
-    runMigration(db, {
-      version: 7,
-      description: 'add last_active_at column to participants for activity precision',
-      sql: `
-        ALTER TABLE participants ADD COLUMN last_active_at TEXT;
-        INSERT INTO schema_version (version, description)
-        VALUES (7, 'add last_active_at column to participants for activity precision');
-      `,
-    });
-  }
+// v6 → v7: participants に last_active_at 列を追加 (= productive activity timestamp、 issue #26)
+export function migrateToV7(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 7) return;
+  runMigration(db, {
+    version: 7,
+    description: 'add last_active_at column to participants for activity precision',
+    sql: `
+      ALTER TABLE participants ADD COLUMN last_active_at TEXT;
+      INSERT INTO schema_version (version, description)
+      VALUES (7, 'add last_active_at column to participants for activity precision');
+    `,
+  });
+}
 
-  // v7 → v8: messages に sender_github_login 列を追加 (= PAT owner forensic audit、 issue #21 Fix 1)
-  // NULL 許容: migration 前の既存 row のみ NULL。production server は non-null を書き込む。
-  if (currentVersion < 8) {
-    runMigration(db, {
-      version: 8,
-      description: 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)',
-      sql: `
-        ALTER TABLE messages ADD COLUMN sender_github_login TEXT;
-        INSERT INTO schema_version (version, description)
-        VALUES (8, 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
-      `,
-    });
-  }
+// v7 → v8: messages に sender_github_login 列を追加 (= PAT owner forensic audit、 issue #21 Fix 1)
+// NULL 許容: migration 前の既存 row のみ NULL。production server は non-null を書き込む。
+export function migrateToV8(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 8) return;
+  runMigration(db, {
+    version: 8,
+    description: 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)',
+    sql: `
+      ALTER TABLE messages ADD COLUMN sender_github_login TEXT;
+      INSERT INTO schema_version (version, description)
+      VALUES (8, 'add sender_github_login column to messages for forensic audit (issue #21 Fix 1)');
+    `,
+  });
+}
 
-  // v8 → v9: messages.sender_github_login → sender_login rename (auth provider agnostic、 issue #127)
-  if (currentVersion < 9) {
-    runMigration(db, {
-      version: 9,
-      description: 'rename messages.sender_github_login to sender_login (issue #127)',
-      sql: `
-        ALTER TABLE messages RENAME COLUMN sender_github_login TO sender_login;
-        INSERT INTO schema_version (version, description)
-        VALUES (9, 'rename messages.sender_github_login to sender_login (issue #127)');
-      `,
-    });
-  }
+// v8 → v9: messages.sender_github_login → sender_login rename (auth provider agnostic、 issue #127)
+export function migrateToV9(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 9) return;
+  runMigration(db, {
+    version: 9,
+    description: 'rename messages.sender_github_login to sender_login (issue #127)',
+    sql: `
+      ALTER TABLE messages RENAME COLUMN sender_github_login TO sender_login;
+      INSERT INTO schema_version (version, description)
+      VALUES (9, 'rename messages.sender_github_login to sender_login (issue #127)');
+    `,
+  });
+}
 
-  // v9 → v10: message_causes junction テーブル追加（メッセージ因果チェーン追跡、issue #162）
-  // V1: position=0 の成分のみ使用（単一 caused_by、Tree 構造）
-  // V2: position > 0 を追加して DAG に拡張可能。このテーブルは再作成不要。
-  if (currentVersion < 10) {
-    runMigration(db, {
-      version: 10,
-      description: 'add message_causes junction table for causal chain tracking (issue #162)',
-      sql: `
-        CREATE TABLE message_causes (
-          tenant_id TEXT NOT NULL,
-          message_id TEXT NOT NULL,
-          caused_by_id TEXT NOT NULL,
-          position INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY (tenant_id, message_id, caused_by_id),
-          FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE,
-          FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id)
-        );
-        CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
-        INSERT INTO schema_version (version, description)
-        VALUES (10, 'add message_causes junction table for causal chain tracking (issue #162)');
-      `,
-    });
-  }
+// v9 → v10: message_causes junction テーブル追加（メッセージ因果チェーン追跡、issue #162）
+// V1: position=0 の成分のみ使用（単一 caused_by、Tree 構造）
+// V2: position > 0 を追加して DAG に拡張可能。このテーブルは再作成不要。
+export function migrateToV10(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 10) return;
+  runMigration(db, {
+    version: 10,
+    description: 'add message_causes junction table for causal chain tracking (issue #162)',
+    sql: `
+      CREATE TABLE message_causes (
+        tenant_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        caused_by_id TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (tenant_id, message_id, caused_by_id),
+        FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (tenant_id, caused_by_id) REFERENCES messages(tenant_id, id)
+      );
+      CREATE INDEX idx_message_causes_caused_by ON message_causes(tenant_id, caused_by_id);
+      INSERT INTO schema_version (version, description)
+      VALUES (10, 'add message_causes junction table for causal chain tracking (issue #162)');
+    `,
+  });
+}
 
-  // v10 → v11: message_causes に root_message_id カラム追加（O(1) スレッド検索、issue #166）
-  // root_message_id = caused_by.root_message_id ?? caused_by (挿入時に計算して保存)
-  // 既存 row のバックフィル: WITH RECURSIVE で因果チェーンを遡りルートを特定。
-  // base case: caused_by_id が message_causes に存在しない → caused_by_id 自身がルート。
-  // recursive case: 親の root_message_id を引き継ぐ。
-  if (currentVersion < 11) {
-    runMigration(db, {
-      version: 11,
-      description: 'add root_message_id to message_causes for O(1) thread search (issue #166)',
-      sql: `
-        ALTER TABLE message_causes ADD COLUMN root_message_id TEXT;
-        CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
-        WITH RECURSIVE resolved(tenant_id, message_id, root_message_id) AS (
-          SELECT mc.tenant_id, mc.message_id, mc.caused_by_id
-          FROM message_causes mc
-          WHERE mc.position = 0
-            AND NOT EXISTS (
-              SELECT 1 FROM message_causes p
-              WHERE p.tenant_id = mc.tenant_id
-                AND p.message_id = mc.caused_by_id
-                AND p.position = 0
-            )
-          UNION ALL
-          SELECT mc.tenant_id, mc.message_id, r.root_message_id
-          FROM message_causes mc
-          JOIN resolved r
-            ON r.tenant_id = mc.tenant_id
-            AND r.message_id = mc.caused_by_id
-          WHERE mc.position = 0
-        )
-        UPDATE message_causes
-        SET root_message_id = (
-          SELECT root_message_id FROM resolved
-          WHERE resolved.tenant_id = message_causes.tenant_id
-            AND resolved.message_id = message_causes.message_id
-        )
-        WHERE root_message_id IS NULL AND position = 0;
-        INSERT INTO schema_version (version, description)
-        VALUES (11, 'add root_message_id to message_causes for O(1) thread search (issue #166)');
-      `,
-    });
-  }
+// v10 → v11: message_causes に root_message_id カラム追加（O(1) スレッド検索、issue #166）
+// root_message_id = caused_by.root_message_id ?? caused_by (挿入時に計算して保存)
+// 既存 row のバックフィル: WITH RECURSIVE で因果チェーンを遡りルートを特定。
+// base case: caused_by_id が message_causes に存在しない → caused_by_id 自身がルート。
+// recursive case: 親の root_message_id を引き継ぐ。
+export function migrateToV11(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 11) return;
+  runMigration(db, {
+    version: 11,
+    description: 'add root_message_id to message_causes for O(1) thread search (issue #166)',
+    sql: `
+      ALTER TABLE message_causes ADD COLUMN root_message_id TEXT;
+      CREATE INDEX idx_message_causes_root ON message_causes(tenant_id, root_message_id);
+      WITH RECURSIVE resolved(tenant_id, message_id, root_message_id) AS (
+        SELECT mc.tenant_id, mc.message_id, mc.caused_by_id
+        FROM message_causes mc
+        WHERE mc.position = 0
+          AND NOT EXISTS (
+            SELECT 1 FROM message_causes p
+            WHERE p.tenant_id = mc.tenant_id
+              AND p.message_id = mc.caused_by_id
+              AND p.position = 0
+          )
+        UNION ALL
+        SELECT mc.tenant_id, mc.message_id, r.root_message_id
+        FROM message_causes mc
+        JOIN resolved r
+          ON r.tenant_id = mc.tenant_id
+          AND r.message_id = mc.caused_by_id
+        WHERE mc.position = 0
+      )
+      UPDATE message_causes
+      SET root_message_id = (
+        SELECT root_message_id FROM resolved
+        WHERE resolved.tenant_id = message_causes.tenant_id
+          AND resolved.message_id = message_causes.message_id
+      )
+      WHERE root_message_id IS NULL AND position = 0;
+      INSERT INTO schema_version (version, description)
+      VALUES (11, 'add root_message_id to message_causes for O(1) thread search (issue #166)');
+    `,
+  });
+}
 
-  // v11 → v12: timestamp format を RFC 3339 / ISO 8601+Z に統一 (issue #259)
-  // SQLite strftime DEFAULT を '%Y-%m-%d %H:%M:%f' から '%Y-%m-%dT%H:%M:%fZ' に変更。
-  // 既存レコードを naive UTC → RFC3339+Z へバックフィルしてから各テーブルを再構築。
-  // TypeScript new Date().toISOString() は既に RFC3339+Z 形式のため変更不要。
-  if (currentVersion < 12) {
-    runMigration(db, {
-      version: 12,
+// v11 → v12: timestamp format を RFC 3339 / ISO 8601+Z に統一 (issue #259)
+// SQLite strftime DEFAULT を '%Y-%m-%d %H:%M:%f' から '%Y-%m-%dT%H:%M:%fZ' に変更。
+// 既存レコードを naive UTC → RFC3339+Z へバックフィルしてから各テーブルを再構築。
+// TypeScript new Date().toISOString() は既に RFC3339+Z 形式のため変更不要。
+export function migrateToV12(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 12) return;
+  runMigration(db, {
+    version: 12,
       description: 'unify timestamp format to RFC 3339 / ISO 8601+Z (issue #259)',
       sql: `
         PRAGMA foreign_keys = OFF;
@@ -600,8 +586,50 @@ export function applyMigrations(db: Database.Database): void {
         INSERT INTO schema_version (version, description)
         VALUES (12, 'unify timestamp format to RFC 3339 / ISO 8601+Z (issue #259)');
       `,
-    });
+  });
+}
+
+/**
+ * 未適用のマイグレーションを順序通りに適用
+ *
+ * - 新規 DB (currentVersion === 0): schema.sql を一括実行（最新バージョンで作成）
+ * - 既存 DB (currentVersion < targetVersion): 段階的に ALTER 系マイグレーションを適用
+ */
+export function applyMigrations(db: Database.Database): void {
+  const currentVersion = getCurrentVersion(db);
+  console.log(`[Migration] Current database version: ${currentVersion}`);
+
+  const targetVersion = CURRENT_SCHEMA_VERSION;
+
+  if (currentVersion >= targetVersion) {
+    console.log('[Migration] Database is up to date');
+    return;
   }
+
+  // 新規 DB (v0) → 最新スキーマで一括作成
+  if (currentVersion === 0) {
+    runMigration(db, {
+      version: targetVersion,
+      description: 'fresh install at latest schema',
+      sql: loadSchemaFile(),
+    });
+    console.log(
+      `[Migration] Migration completed. Database version: ${targetVersion}`
+    );
+    return;
+  }
+
+  // 既存 DB: 各バージョンの単一ステップ migration を順番に適用
+  migrateToV3(db);
+  migrateToV4(db);
+  migrateToV5(db);
+  migrateToV6(db);
+  migrateToV7(db);
+  migrateToV8(db);
+  migrateToV9(db);
+  migrateToV10(db);
+  migrateToV11(db);
+  migrateToV12(db);
 
   console.log(
     `[Migration] Migration completed. Database version: ${targetVersion}`

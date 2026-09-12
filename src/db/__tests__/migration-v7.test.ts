@@ -4,6 +4,8 @@ import {
   applyMigrations,
   getCurrentVersion,
   runMigration,
+  migrateToV7,
+  CURRENT_SCHEMA_VERSION,
 } from '../migrations.js';
 
 /**
@@ -127,9 +129,9 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
        VALUES (?, ?, ?, ?)`
     ).run('default', '@legacy-alice', 'Legacy Alice', 'kishibashi');
 
-    // migration 適用 (v6 → latest = v10)
-    applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    // v7 単体 migration のみ適用 (= 後続の v8+ を巻き込まない diff test)
+    migrateToV7(db);
+    expect(getCurrentVersion(db)).toBe(7);
 
     // last_active_at column が増えている
     const v7Columns = db
@@ -148,12 +150,12 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
     expect(row.last_active_at).toBeNull();
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v10 まで上がる (last_active_at も存在)', () => {
+  it('v0 (= fresh install) では schema.sql から直接最新まで上がる (last_active_at も存在)', () => {
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     // last_active_at column が schema.sql 由来で存在する
     const columns = db
@@ -162,18 +164,18 @@ describe('migration v6 → v7 (issue #26: last_active_at)', () => {
     expect(columns.map((c) => c.name)).toContain('last_active_at');
   });
 
-  it('v10 → v10 で no-op (= idempotent)、v10 row は重複しない', () => {
+  it('latest → latest で no-op (= idempotent)、latest row は重複しない', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // 再適用しても version は 10 のまま
+    // 再適用しても version は変わらない
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // schema_version table は v10 row が重複していない
+    // schema_version table は latest row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(11) as { version: number }[];
+      .all(CURRENT_SCHEMA_VERSION) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

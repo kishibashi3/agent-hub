@@ -8,6 +8,8 @@ import {
   applyMigrations,
   getCurrentVersion,
   runMigration,
+  migrateToV10,
+  CURRENT_SCHEMA_VERSION,
 } from '../migrations.js';
 
 /**
@@ -139,7 +141,7 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
     db.close();
   });
 
-  it('v9 DB に applyMigrations を適用すると v10 になり message_causes テーブルが存在する', () => {
+  it('v9 DB に v10 migration を単体適用すると message_causes テーブルが存在する', () => {
     buildV9Schema(db);
     expect(getCurrentVersion(db)).toBe(9);
 
@@ -149,9 +151,9 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
       .all() as { name: string }[];
     expect(v9Tables.map((t) => t.name)).not.toContain('message_causes');
 
-    // v10 migration 適用
-    applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    // v10 migration のみ単体適用 (= 後続の v11+ を巻き込まない diff test)
+    migrateToV10(db);
+    expect(getCurrentVersion(db)).toBe(10);
 
     // message_causes テーブルが作成されている
     const v10Tables = db
@@ -168,7 +170,7 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
 
   it('v9 → v10 後に message_causes テーブルに正しいカラムが存在する', () => {
     buildV9Schema(db);
-    applyMigrations(db);
+    migrateToV10(db);
 
     const columns = db
       .prepare(`PRAGMA table_info(message_causes)`)
@@ -191,7 +193,7 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     // message_causes テーブルが schema.sql 由来で存在する
     const tables = db
@@ -200,21 +202,21 @@ describe('migration v9 → v10 (issue #162: message_causes junction テーブル
     expect(tables.map((t) => t.name)).toContain('message_causes');
   });
 
-  it('v10 → v10 で no-op (= idempotent)、v10 row は重複しない', () => {
+  it('latest → latest で no-op (= idempotent)、latest row は重複しない', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
 
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // 再適用しても version は 10 のまま
+    // 再適用しても version は変わらない
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // schema_version table は v10 row が重複していない
+    // schema_version table は latest row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(11) as { version: number }[];
+      .all(CURRENT_SCHEMA_VERSION) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });

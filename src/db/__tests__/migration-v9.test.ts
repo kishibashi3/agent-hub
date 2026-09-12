@@ -8,6 +8,8 @@ import {
   applyMigrations,
   getCurrentVersion,
   runMigration,
+  migrateToV9,
+  CURRENT_SCHEMA_VERSION,
 } from '../migrations.js';
 
 /**
@@ -128,7 +130,7 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
     db.close();
   });
 
-  it('v8 DB に applyMigrations を適用すると v10 になり sender_login が存在し sender_github_login は消える', () => {
+  it('v8 DB に v9 migration を単体適用すると sender_login が存在し sender_github_login は消える', () => {
     buildV8Schema(db);
     expect(getCurrentVersion(db)).toBe(8);
 
@@ -139,9 +141,9 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
     expect(v8Columns.map((c) => c.name)).toContain('sender_github_login');
     expect(v8Columns.map((c) => c.name)).not.toContain('sender_login');
 
-    // v9 → v10 migration 適用
-    applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    // v9 migration のみ単体適用 (= 後続の v10+ を巻き込まない diff test)
+    migrateToV9(db);
+    expect(getCurrentVersion(db)).toBe(9);
 
     // sender_login に rename されている
     const v9Columns = db
@@ -172,9 +174,9 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
       .get('default', msgId) as { sender_github_login: string | null };
     expect(beforeRow.sender_github_login).toBe('kishibashi3');
 
-    // v9 → v10 migration 適用
-    applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    // v9 migration のみ単体適用 (= 後続の v10+ を巻き込まない diff test)
+    migrateToV9(db);
+    expect(getCurrentVersion(db)).toBe(9);
 
     // rename 後も値が保持されている
     const afterRow = db
@@ -183,12 +185,12 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
     expect(afterRow.sender_login).toBe('kishibashi3');
   });
 
-  it('v0 (= fresh install) では schema.sql から直接 v10 まで上がり sender_login column が存在する', () => {
+  it('v0 (= fresh install) では schema.sql から直接最新まで上がり sender_login column が存在する', () => {
     expect(getCurrentVersion(db)).toBe(0);
 
     applyMigrations(db);
 
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     const columns = db
       .prepare(`PRAGMA table_info(messages)`)
@@ -197,18 +199,18 @@ describe('migration v8 → v9 (issue #127: messages.sender_github_login → send
     expect(columns.map((c) => c.name)).not.toContain('sender_github_login');
   });
 
-  it('v10 → v10 で no-op (= idempotent)', () => {
+  it('latest → latest で no-op (= idempotent)', () => {
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // 再適用しても version は 10 のまま
+    // 再適用しても version は変わらない
     applyMigrations(db);
-    expect(getCurrentVersion(db)).toBe(11);
+    expect(getCurrentVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
-    // schema_version table は v10 row が重複していない
+    // schema_version table は latest row が重複していない
     const rows = db
       .prepare(`SELECT version FROM schema_version WHERE version = ?`)
-      .all(11) as { version: number }[];
+      .all(CURRENT_SCHEMA_VERSION) as { version: number }[];
     expect(rows).toHaveLength(1);
   });
 });
