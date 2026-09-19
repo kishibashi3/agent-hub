@@ -3,6 +3,8 @@ import {
   evictSessionOnDisconnect,
   scheduleEvictionOnDisconnect,
   cancelPendingEviction,
+  getGetCloseEvictionGraceMs,
+  GET_CLOSE_EVICTION_GRACE_MS,
   _addSessionForTesting,
   _clearSessionsForTesting,
 } from '../server.js';
@@ -163,5 +165,68 @@ describe('scheduleEvictionOnDisconnect / cancelPendingEviction (issue #343 再�
     // grace period 経過後も evict されず session は生存し続ける。
     expect(session.transport.close).not.toHaveBeenCalled();
     expect(await evictSessionOnDisconnect('sid-race')).toBe(true);
+  });
+});
+
+/**
+ * issue #355: grace 値を `AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` env で上書き可能にする。
+ * env 未設定時の実効値が従来どおり 60_000ms であること (= 非 breaking)、
+ * 正常値が反映されること、不正値が warning 付きで既定値へ fall back することを検証する。
+ */
+describe('getGetCloseEvictionGraceMs (issue #355)', () => {
+  const ENV = 'AGENT_HUB_MCP_GET_CLOSE_GRACE_MS';
+
+  afterEach(() => {
+    delete process.env[ENV];
+    vi.restoreAllMocks();
+    _clearSessionsForTesting();
+    vi.useRealTimers();
+  });
+
+  it('env 未設定なら既定値 60_000ms (= SSE_KEEPALIVE_INTERVAL_MS * 4) を返す', () => {
+    delete process.env[ENV];
+    expect(GET_CLOSE_EVICTION_GRACE_MS).toBe(60_000);
+    expect(getGetCloseEvictionGraceMs()).toBe(60_000);
+  });
+
+  it('env に正常値が入っていればその値 (ms) を返す', () => {
+    process.env[ENV] = '5000';
+    expect(getGetCloseEvictionGraceMs()).toBe(5_000);
+  });
+
+  it.each(['abc', '0', '-1', '', '  '])(
+    '不正値 %j は既定値に fall back し warning を出す',
+    (value) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env[ENV] = value;
+
+      expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
+      // 空文字は「未設定」扱いなので warning は出さない
+      expect(warn).toHaveBeenCalledTimes(value === '' ? 0 : 1);
+    }
+  );
+
+  it('scheduleEvictionOnDisconnect の graceMs 既定値が env を反映する', async () => {
+    vi.useFakeTimers();
+    process.env[ENV] = '5000';
+    const session = {
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+      server: { ping: vi.fn().mockResolvedValue(undefined) },
+      userId: '@test-user',
+      githubLogin: 'test-user',
+      tenantDomain: 'default',
+      subscribedUris: new Set(['inbox://@test-user']),
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+      getConnectionGeneration: 0,
+    };
+    _addSessionForTesting('sid-env-grace', session);
+
+    scheduleEvictionOnDisconnect('sid-env-grace', 0); // graceMs 省略 = env 由来の既定値
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(session.transport.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(session.transport.close).toHaveBeenCalledTimes(1);
   });
 });

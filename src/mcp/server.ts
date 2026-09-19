@@ -713,6 +713,30 @@ export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 export const GET_CLOSE_EVICTION_GRACE_MS = SSE_KEEPALIVE_INTERVAL_MS * 4;
 
 /**
+ * `GET_CLOSE_EVICTION_GRACE_MS` の実効値を返す (issue #355)。
+ *
+ * `AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` env が set されていればその値 (ms) で上書きする。
+ * env 未設定時は既定値 (= 60s) を返すため、既存デプロイの挙動は変わらない。
+ * 非数値 / 0 以下の不正値は warning を出して既定値に fall back する。
+ *
+ * `getPingTimeoutMs()` (= issue #240) と同 pattern。呼び出しのたびに env を読むため、
+ * テストから env を差し替えて検証できる (module reload 不要)。
+ */
+export function getGetCloseEvictionGraceMs(): number {
+  const raw = process.env.AGENT_HUB_MCP_GET_CLOSE_GRACE_MS;
+  if (raw === undefined || raw === '') return GET_CLOSE_EVICTION_GRACE_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[MCP] invalid AGENT_HUB_MCP_GET_CLOSE_GRACE_MS: ${JSON.stringify(raw)} — ` +
+        `falling back to default ${GET_CLOSE_EVICTION_GRACE_MS}ms`
+    );
+    return GET_CLOSE_EVICTION_GRACE_MS;
+  }
+  return parsed;
+}
+
+/**
  * SSE レスポンスに keepalive コメントを書き込む (issue #240)。
  *
  * `res.writableEnded` が true の場合は書き込みをスキップする (接続クローズ race 対策)。
@@ -775,7 +799,7 @@ export async function evictSessionOnDisconnect(sessionId: string): Promise<boole
 
 /**
  * GET /mcp の `req.on('close')` から切断のたびに evict するのではなく、
- * `GET_CLOSE_EVICTION_GRACE_MS` だけ待って、その間に同一 session への GET reconnect
+ * `getGetCloseEvictionGraceMs()` の猶予だけ待って、その間に同一 session への GET reconnect
  * (`cancelPendingEviction()`) が来なければ evict する猶予付き eviction (issue #343 再設計)。
  *
  * 公式 MCP SDK の `StreamableHTTPClientTransport` は GET SSE が予期せず切れると
@@ -791,7 +815,7 @@ export async function evictSessionOnDisconnect(sessionId: string): Promise<boole
 export function scheduleEvictionOnDisconnect(
   sessionId: string,
   generation: number,
-  graceMs: number = GET_CLOSE_EVICTION_GRACE_MS
+  graceMs: number = getGetCloseEvictionGraceMs()
 ): void {
   const session = sessions.get(sessionId);
   if (!session || session.pendingEvictionTimer) return;
