@@ -36,3 +36,29 @@ jobs:
 
       - name: Test
         run: npm test
+
+  # packages/scheduler は Python 実装で npm の test から外れているため
+  # 独立 job で回す (= issue #383)。 Node 側の setup / npm ci を待たずに
+  # 並列で走り、 失敗時にどちらの test が落ちたかが job 名で分かる。
+  scheduler-test:
+    name: scheduler pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/scheduler/requirements-dev.txt
+
+      - name: Install dependencies
+        # requirements-dev.txt は先頭で requirements.txt を -r で読む。
+        run: pip install -r requirements-dev.txt
+        working-directory: packages/scheduler
+
+      # issue #351 の方針に合わせて blocking (= continue-on-error は付けない)。
+      - name: Test
+        run: pytest tests -v
+        working-directory: packages/scheduler
