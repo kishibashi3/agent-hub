@@ -461,12 +461,17 @@ _PING_LOG_SUMMARY_EVERY = 100
 # worker thread が stop_event を polling する間隔 (秒)。
 _WORKER_POLL_SEC = 0.2
 
-# stream 終了時、 読み終えていた ping の pong を流し切るのを待つ上限 (秒)。
-_PING_DRAIN_GRACE_SEC = 1.0
-
 # SSE stream 切断時に worker thread の終了を待つ上限 (秒)。
 # inbox worker は進行中の 1 件 (= 最大 3 POST × timeout 10s) を処理してから抜ける。
+# ただし 1 通知で未読 N 件を回すため N≧2 ではこの上限で終わらないことがある
+# (= issue #382 Minor 1)。 超過した場合は `abandon_event` で旧 worker の dispatch を
+# 打ち切ってから再接続する。
 _WORKER_JOIN_TIMEOUT_SEC = 35
+
+# `abandon_event` を立てた後、 旧 inbox worker の終了を待つ上限 (秒)。
+# 打ち切り後に残るのは「進行中の 1 件の dispatch + mark_message_read」だけなので
+# 最大 2 POST × timeout 10s を見込む (= issue #382 Minor 1)。
+_WORKER_ABANDON_JOIN_SEC = 25
 
 # inbox worker の停止 sentinel (= queue に積まれた残件を処理してから終了させる)。
 _STOP_WORKER = object()
@@ -590,7 +595,7 @@ def _try_handle_ping(raw: str, ping_queue: "queue.Queue[Any]") -> bool:
     except queue.Full:
         # responder が詰まっている = どのみち間に合わない。 落として次 ping に賭ける。
         print(
-            f"[WARN] ping queue full, dropped id={str(request_id)[:64]}",
+            f"[WARN] ping queue full, dropped id={str(request_id)[:64]!r}",
             file=sys.stderr,
         )
     return True
@@ -611,8 +616,12 @@ def _ping_responder_loop(
     ping を捨てる** (= 取り出さずに終了する)。 死んだ session への pong POST は
     server の auto-reissue path に拾われて捨て session を生むだけで、 presence
     には一切寄与しないため (= issue #374 Minor 3)。 既に取り出した 1 件は
-    最後まで処理してから抜ける (= 切断直前に読んだ ping は、 GET 切断後の
-    eviction grace (= issue #355) の間ならまだ意味がある)。
+    最後まで処理してから抜ける (= POST を発行済みの往復を途中で捨てないため)。
+
+    server 側の eviction cancel は GET handler からしか呼ばれない (= `src/mcp/
+    server.ts` の `cancelPendingEviction` の非 test 呼出元は GET のみ) ため、
+    「切断直前の ping は eviction grace 中なら意味がある」は実装上成立しない
+    (= issue #382 Minor 2)。 切断後の pong は一律抑止する。
 
     POST 失敗は致命的ではない (= 次 cycle の ping で retry、 最悪 evict →
     再接続で復帰) ため log のみで swallow する。
@@ -634,7 +643,17 @@ def _ping_responder_loop(
                     f"(session={session_id[:8]}...)"
                 )
         except Exception as e:
-            print(f"[ERR sse ping] id={str(request_id)[:64]}: {e}", file=sys.stderr)
+            print(
+                f"[ERR sse ping] id={str(request_id)[:64]!r}: {e}", file=sys.stderr
+            )
+    # issue #382 Minor 3: 接続が短命だと summary 閾値 (= 約 50 分) に届かず 1 行も
+    # 出ない。 pong の挙動を見たい場面 (= evict 頻発時) でこそ消えるため、 loop
+    # 終了時に端数を flush する。
+    if answered and answered % _PING_LOG_SUMMARY_EVERY != 0:
+        print(
+            f"[sse-pong] answered {answered} pings "
+            f"(session={session_id[:8]}..., stream closed)"
+        )
 
 
 # ============================================================
@@ -1186,26 +1205,6 @@ def _do_add_entry(
 # ============================================================
 
 
-def _drain_ping_queue(
-    ping_queue: "queue.Queue[Any]", stop_event: threading.Event
-) -> None:
-    """stream 終了時、 既に読み終えていた ping の pong を grace 内で流し切る。
-
-    issue #374 Minor 3: 切断後の pong は原則抑止 (= stale sid の POST は server の
-    auto-reissue path に拾われて捨て session になる) だが、 切断直前に読んだ
-    ping は GET 切断の eviction grace (= issue #355) の間ならまだ session を
-    保つ意味がある。 `_PING_DRAIN_GRACE_SEC` を上限に responder が queue を
-    空にするのを待ち、 越えたら諦めて `stop_event` 側の抑止に任せる。
-
-    `time.sleep` ではなく `stop_event.wait` で待つのは、 待機中に外から
-    stop_event が set された場合に即座に抜けるため。
-    """
-    deadline = time.monotonic() + _PING_DRAIN_GRACE_SEC
-    while not ping_queue.empty() and time.monotonic() < deadline:
-        if stop_event.wait(_WORKER_POLL_SEC):
-            return
-
-
 def _inbox_worker_loop(
     headers: dict[str, str],
     session_id: str,
@@ -1214,6 +1213,7 @@ def _inbox_worker_loop(
     iters: list[Any],
     next_times: list[datetime],
     config_path: Path,
+    abandon_event: threading.Event | None = None,
 ) -> None:
     """inbox push 通知を受けて fetch_inbox + dispatch + mark_as_read する専用 thread。
 
@@ -1228,14 +1228,33 @@ def _inbox_worker_loop(
 
     dispatch 中の例外は log のみで swallow する (= 1 通の失敗で worker を
     落とさない)。 既存の `[ERR sse inbox-handler]` prefix を維持。
+
+    issue #382 Minor 1: 1 通知につき `fetch_inbox` が返した未読 N 件を回すため、
+    N≧2 では reader 側の `_WORKER_JOIN_TIMEOUT_SEC` で終わらないことがある。
+    join が timeout すると reader は再接続し、 新 sid で 2 本目の worker が
+    起動する → 旧 worker が `mark_message_read` する前の DM を新 worker が
+    再取得し、 同じ `/add` が 2 回走って `foo` と `foo-1` の別 entry が黙って
+    できる (= サイレント縮退)。 reader は join 超過時に `abandon_event` を立て、
+    この loop は **各 message の dispatch 前** にそれを見て離脱する。 進行中の
+    1 件は `mark_message_read` まで終わらせてから抜ける (= 途中終了で dispatch
+    済みの message が未読のまま残ると、 それこそ新 worker が再実行するため)。
     """
     while True:
         item = inbox_queue.get()
         if item is _STOP_WORKER:
             return
+        if abandon_event is not None and abandon_event.is_set():
+            return
         try:
             msgs = fetch_inbox(headers, session_id)
             for m in msgs:
+                if abandon_event is not None and abandon_event.is_set():
+                    print(
+                        "[WARN sse inbox-handler] abandoned by reader, "
+                        f"{len(msgs)} fetched (session={session_id[:8]}...)",
+                        file=sys.stderr,
+                    )
+                    return
                 sender = m.get("from", "@unknown")
                 body = m.get("message", "")
                 msg_id = m.get("id")
@@ -1340,34 +1359,50 @@ def sse_listen_loop(
                 # 両者を別 queue / 別 thread にしているのは、 1 本の worker に
                 # 相乗りさせると inbox 処理待ちで pong が再び starve するため。
                 stop_event = threading.Event()
-                ping_queue: queue.Queue[Any] = queue.Queue(
-                    maxsize=_PING_QUEUE_MAXSIZE
-                )
-                inbox_queue: queue.Queue[Any] = queue.Queue()
-                ping_thread = threading.Thread(
-                    target=_ping_responder_loop,
-                    args=(headers, sid, ping_queue, stop_event),
-                    name="sse-ping-responder",
-                    daemon=True,
-                )
-                inbox_thread = threading.Thread(
-                    target=_inbox_worker_loop,
-                    args=(
-                        headers,
-                        sid,
-                        inbox_queue,
-                        schedules,
-                        iters,
-                        next_times,
-                        config_path,
-                    ),
-                    name="sse-inbox-worker",
-                    daemon=True,
-                )
-                ping_thread.start()
-                inbox_thread.start()
+                # issue #382 Minor 1: join 超過時に旧 inbox worker の dispatch を
+                # 打ち切るための event (= stop_event が「積み残しを捌いてから
+                # 終われ」なのに対し、 こちらは「今すぐ dispatch をやめろ」)。
+                abandon_event = threading.Event()
+                ping_thread: threading.Thread | None = None
+                inbox_thread: threading.Thread | None = None
 
+                # issue #382 S-b: thread 起動を `try` の内側に置く。 外に置くと
+                # `inbox_thread.start()` の `RuntimeError` (= thread 枯渇) で
+                # `finally` に到達せず、 起動済みの ping worker が空 queue を
+                # polling し続ける。
                 try:
+                    ping_queue: queue.Queue[Any] = queue.Queue(
+                        maxsize=_PING_QUEUE_MAXSIZE
+                    )
+                    inbox_queue: queue.Queue[Any] = queue.Queue()
+                    pt = threading.Thread(
+                        target=_ping_responder_loop,
+                        args=(headers, sid, ping_queue, stop_event),
+                        name="sse-ping-responder",
+                        daemon=True,
+                    )
+                    it = threading.Thread(
+                        target=_inbox_worker_loop,
+                        args=(
+                            headers,
+                            sid,
+                            inbox_queue,
+                            schedules,
+                            iters,
+                            next_times,
+                            config_path,
+                            abandon_event,
+                        ),
+                        name="sse-inbox-worker",
+                        daemon=True,
+                    )
+                    # start() 後に代入する (= 未 start の Thread を join すると
+                    # RuntimeError になるため、 `finally` からは起動済みだけを見る)。
+                    pt.start()
+                    ping_thread = pt
+                    it.start()
+                    inbox_thread = it
+
                     for raw in resp.iter_lines(decode_unicode=True):
                         if not raw:
                             continue
@@ -1387,15 +1422,39 @@ def sse_listen_loop(
                         if inbox_queue.empty():
                             inbox_queue.put(_INBOX_POLL)
                 finally:
-                    # stream 終了: 読み終えていた ping は grace 内なら流し切り、
-                    # それ以降の pong は抑止する (= stale sid への POST は捨て
-                    # session を生むだけ、 issue #374 Minor 3)。 inbox は
-                    # 積み残しを処理してから終了させる (= DM 取りこぼし防止)。
-                    _drain_ping_queue(ping_queue, stop_event)
+                    # stream 終了: 切断後の pong は一律抑止する (= stale sid への
+                    # POST は server の auto-reissue path に拾われて捨て session を
+                    # 生むだけ。 POST では eviction cancel が走らないため grace を
+                    # 待つ意味もない、 issue #382 Minor 2)。 inbox は積み残しを
+                    # 処理してから終了させる (= DM 取りこぼし防止)。
                     stop_event.set()
-                    inbox_queue.put(_STOP_WORKER)
-                    ping_thread.join(timeout=_WORKER_JOIN_TIMEOUT_SEC)
-                    inbox_thread.join(timeout=_WORKER_JOIN_TIMEOUT_SEC)
+                    if ping_thread is not None:
+                        ping_thread.join(timeout=_WORKER_JOIN_TIMEOUT_SEC)
+                    if inbox_thread is not None:
+                        inbox_queue.put(_STOP_WORKER)
+                        inbox_thread.join(timeout=_WORKER_JOIN_TIMEOUT_SEC)
+                        if inbox_thread.is_alive():
+                            # issue #382 Minor 1: ここで再接続すると新 sid の
+                            # worker が旧 worker 未既読の DM を再取得し、 同じ
+                            # command が 2 回走る。 旧 worker を打ち切り、 進行中の
+                            # 1 件が畳まれるまで追加で待ってから再接続する。
+                            abandon_event.set()
+                            print(
+                                "[WARN sse] inbox worker still running after "
+                                f"{_WORKER_JOIN_TIMEOUT_SEC}s, abandoning it "
+                                f"(session={sid[:8]}...)",
+                                file=sys.stderr,
+                            )
+                            inbox_thread.join(
+                                timeout=_WORKER_ABANDON_JOIN_SEC
+                            )
+                            if inbox_thread.is_alive():
+                                print(
+                                    "[WARN sse] abandoned inbox worker did not "
+                                    "exit; duplicate dispatch is still possible "
+                                    f"(session={sid[:8]}...)",
+                                    file=sys.stderr,
+                                )
 
             # SSE stream closed: reconnect
             print(
