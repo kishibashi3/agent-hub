@@ -61,8 +61,9 @@ services:
       # GC を止めたい場合のみ以下を有効化する (= rollback は env 書き換えのみ):
       #   AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED: "1"
       # sweep 間隔 (ms) は既定 30000。実機の session 蓄積ペースに応じて調整したい場合のみ
-      # 以下を有効化する (未設定 = 30000ms、許容範囲 1000..2147483647、範囲外/不正値は
-      # warning を出して既定値に fall back):
+      # 以下を有効化する (未設定 = 30000ms、許容範囲 1000..2147483647)。
+      # 範囲外 / 不正値を設定した場合は起動時に fail-fast で server が落ちる (issue #384)。
+      # 既定値で良い場合は env 自体を設定しないこと (= 空文字は未設定扱い):
       #   AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: "30000"
     healthcheck:
       # compose level の health check (= image HEALTHCHECK と二重で robust)

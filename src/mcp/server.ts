@@ -717,7 +717,7 @@ export const GET_CLOSE_EVICTION_GRACE_MS = SSE_KEEPALIVE_INTERVAL_MS * 4;
  *
  * これを下回る値は「秒を ms と取り違えた」設定ミス (例: `60` = 60ms) の可能性が高い。
  * 60ms のような極小 grace は実質「猶予なし即時 eviction」になり、issue #343 の再設計を
- * 無警告で無効化してしまうため、不正値として既定値に fall back させる。
+ * 無警告で無効化してしまうため、不正値として起動を失敗させる (issue #384)。
  */
 export const GET_CLOSE_EVICTION_GRACE_MIN_MS = 1_000;
 
@@ -726,9 +726,52 @@ export const GET_CLOSE_EVICTION_GRACE_MIN_MS = 1_000;
  *
  * `setTimeout` の delay は 32bit signed int にクランプされ、これを超える値は
  * 逆に delay 1ms (= 即時 eviction) として扱われる。クランプによるサイレント縮退を
- * 避けるため、上限超過も不正値として既定値に fall back させる。
+ * 避けるため、上限超過も不正値として起動を失敗させる (issue #384)。
  */
 export const GET_CLOSE_EVICTION_GRACE_MAX_MS = 2_147_483_647;
+
+/**
+ * env 設定ミスによる起動失敗を表す error (issue #384)。
+ *
+ * `EditionConfigError` (= `src/edition.ts`) と同じ役割を MCP layer の env に対して持つ。
+ * 「env が set されているのに解釈できない」場合にのみ throw され、env 未設定 (= 既定値採用)
+ * では throw しない。
+ */
+export class EnvConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EnvConfigError';
+  }
+}
+
+/**
+ * ms 単位の数値 env を解決する共通 parser (issue #384)。
+ *
+ * - env 未設定 / 空文字 → `defaultMs` を返す (= 正常系。warning も出さない)
+ * - env set かつ非数値 / 許容範囲外 → `EnvConfigError` を throw (= fail-fast)
+ *
+ * 旧実装 (issue #355 / #369) は不正値を `console.warn` + 既定値 fall back で扱っていたが、
+ * 「設定したつもりで効いていない」サイレント縮退になるため operator 指示 (2026-09-20) で
+ * fail-fast に統一した。env を設定しない限り挙動は従来と完全に同一。
+ */
+function resolveMsEnvOrThrow(
+  name: string,
+  raw: string | undefined,
+  min: number,
+  max: number,
+  defaultMs: number
+): number {
+  if (raw === undefined || raw === '') return defaultMs;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new EnvConfigError(
+      `[MCP] invalid ${name}: ${JSON.stringify(raw)} — expected ${min}..${max} (ms). ` +
+        `env が明示的に set されているため既定値 ${defaultMs}ms への fall back は行わない ` +
+        `(issue #384)。値を修正するか、既定値を使う場合は env 自体を unset すること`
+    );
+  }
+  return parsed;
+}
 
 /**
  * `GET_CLOSE_EVICTION_GRACE_MS` の実効値を返す (issue #355)。
@@ -736,28 +779,21 @@ export const GET_CLOSE_EVICTION_GRACE_MAX_MS = 2_147_483_647;
  * `AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` env が set されていればその値 (ms) で上書きする。
  * env 未設定時は既定値 (= 60s) を返すため、既存デプロイの挙動は変わらない。
  * 非数値 / 許容範囲外 (`GET_CLOSE_EVICTION_GRACE_MIN_MS` 未満 /
- * `GET_CLOSE_EVICTION_GRACE_MAX_MS` 超過) の値は warning を出して既定値に fall back する。
+ * `GET_CLOSE_EVICTION_GRACE_MAX_MS` 超過) の値は `EnvConfigError` を throw する (issue #384)。
+ * 設定ミスを黙って既定値に縮退させない (= fail-fast)。起動 path では `validateMcpEnvConfig()`
+ * が listen 前に本関数を呼ぶため、不正値のデプロイは server が上がらない形で顕在化する。
  *
  * `getPingTimeoutMs()` (= issue #240) と同 pattern。呼び出しのたびに env を読むため、
  * テストから env を差し替えて検証できる (module reload 不要)。
  */
 export function getGetCloseEvictionGraceMs(): number {
-  const raw = process.env.AGENT_HUB_MCP_GET_CLOSE_GRACE_MS;
-  if (raw === undefined || raw === '') return GET_CLOSE_EVICTION_GRACE_MS;
-  const parsed = Number(raw);
-  if (
-    !Number.isFinite(parsed) ||
-    parsed < GET_CLOSE_EVICTION_GRACE_MIN_MS ||
-    parsed > GET_CLOSE_EVICTION_GRACE_MAX_MS
-  ) {
-    console.warn(
-      `[MCP] invalid AGENT_HUB_MCP_GET_CLOSE_GRACE_MS: ${JSON.stringify(raw)} — ` +
-        `expected ${GET_CLOSE_EVICTION_GRACE_MIN_MS}..${GET_CLOSE_EVICTION_GRACE_MAX_MS} (ms), ` +
-        `falling back to default ${GET_CLOSE_EVICTION_GRACE_MS}ms`
-    );
-    return GET_CLOSE_EVICTION_GRACE_MS;
-  }
-  return parsed;
+  return resolveMsEnvOrThrow(
+    'AGENT_HUB_MCP_GET_CLOSE_GRACE_MS',
+    process.env.AGENT_HUB_MCP_GET_CLOSE_GRACE_MS,
+    GET_CLOSE_EVICTION_GRACE_MIN_MS,
+    GET_CLOSE_EVICTION_GRACE_MAX_MS,
+    GET_CLOSE_EVICTION_GRACE_MS
+  );
 }
 
 /**
@@ -1028,7 +1064,7 @@ export const ORPHAN_EVICTION_INTERVAL_MS = 30_000;
  *
  * これを下回る値は「秒を ms と取り違えた」設定ミス (例: `30` = 30ms) の可能性が高い。
  * 極小 interval は sweep が常時回り続ける busy loop になり、CPU と log を無警告で食い潰すため、
- * 不正値として既定値に fall back させる。
+ * 不正値として起動を失敗させる (issue #384)。
  */
 export const ORPHAN_EVICTION_INTERVAL_MIN_MS = 1_000;
 
@@ -1037,7 +1073,7 @@ export const ORPHAN_EVICTION_INTERVAL_MIN_MS = 1_000;
  *
  * `setInterval` の delay は 32bit signed int にクランプされ、これを超える値は
  * 逆に delay 1ms (= 常時 sweep) として扱われる。桁ミス (例: `86400000000`) が
- * 意図と正反対の挙動にサイレント縮退するのを避けるため、上限超過も既定値に fall back させる。
+ * 意図と正反対の挙動にサイレント縮退するのを避けるため、上限超過も起動を失敗させる (issue #384)。
  */
 export const ORPHAN_EVICTION_INTERVAL_MAX_MS = 2_147_483_647;
 
@@ -1047,7 +1083,8 @@ export const ORPHAN_EVICTION_INTERVAL_MAX_MS = 2_147_483_647;
  * `AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS` env が set されていればその値 (ms) で上書きする。
  * env 未設定時は既定値 (= 30s) を返すため、既存デプロイの挙動は変わらない。
  * 非数値 / 許容範囲外 (`ORPHAN_EVICTION_INTERVAL_MIN_MS` 未満 /
- * `ORPHAN_EVICTION_INTERVAL_MAX_MS` 超過) の値は warning を出して既定値に fall back する。
+ * `ORPHAN_EVICTION_INTERVAL_MAX_MS` 超過) の値は `EnvConfigError` を throw する (issue #384)。
+ * 設定ミスを黙って既定値に縮退させない (= fail-fast)。
  *
  * `getGetCloseEvictionGraceMs()` (= issue #355 / PR #357) と同 pattern。
  * 呼び出しのたびに env を読むため、テストから env を差し替えて検証できる (module reload 不要)。
@@ -1055,22 +1092,28 @@ export const ORPHAN_EVICTION_INTERVAL_MAX_MS = 2_147_483_647;
  * 実効値は **loop 起動時に 1 度だけ評価される**。稼働中の env 変更を反映するには restart が要る。
  */
 export function getOrphanEvictionIntervalMs(): number {
-  const raw = process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
-  if (raw === undefined || raw === '') return ORPHAN_EVICTION_INTERVAL_MS;
-  const parsed = Number(raw);
-  if (
-    !Number.isFinite(parsed) ||
-    parsed < ORPHAN_EVICTION_INTERVAL_MIN_MS ||
-    parsed > ORPHAN_EVICTION_INTERVAL_MAX_MS
-  ) {
-    console.warn(
-      `[MCP] invalid AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: ${JSON.stringify(raw)} — ` +
-        `expected ${ORPHAN_EVICTION_INTERVAL_MIN_MS}..${ORPHAN_EVICTION_INTERVAL_MAX_MS} (ms), ` +
-        `falling back to default ${ORPHAN_EVICTION_INTERVAL_MS}ms`
-    );
-    return ORPHAN_EVICTION_INTERVAL_MS;
-  }
-  return parsed;
+  return resolveMsEnvOrThrow(
+    'AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS',
+    process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS,
+    ORPHAN_EVICTION_INTERVAL_MIN_MS,
+    ORPHAN_EVICTION_INTERVAL_MAX_MS,
+    ORPHAN_EVICTION_INTERVAL_MS
+  );
+}
+
+/**
+ * MCP layer の数値 env をまとめて検証する (issue #384)。
+ *
+ * server 起動時に listen より前で呼ぶことで、「env を set したのに解釈できない」設定ミスを
+ * 起動時点の `EnvConfigError` として顕在化させる。個々の getter は lazy (= 呼び出し時に env を
+ * 読む) であり、`getGetCloseEvictionGraceMs()` は GET 切断時にしか呼ばれないため、
+ * ここで先に全部叩いておかないと「起動は成功し、切断が起きて初めて壊れる」ことになる。
+ *
+ * env 未設定 (= 既定値採用) の場合は何も起きない (= 正常系)。
+ */
+export function validateMcpEnvConfig(): void {
+  getGetCloseEvictionGraceMs();
+  getOrphanEvictionIntervalMs();
 }
 
 /**
@@ -2161,14 +2204,21 @@ export class MCPServer {
    * 起動時 step:
    *   1. edition を解決して singleton に cache (= 全 handler が参照)
    *      - env 不正 / conflict は EditionConfigError で fail-fast
-   *   2. DB 初期化 (migration 適用)
-   *   3. express listen
+   *   2. MCP layer の数値 env を検証 (= EnvConfigError で fail-fast、 issue #384)
+   *   3. DB 初期化 (migration 適用)
+   *   4. express listen
    *
    * edition 解決を listen より前に置くことで、後続 request が必ず resolved 済の
    * EditionConfig を見る (= activeEditionConfig が null になる窓を排除)。
    */
   async start(): Promise<void> {
     activeEditionConfig = resolveEdition(process.env);
+
+    // MCP layer の数値 env を listen 前に検証する (issue #384)。
+    // env が set されているのに不正値なら EnvConfigError で fail-fast (= 既定値へ黙って
+    // 縮退させない)。env 未設定なら既定値がそのまま使われ、何も起きない。
+    validateMcpEnvConfig();
+
     this.initDatabase();
 
     // Active ping loop 起動 (= issue #91、 server restart 後の即 cycle 開始)。

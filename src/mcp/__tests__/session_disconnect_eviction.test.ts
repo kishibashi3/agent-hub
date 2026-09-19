@@ -4,6 +4,8 @@ import {
   scheduleEvictionOnDisconnect,
   cancelPendingEviction,
   getGetCloseEvictionGraceMs,
+  validateMcpEnvConfig,
+  EnvConfigError,
   GET_CLOSE_EVICTION_GRACE_MS,
   GET_CLOSE_EVICTION_GRACE_MIN_MS,
   GET_CLOSE_EVICTION_GRACE_MAX_MS,
@@ -196,15 +198,29 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
     expect(getGetCloseEvictionGraceMs()).toBe(5_000);
   });
 
-  it.each(['abc', '0', '-1', '', '  '])(
-    '不正値 %j は既定値に fall back し warning を出す',
+  // issue #384: env が set されているのに解釈できない値は、黙って既定値に落とさず
+  // EnvConfigError で fail-fast する (= サイレント縮退の排除)。
+  // 空文字のみが「未設定」相当 (= 既定値)。空白文字列は「set したが解釈できない値」として throw。
+  it('空文字は未設定扱いで既定値を返す (warning も throw もしない)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env[ENV] = '';
+
+    expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['abc', '0', '-1', '  '])(
+    '不正値 %j は EnvConfigError を throw する (既定値に fall back しない)',
     (value) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       process.env[ENV] = value;
 
-      expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
-      // 空文字は「未設定」扱いなので warning は出さない
-      expect(warn).toHaveBeenCalledTimes(value === '' ? 0 : 1);
+      expect(() => getGetCloseEvictionGraceMs()).toThrow(EnvConfigError);
+      expect(() => getGetCloseEvictionGraceMs()).toThrow(
+        /invalid AGENT_HUB_MCP_GET_CLOSE_GRACE_MS/
+      );
+      // 黙った fall back (= warning だけ出して既定値) はしない
+      expect(warn).not.toHaveBeenCalled();
     }
   );
 
@@ -212,13 +228,10 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
   // 「秒を ms と取り違えた極小値」と「setTimeout でクランプされる 32bit 超の値」が
   // どちらも無警告で通り、実質「猶予なし即時 eviction」にサイレント縮退する。
   it.each(['60', '1', String(GET_CLOSE_EVICTION_GRACE_MIN_MS - 1)])(
-    '範囲下限を下回る値 %j (秒/ms 取り違え) は既定値に fall back し warning を出す',
+    '範囲下限を下回る値 %j (秒/ms 取り違え) は EnvConfigError を throw する',
     (value) => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       process.env[ENV] = value;
-
-      expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
-      expect(warn).toHaveBeenCalledTimes(1);
+      expect(() => getGetCloseEvictionGraceMs()).toThrow(EnvConfigError);
     }
   );
 
@@ -228,13 +241,10 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
     '1e30',
     'Infinity',
   ])(
-    '範囲上限を超える値 %j (setTimeout クランプ) は既定値に fall back し warning を出す',
+    '範囲上限を超える値 %j (setTimeout クランプ) は EnvConfigError を throw する',
     (value) => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       process.env[ENV] = value;
-
-      expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
-      expect(warn).toHaveBeenCalledTimes(1);
+      expect(() => getGetCloseEvictionGraceMs()).toThrow(EnvConfigError);
     }
   );
 
@@ -247,6 +257,36 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
 
     expect(getGetCloseEvictionGraceMs()).toBe(Number(value));
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * issue #384: getter は lazy (= 呼び出し時に env を読む) なので、起動時に
+   * `validateMcpEnvConfig()` を通すことで「起動は成功し、GET 切断が起きて初めて壊れる」
+   * のを防ぐ。
+   */
+  describe('validateMcpEnvConfig (issue #384)', () => {
+    const INTERVAL_ENV = 'AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS';
+
+    afterEach(() => {
+      delete process.env[INTERVAL_ENV];
+    });
+
+    it('両 env 未設定なら何も throw しない (= 正常系)', () => {
+      delete process.env[ENV];
+      delete process.env[INTERVAL_ENV];
+      expect(() => validateMcpEnvConfig()).not.toThrow();
+    });
+
+    it('grace env が不正値なら起動前に EnvConfigError で落ちる', () => {
+      process.env[ENV] = 'abc';
+      expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
+
+    it('interval env が不正値なら起動前に EnvConfigError で落ちる', () => {
+      delete process.env[ENV];
+      process.env[INTERVAL_ENV] = '-1';
+      expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
   });
 
   it('scheduleEvictionOnDisconnect の graceMs 既定値が env を反映する', async () => {
