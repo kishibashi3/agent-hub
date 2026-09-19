@@ -10,6 +10,9 @@ import {
   runOneOrphanEvictionCycle,
   getOrphanEvictionIntervalMs,
   ORPHAN_EVICTION_INTERVAL_MS,
+  ORPHAN_EVICTION_INTERVAL_MIN_MS,
+  ORPHAN_EVICTION_INTERVAL_MAX_MS,
+  MCPServer,
   _addSessionForTesting,
   _clearSessionsForTesting,
 } from '../server.js';
@@ -451,6 +454,41 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
       spy.mockRestore();
     });
 
+    it('下限 (1000ms) 未満 → 既定値に fall back (= 秒/ms 取り違え防御)', () => {
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (const bad of ['30', '999']) {
+        process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = bad;
+        expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+      }
+      expect(spy).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+      expect(ORPHAN_EVICTION_INTERVAL_MIN_MS).toBe(1_000);
+    });
+
+    it('上限 (32bit signed int) 超過 → 既定値に fall back (= setInterval 1ms クランプ防御)', () => {
+      // Node の setInterval は delay が 2147483647 を超えると 1ms にクランプするため、
+      // 桁ミス (例: 86400000000) が「意図と正反対の常時 sweep」に無警告で縮退する。
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (const bad of ['2147483648', '86400000000']) {
+        process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = bad;
+        expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+      }
+      expect(spy).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+      expect(ORPHAN_EVICTION_INTERVAL_MAX_MS).toBe(2_147_483_647);
+    });
+
+    it('境界値 (min / max ちょうど) は受理される', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = String(
+        ORPHAN_EVICTION_INTERVAL_MIN_MS
+      );
+      expect(getOrphanEvictionIntervalMs()).toBe(ORPHAN_EVICTION_INTERVAL_MIN_MS);
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = String(
+        ORPHAN_EVICTION_INTERVAL_MAX_MS
+      );
+      expect(getOrphanEvictionIntervalMs()).toBe(ORPHAN_EVICTION_INTERVAL_MAX_MS);
+    });
+
     it('env 値が実際の loop 周期に反映される (= 5s で sweep が走る)', async () => {
       process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = '5000';
       vi.useFakeTimers();
@@ -477,6 +515,96 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
       const stats = await runOneOrphanEvictionCycle();
       expect(stats.total).toBe(1);
       expect(stats.orphansEvicted).toBe(1);
+    });
+  });
+
+  describe('sweep の例外が server を落とさない', () => {
+    it('cycle が reject しても loop は継続し、error log のみ出る (= unhandledRejection 防止)', async () => {
+      vi.useFakeTimers();
+      // subscribedUris の参照で throw する session を注入して sweep 内の想定外例外を再現する。
+      // (index.ts は unhandledRejection で process.exit(1) するため、catch がなければ本番停止)
+      const exploding = makeOrphanSession(SIX_MIN_MS);
+      Object.defineProperty(exploding, 'subscribedUris', {
+        get() {
+          throw new Error('boom');
+        },
+      });
+      _addSessionForTesting('exploding', exploding);
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const rejections: unknown[] = [];
+      const onUnhandled = (err: unknown) => rejections.push(err);
+      process.on('unhandledRejection', onUnhandled);
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      process.off('unhandledRejection', onUnhandled);
+      const failureLogs = errSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan eviction cycle failed')
+      );
+      errSpy.mockRestore();
+
+      expect(rejections).toHaveLength(0);
+      // 1 回目の失敗で loop が死なず、2 周目も実行されている
+      expect(failureLogs).toHaveLength(2);
+    });
+  });
+
+  /**
+   * issue #361 の再発防止: #369 を実際に直しているのは `MCPServer.start()` からの
+   * `startOrphanEvictionLoop()` 呼び出し 1 行。ここが消えても loop 単体のテストは
+   * 全 green のまま GC が止まるため、start() 側に固定する。
+   */
+  describe('MCPServer.start() からの起動 (issue #361 回帰防止)', () => {
+    let originalEdition: string | undefined;
+
+    beforeEach(() => {
+      originalEdition = process.env.AGENT_HUB_EDITION;
+      process.env.AGENT_HUB_EDITION = 'private';
+    });
+
+    afterEach(() => {
+      if (originalEdition === undefined) {
+        delete process.env.AGENT_HUB_EDITION;
+      } else {
+        process.env.AGENT_HUB_EDITION = originalEdition;
+      }
+    });
+
+    it('start() が orphan eviction loop を起動し、sweep が実際に走る', async () => {
+      // ping loop は本 test の対象外 (= 分離済み) なので disabled にしておく
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      const server = new MCPServer(0);
+      // DB / TCP listen は本 test の関心外。start() の loop 起動だけを観測する。
+      vi.spyOn(server, 'initDatabase').mockImplementation(() => {});
+      const fakeHttpServer = { keepAliveTimeout: 0, headersTimeout: 0, on: vi.fn() };
+      vi.spyOn(server.getApp(), 'listen').mockImplementation(((
+        _port: number,
+        _host: string,
+        cb: () => void
+      ) => {
+        cb();
+        return fakeHttpServer;
+      }) as never);
+
+      vi.useFakeTimers();
+      _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await server.start();
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const startLogs = logSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan eviction loop starting')
+      );
+      logSpy.mockRestore();
+      vi.restoreAllMocks();
+
+      expect(startLogs).toHaveLength(1);
+      // loop が実際に sweep しており、orphan は既に回収済み
+      const stats = await runOneOrphanEvictionCycle();
+      expect(stats.total).toBe(0);
     });
   });
 

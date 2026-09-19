@@ -976,22 +976,48 @@ export function stopActivePingLoop(): void {
 export const ORPHAN_EVICTION_INTERVAL_MS = 30_000;
 
 /**
+ * `AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS` に許容する最小値 (ms) (issue #369)。
+ *
+ * これを下回る値は「秒を ms と取り違えた」設定ミス (例: `30` = 30ms) の可能性が高い。
+ * 極小 interval は sweep が常時回り続ける busy loop になり、CPU と log を無警告で食い潰すため、
+ * 不正値として既定値に fall back させる。
+ */
+export const ORPHAN_EVICTION_INTERVAL_MIN_MS = 1_000;
+
+/**
+ * `AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS` に許容する最大値 (ms) (issue #369)。
+ *
+ * `setInterval` の delay は 32bit signed int にクランプされ、これを超える値は
+ * 逆に delay 1ms (= 常時 sweep) として扱われる。桁ミス (例: `86400000000`) が
+ * 意図と正反対の挙動にサイレント縮退するのを避けるため、上限超過も既定値に fall back させる。
+ */
+export const ORPHAN_EVICTION_INTERVAL_MAX_MS = 2_147_483_647;
+
+/**
  * `ORPHAN_EVICTION_INTERVAL_MS` の実効値を返す (issue #369 / operator 条件 2)。
  *
  * `AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS` env が set されていればその値 (ms) で上書きする。
  * env 未設定時は既定値 (= 30s) を返すため、既存デプロイの挙動は変わらない。
- * 非数値 / 0 以下の不正値は warning を出して既定値に fall back する。
+ * 非数値 / 許容範囲外 (`ORPHAN_EVICTION_INTERVAL_MIN_MS` 未満 /
+ * `ORPHAN_EVICTION_INTERVAL_MAX_MS` 超過) の値は warning を出して既定値に fall back する。
  *
- * `getPingTimeoutMs()` (= issue #240) / `getGetCloseEvictionGraceMs()` (= issue #355) と同 pattern。
+ * `getGetCloseEvictionGraceMs()` (= issue #355 / PR #357) と同 pattern。
  * 呼び出しのたびに env を読むため、テストから env を差し替えて検証できる (module reload 不要)。
+ * ただし production path で本関数を呼ぶのは `startOrphanEvictionLoop()` の 1 箇所だけであり、
+ * 実効値は **loop 起動時に 1 度だけ評価される**。稼働中の env 変更を反映するには restart が要る。
  */
 export function getOrphanEvictionIntervalMs(): number {
   const raw = process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
   if (raw === undefined || raw === '') return ORPHAN_EVICTION_INTERVAL_MS;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < ORPHAN_EVICTION_INTERVAL_MIN_MS ||
+    parsed > ORPHAN_EVICTION_INTERVAL_MAX_MS
+  ) {
     console.warn(
       `[MCP] invalid AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: ${JSON.stringify(raw)} — ` +
+        `expected ${ORPHAN_EVICTION_INTERVAL_MIN_MS}..${ORPHAN_EVICTION_INTERVAL_MAX_MS} (ms), ` +
         `falling back to default ${ORPHAN_EVICTION_INTERVAL_MS}ms`
     );
     return ORPHAN_EVICTION_INTERVAL_MS;
@@ -1099,13 +1125,20 @@ export function startOrphanEvictionLoop(): () => void {
       `${ORPHAN_IDLE_TTL_MS / 60_000}min idle TTL、 issue #155/#369)`
   );
   orphanEvictionLoopInterval = setInterval(() => {
-    void runOneOrphanEvictionCycle().then((stats) => {
-      if (stats.orphansEvicted > 0) {
-        console.log(
-          `[MCP] orphan eviction cycle: total=${stats.total} orphansEvicted=${stats.orphansEvicted}`
-        );
-      }
-    });
+    void runOneOrphanEvictionCycle()
+      .then((stats) => {
+        if (stats.orphansEvicted > 0) {
+          console.log(
+            `[MCP] orphan eviction cycle: total=${stats.total} orphansEvicted=${stats.orphansEvicted}`
+          );
+        }
+      })
+      // sweep 内の想定外 throw で unhandledRejection → process.exit(1) (index.ts) に
+      // 直結させない。本 loop は既定 ON で常時稼働するため、1 cycle の失敗は次の
+      // cycle に持ち越して継続する (= GC が止まるより server が落ちる方が重い)。
+      .catch((err) => {
+        console.error('[MCP] orphan eviction cycle failed (non-fatal):', err);
+      });
   }, intervalMs);
   return () => stopOrphanEvictionLoop();
 }
