@@ -9,6 +9,7 @@ import {
   stopOrphanEvictionLoop,
   runOneOrphanEvictionCycle,
   getOrphanEvictionIntervalMs,
+  EnvConfigError,
   ORPHAN_EVICTION_INTERVAL_MS,
   ORPHAN_EVICTION_INTERVAL_MIN_MS,
   ORPHAN_EVICTION_INTERVAL_MAX_MS,
@@ -434,48 +435,47 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
       expect(getOrphanEvictionIntervalMs()).toBe(5_000);
     });
 
-    it('非数値 → 既定値に fall back し warning を出す', () => {
+    // issue #384: env が set されているのに解釈できない値は、黙って既定値に落とさず
+    // EnvConfigError で fail-fast する (= サイレント縮退の排除)。
+    it('非数値 → EnvConfigError を throw する (既定値に fall back しない)', () => {
       process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = 'abc';
-      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      expect(getOrphanEvictionIntervalMs()).toBe(30_000);
-      expect(spy).toHaveBeenCalledWith(
-        expect.stringContaining('invalid AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS')
+      expect(() => getOrphanEvictionIntervalMs()).toThrow(EnvConfigError);
+      expect(() => getOrphanEvictionIntervalMs()).toThrow(
+        /invalid AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS/
       );
-      spy.mockRestore();
     });
 
-    it('0 以下 → 既定値に fall back し warning を出す', () => {
-      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('0 以下 → EnvConfigError を throw する', () => {
       for (const bad of ['0', '-1']) {
         process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = bad;
-        expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+        expect(() => getOrphanEvictionIntervalMs()).toThrow(EnvConfigError);
       }
-      expect(spy).toHaveBeenCalledTimes(2);
-      spy.mockRestore();
     });
 
-    it('下限 (1000ms) 未満 → 既定値に fall back (= 秒/ms 取り違え防御)', () => {
-      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('下限 (1000ms) 未満 → EnvConfigError を throw する (= 秒/ms 取り違え防御)', () => {
       for (const bad of ['30', '999']) {
         process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = bad;
-        expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+        expect(() => getOrphanEvictionIntervalMs()).toThrow(EnvConfigError);
       }
-      expect(spy).toHaveBeenCalledTimes(2);
-      spy.mockRestore();
       expect(ORPHAN_EVICTION_INTERVAL_MIN_MS).toBe(1_000);
     });
 
-    it('上限 (32bit signed int) 超過 → 既定値に fall back (= setInterval 1ms クランプ防御)', () => {
+    it('上限 (32bit signed int) 超過 → EnvConfigError を throw する (= setInterval 1ms クランプ防御)', () => {
       // Node の setInterval は delay が 2147483647 を超えると 1ms にクランプするため、
       // 桁ミス (例: 86400000000) が「意図と正反対の常時 sweep」に無警告で縮退する。
-      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       for (const bad of ['2147483648', '86400000000']) {
         process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = bad;
-        expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+        expect(() => getOrphanEvictionIntervalMs()).toThrow(EnvConfigError);
       }
-      expect(spy).toHaveBeenCalledTimes(2);
-      spy.mockRestore();
       expect(ORPHAN_EVICTION_INTERVAL_MAX_MS).toBe(2_147_483_647);
+    });
+
+    it('不正値でも warning での黙った fall back はしない (= console.warn を出さない)', () => {
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = 'abc';
+      expect(() => getOrphanEvictionIntervalMs()).toThrow(EnvConfigError);
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
     });
 
     it('境界値 (min / max ちょうど) は受理される', () => {
