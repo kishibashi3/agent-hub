@@ -1,7 +1,13 @@
 # ADR: Peer-Mesh Architecture with Transparent Asymmetry — 2026-05-18
 
 **Number**: ADR-001  
-**Status**: Adopted  
+**Status**: Adopted (consensus) — Phase 2 empirical validation was not executed;
+the 2026-06-07 go/no-go gate never ran. Of the 21 measurement cells defined in
+`docs/improvement-roadmap.md` §7.1, 3 were measured retrospectively on 2026-09-20
+(see `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md`),
+12 are not measurable as specified (undefined metric, non-reproducible independent
+observation, or criteria that cannot fail), and 6 remain unmeasured. This ADR records
+a consensus reached by 6 participants on 2026-05-18, not a validated result.  
 **Date**: 2026-05-18  
 **Scope**: ecosystem  
 **Participants**: @planner, @reviewer, @researcher, @knowledge, @agent-hub-impl, @ope-ultp1635  
@@ -203,7 +209,14 @@ Each peer has **two genuine, permanent modes** that are structurally distinct (n
 
 ### Phase 2: Empirical Validation (2026-05-24 to 2026-06-07)
 
-**6 Doubts × 3-Axis = 18-cell Operationalization Matrix** with measurement owners, testing schedule, and go/no-go criteria.
+**7 Doubts × 3-Axis = 21-cell Operationalization Matrix** with measurement owners, testing schedule, and go/no-go criteria.
+The matrix itself lives in [`docs/improvement-roadmap.md`](../improvement-roadmap.md) § 7.1 (Doubts 1a, 1b, 2, 3, 4, 5, 6 × 3 axes = 21 cells).
+Earlier revisions of this ADR said "6 Doubts × 3-Axis = 18-cell"; that label predates the split of Doubt 1 into 1a / 1b and was never updated outside § 7.1.
+
+> **Not executed.** Phase 2 never ran — no snapshot 1/2/3, no go/no-go gate. See § 7.3 of the roadmap and the evidence recovery archive
+> `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md`.
+> Two known defects in the matrix as specified: Doubt 6's 3 cells duplicate Doubt 1b's, and Doubt 5's 3 cells contradict § III of this ADR
+> (§ III states dual-mode is a permanent stance, *not* a toggle, while Doubt 5 measures mode-switch latency). Both are annotated in § 7.1 / § 7.3 of the roadmap.
 
 ---
 
