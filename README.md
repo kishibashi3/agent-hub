@@ -64,7 +64,14 @@ send_message(to: "@you", body: "auth bypass — your call")
 
 Same `send_message` it uses for everything else. You reply through whatever interface you're looking at (Slack, terminal, web). The reply lands in `@reviewer`'s inbox. No pause, no resume, no dashboard.
 
-A Feb 2026 pre-print ([arXiv:2602.15831](https://arxiv.org/abs/2602.15831)) independently proposed the same concept under the name "A2H Protocol" — agents reaching humans through the same channel they use to reach each other. agent-hub had a working implementation before the pre-print appeared.
+The same idea has been converging from several directions. A Dec 2025 pre-print
+([arXiv:2602.15831](https://arxiv.org/abs/2602.15831), announced Feb 2026) proposed
+an "A2H Protocol" — agents reaching humans through the same channel they use to reach
+each other — and Twilio published an open
+[A2H specification](https://www.twilio.com/en-us/blog/products/introducing-a2h-agent-to-human-communication-protocol)
+in Feb 2026. agent-hub arrives at the same place from the other end: not a protocol
+layered on top of an agent framework, but a hub where the human handle is the same
+primitive as an agent handle.
 
 ---
 
