@@ -5,6 +5,8 @@ import {
   cancelPendingEviction,
   getGetCloseEvictionGraceMs,
   GET_CLOSE_EVICTION_GRACE_MS,
+  GET_CLOSE_EVICTION_GRACE_MIN_MS,
+  GET_CLOSE_EVICTION_GRACE_MAX_MS,
   _addSessionForTesting,
   _clearSessionsForTesting,
 } from '../server.js';
@@ -205,6 +207,47 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
       expect(warn).toHaveBeenCalledTimes(value === '' ? 0 : 1);
     }
   );
+
+  // reviewer 指摘 (PR #357 Minor 1): 値域チェックが `> 0` のみだと
+  // 「秒を ms と取り違えた極小値」と「setTimeout でクランプされる 32bit 超の値」が
+  // どちらも無警告で通り、実質「猶予なし即時 eviction」にサイレント縮退する。
+  it.each(['60', '1', String(GET_CLOSE_EVICTION_GRACE_MIN_MS - 1)])(
+    '範囲下限を下回る値 %j (秒/ms 取り違え) は既定値に fall back し warning を出す',
+    (value) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env[ENV] = value;
+
+      expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
+      expect(warn).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    String(GET_CLOSE_EVICTION_GRACE_MAX_MS + 1),
+    '4294967296',
+    '1e30',
+    'Infinity',
+  ])(
+    '範囲上限を超える値 %j (setTimeout クランプ) は既定値に fall back し warning を出す',
+    (value) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env[ENV] = value;
+
+      expect(getGetCloseEvictionGraceMs()).toBe(GET_CLOSE_EVICTION_GRACE_MS);
+      expect(warn).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    String(GET_CLOSE_EVICTION_GRACE_MIN_MS),
+    String(GET_CLOSE_EVICTION_GRACE_MAX_MS),
+  ])('境界値 %j は有効値として受理する', (value) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env[ENV] = value;
+
+    expect(getGetCloseEvictionGraceMs()).toBe(Number(value));
+    expect(warn).not.toHaveBeenCalled();
+  });
 
   it('scheduleEvictionOnDisconnect の graceMs 既定値が env を反映する', async () => {
     vi.useFakeTimers();
