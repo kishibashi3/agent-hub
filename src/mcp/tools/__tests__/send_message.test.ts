@@ -177,6 +177,18 @@ describe('send_message tool', () => {
       const data = JSON.parse(result.content[0].text);
       expect(data.message).toContain('mode=global');
     });
+
+    it('unregistered sender cannot send @* broadcast — message は mode 不一致と区別される (issue #349)', async () => {
+      const result = await handleSendMessage(
+        scopeToTenant(db, 'default'),
+        { to: '@*', message: 'hello all' },
+        '@ghost'
+      );
+      expect(result.isError).toBe(true);
+      const data = JSON.parse(result.content[0].text);
+      expect(data.message).toContain('登録されていません');
+      expect(data.message).not.toContain('mode=global');
+    });
   });
 
   describe('handleSendMessage - 異常系', () => {
