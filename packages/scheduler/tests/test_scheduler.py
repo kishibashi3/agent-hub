@@ -309,10 +309,12 @@ class TestNextFireTime:
         entry = _valid_cron_entry(cron="0 9 * * *")  # 毎日 9:00
         now = self._now(hour=8)  # 8:00 = 次回は当日 9:00
         it = croniter(entry["cron"], now)
-        first_next = it.get_next(datetime).astimezone()
+        # issue #397: `astimezone()` を引数なしで呼ぶと process local tz に変換され、
+        # UTC 環境 (= CI) では 00:00 になって fail する。 class の前提 TZ に揃える。
+        first_next = it.get_next(datetime).astimezone(self._TZ)
         assert first_next.hour == 9
         # fire 後: 次の next_next は翌日 9:00
-        second_next = it.get_next(datetime).astimezone()
+        second_next = it.get_next(datetime).astimezone(self._TZ)
         assert (second_next - first_next).total_seconds() == pytest.approx(86400, abs=60)
 
     def test_no_cron_no_run_at_raises(self) -> None:
