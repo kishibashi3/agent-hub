@@ -630,7 +630,7 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
  * spec:
  * - `AGENT_HUB_MCP_PING_LOOP_MODE` が valid な 3 値ならそれを採用
  * - 未設定 / 空なら旧 flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` (binary) に委譲
- * - どちらも未設定なら `enforce` (= 旧 default と同一)
+ * - どちらも未設定なら `observe-only` (= 安全側の既定。旧 default (enforce) から意図的に変更)
  * - **不正値は `EnvConfigError` で fail-fast** (= 旧 flag / default に倒さない、 issue #384 と同方針)
  * - `observe-only` は ping 非応答を観測するだけで evict しない
  *   (= 判定条件は enforce と同一、 結果の扱いだけが違う)
