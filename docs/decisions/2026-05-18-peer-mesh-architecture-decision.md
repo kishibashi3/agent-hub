@@ -216,7 +216,7 @@ Earlier revisions of this ADR said "6 Doubts × 3-Axis = 18-cell"; that label pr
 > **Not executed.** Phase 2 never ran — no snapshot 1/2/3, no go/no-go gate. See § 7.3 of the roadmap and the evidence recovery archive
 > `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md`.
 > Two known defects in the matrix as specified: Doubt 6's 3 cells duplicate Doubt 1b's, and Doubt 5's 3 cells contradict § III of this ADR
-> (§ III states dual-mode is a permanent stance, *not* a toggle, while Doubt 5 measures mode-switch latency). Both are annotated in § 7.1 / § 7.3 of the roadmap.
+> (§ III states dual-mode is a permanent stance, *not* a toggle, while Doubt 5 measures mode-switch latency). Both are recorded in § 7.1 / § 7.3 of the roadmap with their agreed treatment (Doubt 5 excluded from the judgement; Doubt 6 counted once), leaving the canonical cell count at 21.
 
 ---
 

@@ -261,23 +261,23 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 ### 7.3 Phase 2 Testing (Empirical Validation)
 
-**Phase 2** (2026-05-24 to 2026-06-07): Live observation of all 21 cells.
+**Phase 2** (2026-05-24 to 2026-06-07): Live observation of all 21 enumerated cells, of which 15 form the judgement set (see the gate note below).
 
 > ⚠️ **Not executed.** Phase 2 never ran: no snapshot 1 / 2 / 3 was taken and the 2026-06-07 go/no-go gate never fired. Verified across four independent observation windows (all agent-hub branches, all roles-kaz archives, all GitHub issues / PRs, and 35,540 production DMs from 2026-05-16 to 2026-09-19) — see `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md`. 3 of the 21 cells were measured retrospectively on 2026-09-20 (outside the gate), 12 are not measurable as specified, and 6 remain unmeasured. The schedule and criteria below are kept as the original plan of record.
 
 **Weekly Checkpoint Schedule**:
 - **2026-05-24 (snapshot 1)**: Baseline capture (peer count = 5, operator direct-path pattern C dominant expected)
 - **2026-05-31 (snapshot 2)**: Mid-observation (peer count = 7 possible; latency / bypass pattern trends tracked)
-- **2026-06-07 (snapshot 3)**: Final decision point (all 21-cell measurements complete; go/no-go calls per cell)
+- **2026-06-07 (snapshot 3)**: Final decision point (measurements complete for the judgement set — 15 of the 21 enumerated cells, see the gate note below; go/no-go calls per cell)
 
 **Measurement Compilation Role**: @researcher (archive + latency data aggregation); @reviewer (structural audit + independent verification); @planner (operational observation + pattern tracking)
 
 **Go/No-Go Decision Gate** (2026-06-07):
-- If all 21 cells within stated tolerance → **Go**: Thesis validated, advance to Phase 3 (production deployment + scaling)
+- If all cells in the judgement set (15 of the 21 enumerated — see the note below) within stated tolerance → **Go**: Thesis validated, advance to Phase 3 (production deployment + scaling)
 - If > 3 cells exceed tolerance → **No-Go**: Thesis requires structural revision; escalate to @ope-ultp1635 for remediation design
 - If 1-3 cells borderline → **Conditional**: Identify specific cell mitigation + restart Phase 2 for affected cell(s) only
 
-> ⚠️ **How the gate arithmetic counts these cells.** Doubt 6's 3 cells are identical to Doubt 1b's (see § 7.1), so they are **counted only once** when applying the "> 3 cells exceed tolerance" threshold — a single bypass-explainability failure contributes Doubt 1b's cells alone, not 2×. Doubt 5's 3 cells measure a mode transition that ADR-001 § III says does not exist; they do not stand as measurement items and are **excluded from the judgement**. Both sets of cells remain listed in § 7.1 (canonical count 21) for traceability; only their treatment in the gate arithmetic is fixed here.
+> ⚠️ **How the gate arithmetic counts these cells.** Doubt 6's 3 cells are identical to Doubt 1b's (see § 7.1), so they are **counted only once** when applying the "> 3 cells exceed tolerance" threshold — a single bypass-explainability failure contributes Doubt 1b's cells alone, not 2×. Doubt 5's 3 cells measure a mode transition that ADR-001 § III says does not exist; they do not stand as measurement items and are **excluded from the judgement**. Both sets of cells remain listed in § 7.1 (canonical count 21) for traceability; only their treatment in the gate arithmetic is fixed here. The resulting **judgement set is 15 cells** (21 enumerated − Doubt 5's 3 excluded − Doubt 6's 3 not counted a second time).
 
 ### 7.4 Related Documents
 
