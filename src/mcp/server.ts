@@ -713,6 +713,54 @@ export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 export const GET_CLOSE_EVICTION_GRACE_MS = SSE_KEEPALIVE_INTERVAL_MS * 4;
 
 /**
+ * `AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` に許容する最小値 (ms) (issue #355)。
+ *
+ * これを下回る値は「秒を ms と取り違えた」設定ミス (例: `60` = 60ms) の可能性が高い。
+ * 60ms のような極小 grace は実質「猶予なし即時 eviction」になり、issue #343 の再設計を
+ * 無警告で無効化してしまうため、不正値として既定値に fall back させる。
+ */
+export const GET_CLOSE_EVICTION_GRACE_MIN_MS = 1_000;
+
+/**
+ * `AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` に許容する最大値 (ms) (issue #355)。
+ *
+ * `setTimeout` の delay は 32bit signed int にクランプされ、これを超える値は
+ * 逆に delay 1ms (= 即時 eviction) として扱われる。クランプによるサイレント縮退を
+ * 避けるため、上限超過も不正値として既定値に fall back させる。
+ */
+export const GET_CLOSE_EVICTION_GRACE_MAX_MS = 2_147_483_647;
+
+/**
+ * `GET_CLOSE_EVICTION_GRACE_MS` の実効値を返す (issue #355)。
+ *
+ * `AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` env が set されていればその値 (ms) で上書きする。
+ * env 未設定時は既定値 (= 60s) を返すため、既存デプロイの挙動は変わらない。
+ * 非数値 / 許容範囲外 (`GET_CLOSE_EVICTION_GRACE_MIN_MS` 未満 /
+ * `GET_CLOSE_EVICTION_GRACE_MAX_MS` 超過) の値は warning を出して既定値に fall back する。
+ *
+ * `getPingTimeoutMs()` (= issue #240) と同 pattern。呼び出しのたびに env を読むため、
+ * テストから env を差し替えて検証できる (module reload 不要)。
+ */
+export function getGetCloseEvictionGraceMs(): number {
+  const raw = process.env.AGENT_HUB_MCP_GET_CLOSE_GRACE_MS;
+  if (raw === undefined || raw === '') return GET_CLOSE_EVICTION_GRACE_MS;
+  const parsed = Number(raw);
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < GET_CLOSE_EVICTION_GRACE_MIN_MS ||
+    parsed > GET_CLOSE_EVICTION_GRACE_MAX_MS
+  ) {
+    console.warn(
+      `[MCP] invalid AGENT_HUB_MCP_GET_CLOSE_GRACE_MS: ${JSON.stringify(raw)} — ` +
+        `expected ${GET_CLOSE_EVICTION_GRACE_MIN_MS}..${GET_CLOSE_EVICTION_GRACE_MAX_MS} (ms), ` +
+        `falling back to default ${GET_CLOSE_EVICTION_GRACE_MS}ms`
+    );
+    return GET_CLOSE_EVICTION_GRACE_MS;
+  }
+  return parsed;
+}
+
+/**
  * SSE レスポンスに keepalive コメントを書き込む (issue #240)。
  *
  * `res.writableEnded` が true の場合は書き込みをスキップする (接続クローズ race 対策)。
@@ -775,7 +823,7 @@ export async function evictSessionOnDisconnect(sessionId: string): Promise<boole
 
 /**
  * GET /mcp の `req.on('close')` から切断のたびに evict するのではなく、
- * `GET_CLOSE_EVICTION_GRACE_MS` だけ待って、その間に同一 session への GET reconnect
+ * `getGetCloseEvictionGraceMs()` の猶予だけ待って、その間に同一 session への GET reconnect
  * (`cancelPendingEviction()`) が来なければ evict する猶予付き eviction (issue #343 再設計)。
  *
  * 公式 MCP SDK の `StreamableHTTPClientTransport` は GET SSE が予期せず切れると
@@ -791,7 +839,7 @@ export async function evictSessionOnDisconnect(sessionId: string): Promise<boole
 export function scheduleEvictionOnDisconnect(
   sessionId: string,
   generation: number,
-  graceMs: number = GET_CLOSE_EVICTION_GRACE_MS
+  graceMs: number = getGetCloseEvictionGraceMs()
 ): void {
   const session = sessions.get(sessionId);
   if (!session || session.pendingEvictionTimer) return;
