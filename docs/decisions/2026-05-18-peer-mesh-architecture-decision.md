@@ -280,7 +280,7 @@ Documented in § III.
 - **Market positioning**: `docs/landscape.md` (C-type co-presence market niche)
 - **Collaboration philosophy**: `docs/collaboration-model.md` (shared understanding rationale)
 - **Testing roadmap**: `docs/improvement-roadmap.md` § 7 (May 24+ validation)
-- **Team conventions**: `~/app/CLAUDE.md` § Conventions (merge actor scope, L0/L1/L2 boundaries)
+- **Team conventions**: `ecosystem root CLAUDE.md` § Conventions (private; outside the public repo) — merge actor scope, L0/L1/L2 boundaries
 
 ---
 

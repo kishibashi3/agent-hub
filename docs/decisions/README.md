@@ -110,7 +110,7 @@ YYYY-MM-DD-<slug>.md
 - **Review フロー**: 通常の PR フロー (`LGTM ✅` PR comment → @planner self-merge)。`scope: ecosystem` の ADR は operator GO 推奨。
 - **docs/index.md 更新**: 新 ADR を追加したら `docs/index.md` の `## 設計判断 / Decisions` セクションに 1 行追記する。
 - **Status 欄の粒度**: `**Status**` は上記テンプレートと同じ**単一ラベル** (`Proposed` / `Accepted` / `Adopted` / `Adopted (consensus)` / `Deprecated` / `Superseded by ADR-NNN`) のみを書く。補足の叙述が必要な場合は frontmatter 直下に `> **Status note**: ...` の callout として置く。理由: `## 既存 ADR` 一覧表は単一ラベル前提で、本体に叙述が入ると粒度が食い違う。
-- **private repo path の参照**: 公開側から辿れない path (`agent-hub-roles-kaz/...` 等) を参照するときは `(private archive)` を付記し、**公開 issue / PR を併記**して OSS 側の読者が文脈を追えるようにする。例: `` `agent-hub-roles-kaz/chaos-research/...md` (private archive; public context: #329 / #364) ``。
+- **private repo path の参照**: 公開側から辿れない path (`agent-hub-roles-kaz/...` 等) を参照するときは `(private archive)` を付記し、**公開 issue / PR を併記**して OSS 側の読者が文脈を追えるようにする。例: `` `agent-hub-roles-kaz/chaos-research/...md` (private archive; public context: #329 / #364) ``。対応する公開 issue / PR が無い場合は、公開側に実体があれば公開 URL を併記する (例: `` `agent-hub-roles-kaz/admin/CLAUDE.md` (private fork; public template: agent-hub-roles/admin/CLAUDE.md) ``)。公開側に実体が無い場合は `(private; 公開 repo 外)` と付記し、**壊れた相対リンクにはしない** (素の code span + 注記に落とす)。
 
 ---
 

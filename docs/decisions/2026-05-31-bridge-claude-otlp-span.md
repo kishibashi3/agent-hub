@@ -82,6 +82,6 @@ bridge-claude に per-call OTLP span emit を追加する:
 - Refs: kishibashi3/agent-hub-bridges#90
 - 実装 PR: kishibashi3/agent-hub-bridges#91 (commit b431172)
 - operator DM: f99e5b95-d5ab-4392-a1e9-d2db5ae6d0b4
-- otelite deployment: `private/agent-hub/docs/deployment-pi5.md`
+- otelite deployment: [`docs/deployment-pi5.md`](../deployment-pi5.md)
 - OpenTelemetry GenAI Semantic Conventions:
   https://opentelemetry.io/docs/specs/semconv/gen-ai/

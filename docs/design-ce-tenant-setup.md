@@ -141,7 +141,7 @@ server 実装変更は不要であり、既存ゲート構造を活かす設計�
 
 ### 5.1 installer `--edition community` パスへの追加
 
-`agent-hub-installer/install.sh` の `--edition community` + `--hub-mode self-host` path に以下を追加:
+[`agent-hub-installer/install.sh`](https://github.com/kishibashi3/agent-hub-installer/blob/main/install.sh) の `--edition community` + `--hub-mode self-host` path に以下を追加:
 
 ```bash
 # CE-specific: Docker Compose 起動後に admin setup ガイダンスを print
@@ -183,7 +183,7 @@ Full walkthrough: docs/ce-onboarding.md | Admin ops guide: roles/admin/CLAUDE.md
 
 ### 5.2 `roles/admin/CLAUDE.md` の設計
 
-`agent-hub-roles-kaz/admin/CLAUDE.md` を新規作成。  
+`agent-hub-roles-kaz/admin/CLAUDE.md` (private fork; public template: [agent-hub-roles/admin/CLAUDE.md](https://github.com/kishibashi3/agent-hub-roles/blob/main/admin/CLAUDE.md)) を新規作成。  
 admin は bridge worker ではなく **Claude Code session として動く ops role** (= operator と同型)。  
 `start.sh all` の spawn 対象には含まない。
 
@@ -259,8 +259,8 @@ server 実装変更はない (= 既存ゲートを活用)。
 
 ## 7. acceptance criteria (= 完了の定義)
 
-- [ ] `agent-hub-installer/install.sh` に `--edition community` + `--hub-mode self-host` 時の CE admin setup ガイダンス print を追加
-- [ ] `agent-hub-roles-kaz/admin/CLAUDE.md` を新規作成 (CE admin ops role persona doc)
+- [ ] [`agent-hub-installer/install.sh`](https://github.com/kishibashi3/agent-hub-installer/blob/main/install.sh) に `--edition community` + `--hub-mode self-host` 時の CE admin setup ガイダンス print を追加
+- [ ] `agent-hub-roles-kaz/admin/CLAUDE.md` を新規作成 (CE admin ops role persona doc。private fork; public template は §5.2 参照)
 - [ ] `agent-hub/docs/ce-onboarding.md` を新規作成 (step-by-step 手順書)
 - [ ] 本設計 doc (`docs/design-ce-tenant-setup.md`) が @reviewer LGTM を受ける
 - [ ] 実装は本設計 doc LGTM 後に別 PR で起票 (= 2 段ゲート、L0)
@@ -281,8 +281,8 @@ server 実装変更はない (= 既存ゲートを活用)。
 2. @reviewer によるレビュー (= 4 軸 check + 設計の coherence + 既存ゲートとの整合)
 3. @planner が LGTM 確認 → squash merge (L0)
 4. **実装 PR 別途起票** (= 本設計 doc を spec として参照):
-   - `agent-hub-installer/install.sh` に CE ガイダンス追加
-   - `agent-hub-roles-kaz/admin/CLAUDE.md` 新規作成
+   - [`agent-hub-installer/install.sh`](https://github.com/kishibashi3/agent-hub-installer/blob/main/install.sh) に CE ガイダンス追加
+   - `agent-hub-roles-kaz/admin/CLAUDE.md` 新規作成 (private fork; public template は §5.2 参照)
    - `agent-hub/docs/ce-onboarding.md` 新規作成
 5. 実装 PR レビュー (@reviewer) + @planner merge (L0)
 
@@ -292,8 +292,8 @@ server 実装変更はない (= 既存ゲートを活用)。
 - [issue #101](https://github.com/kishibashi3/agent-hub/issues/101) (= 2-stage bootstrap installer)
 - [`docs/edition-model.md`](./edition-model.md) (= CE / PE edition 定義、既存ゲート設計)
 - [`docs/minimum-installer.md`](./minimum-installer.md) (= installer 設計 doc、Phase 1/2 方針)
-- [`agent-hub-installer/install.sh`](../../../agent-hub-installer/install.sh) (= bootstrap installer 実装)
-- [`agent-hub-roles-kaz/scripts/start.sh`](../../agent-hub-roles-kaz/scripts/start.sh) (= role spawn script)
+- [`agent-hub-installer/install.sh`](https://github.com/kishibashi3/agent-hub-installer/blob/main/install.sh) (= bootstrap installer 実装)
+- `agent-hub-roles-kaz/scripts/start.sh` (= role spawn script。private fork; 公開 template [agent-hub-roles](https://github.com/kishibashi3/agent-hub-roles) には未収録)
 - [`src/mcp/server.ts`](../src/mcp/server.ts) §CE access policy (= 既存 deployment init gate 実装)
 - [`docs/design-last-active-at.md`](./design-last-active-at.md) (= 同形の 2 段ゲート設計前例)
 

@@ -1,7 +1,7 @@
 # peer agent 向け agent-hub how-to
 
 > **責務**: agent-hub に接続する peer agent（bridge / client / plugin）が **知らないと事故る** 最小限の運用規約。
-> role 固有の振る舞いや ecosystem の設計思想は `agent-hub-roles-kaz/CLAUDE.md` を参照（ここには書かない、二重保守を避ける）。
+> role 固有の振る舞いや ecosystem の設計思想は `agent-hub-roles-kaz/CLAUDE.md` (private fork; public template: [agent-hub-roles/CLAUDE.md](https://github.com/kishibashi3/agent-hub-roles/blob/main/CLAUDE.md)) を参照（ここには書かない、二重保守を避ける）。
 > 配布: MCP resource `howto://agent-hub`（`resources/read` で取得）。`register` レスポンスの `howto_digest` / `howto_uri` にも要点を埋め込む。
 >
 > 起源: [issue #340](https://github.com/kishibashi3/agent-hub/issues/340)

@@ -278,5 +278,5 @@ AGENT_HUB_GITHUB_ORG=your-org-name
 - [edition model](./edition-model.md) — CE / PE の違いの詳細
 - [設計 doc (issue #102)](./design-ce-tenant-setup.md) — CE tenant setup の設計根拠
 - [minimum installer](./minimum-installer.md) — installer 全体の設計
-- [admin/CLAUDE.md](../../agent-hub-roles-kaz/admin/CLAUDE.md) — @admin ops role の詳細
-- [installer README](../../agent-hub-installer/README.md) — installer のオプション一覧
+- [admin/CLAUDE.md](https://github.com/kishibashi3/agent-hub-roles/blob/main/admin/CLAUDE.md) — @admin ops role の詳細 (公開 template。運用実体は private fork `agent-hub-roles-kaz/admin/CLAUDE.md`)
+- [installer README](https://github.com/kishibashi3/agent-hub-installer/blob/main/README.md) — installer のオプション一覧

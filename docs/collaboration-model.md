@@ -118,7 +118,7 @@ PR の review → approval → merge において、author / reviewer / operator
 
 > Mirror: reviewer 側の `CLAUDE.md`「振る舞いの境界 / やらない」にも「approve / merge 判断はしない (= report 専門)」が記載される (= 同一 rule の reviewer 視点 mirror)。両者が乖離した場合は本ドキュメントを正本とする。
 
-> Codification: 本 § の persona 責務分担は、ecosystem-wide CLAUDE.md (= リポジトリ root 横断の [`~/app/CLAUDE.md` § Conventions](../../CLAUDE.md#conventions)) に concrete な L0 (planner self-merge) / L1 (operator GO) split として codify されている。 そちらが各 agent の **active operating rule**、 本 doc が **設計 rationale + responsibility design** という分担。 詳細 spec は [`agent-hub-planner/CLAUDE.md` § merge 権限ルール](../agent-hub-planner/CLAUDE.md#merge-権限ルール) を参照。
+> Codification: 本 § の persona 責務分担は、ecosystem-wide CLAUDE.md (= リポジトリ root 横断の `ecosystem root CLAUDE.md` § Conventions — private; 公開 repo 外のワークスペース root に置かれる) に concrete な L0 (planner self-merge) / L1 (operator GO) split として codify されている。 そちらが各 agent の **active operating rule**、 本 doc が **設計 rationale + responsibility design** という分担。 詳細 spec は [`agent-hub-roles/planner/CLAUDE.md` § merge 権限ルール](https://github.com/kishibashi3/agent-hub-roles/blob/main/planner/CLAUDE.md#merge-%E6%A8%A9%E9%99%90%E3%83%AB%E3%83%BC%E3%83%AB) を参照。
 
 > Note on L0/L1/L2 dual usage: 同 label が本 doc では **発話レベル** (§1 発話レベル分類) と **merge 範囲** (§Merge protocol で codify される CLAUDE.md Conventions の merge actor split) の **2 文脈** で使われる。 両者は同じ「自律性 grading 思想」 を共有するが、 概念は独立 (= 発話 L0 ≠ merge L0)。 文脈で判別すること。
 
@@ -148,7 +148,7 @@ agent-hub のハンドオフ方式: GitHub PR + DM heads-up (同一 primitive �
 - **ADR (正本)**: [`decisions/2026-05-18-peer-mesh-architecture-decision.md`](./decisions/2026-05-18-peer-mesh-architecture-decision.md) — Peer-Mesh Architecture with Transparent Asymmetry(§I Transparent Asymmetry / §II Failure Visibility / §III Decline Capability)
 - 競合 positioning: [`landscape.md`](./landscape.md)
 - messaging primitive を選んだ理由: [`messaging-vs-rpc.md`](./messaging-vs-rpc.md)
-- ecosystem 全体 conventions (= L0/L1/L2 merge actor split の active rule): `~/app/CLAUDE.md` § Conventions
-- merge 権限の詳細 spec: `~/app/private/agent-hub-planner/CLAUDE.md` § merge 権限ルール
+- ecosystem 全体 conventions (= L0/L1/L2 merge actor split の active rule): `ecosystem root CLAUDE.md` § Conventions (private; 公開 repo 外)
+- merge 権限の詳細 spec: [`agent-hub-roles/planner/CLAUDE.md` § merge 権限ルール](https://github.com/kishibashi3/agent-hub-roles/blob/main/planner/CLAUDE.md#merge-%E6%A8%A9%E9%99%90%E3%83%AB%E3%83%BC%E3%83%AB)
 - Direct Dialogue digest + Unified View v1: [`discussions/2026-05-18-peer-mesh-industry-discussion.md`](./discussions/2026-05-18-peer-mesh-industry-discussion.md)
 - Evidence archive(5-case typology + 7-framework inventory + Pattern D structural decline): [agent-hub-researcher: research-archive/2026-05-18-coordination-convention-test.md](https://github.com/kishibashi3/agent-hub-researcher/blob/main/research-archive/2026-05-18-coordination-convention-test.md)

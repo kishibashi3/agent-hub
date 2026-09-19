@@ -158,7 +158,7 @@ trigger 条件:
 
 ### 7.0 Overview
 
-Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 2026-06-07). Operationalizes 7 unresolved doubts through 21-cell measurement matrix (3 measurement axes × 7 doubts: 1a, 1b, 2, 3, 4, 5, 6). (The earlier "18-cell / 6 doubts" label predates the split of Doubt 1 into 1a / 1b; § 7.1 has always enumerated 21 cells.) Related: ADR [2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md), evidence archive [coordination-convention-test.md](../agent-hub-researcher/research-archive/2026-05-18-coordination-convention-test.md).
+Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 2026-06-07). Operationalizes 7 unresolved doubts through 21-cell measurement matrix (3 measurement axes × 7 doubts: 1a, 1b, 2, 3, 4, 5, 6). (The earlier "18-cell / 6 doubts" label predates the split of Doubt 1 into 1a / 1b; § 7.1 has always enumerated 21 cells.) Related: ADR [2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md), evidence archive `agent-hub-roles-kaz/researcher/research-archive/2026-05-18-coordination-convention-test.md` (private archive; public context: [PR #61](https://github.com/kishibashi3/agent-hub/pull/61)).
 
 **Measurement Axes** (see ADR § Evaluation Axes for philosophical grounding):
 
@@ -252,7 +252,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 **Phase 1** (2026-05-19 to 2026-05-24): Claim codification + artifact completion:
 
 - [x] ADR finalization (PR #61: [2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md))
-- [x] Archive creation (@researcher: [coordination-convention-test.md](../agent-hub-researcher/research-archive/2026-05-18-coordination-convention-test.md))
+- [x] Archive creation (@researcher: `agent-hub-roles-kaz/researcher/research-archive/2026-05-18-coordination-convention-test.md` — private archive; public context: [PR #61](https://github.com/kishibashi3/agent-hub/pull/61))
 - [x] Landscape.md 5-stream ecosystem + timeline update
 - [x] Collaboration-model.md rationale expansion
 - [x] This section: improvement-roadmap.md § 7 Testing Roadmap operationalization
@@ -263,7 +263,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 **Phase 2** (2026-05-24 to 2026-06-07): Live observation of all 21 enumerated cells, of which 15 form the judgement set (see the gate note below).
 
-> ⚠️ **Not executed.** Phase 2 never ran: no snapshot 1 / 2 / 3 was taken and the 2026-06-07 go/no-go gate never fired. Verified across four independent observation windows (all agent-hub branches, all roles-kaz archives, all GitHub issues / PRs, and 35,540 production DMs from 2026-05-16 to 2026-09-19) — see `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md`. 3 of the 21 cells were measured retrospectively on 2026-09-20 (outside the gate), 12 are not measurable as specified, and 6 remain unmeasured. The schedule and criteria below are kept as the original plan of record.
+> ⚠️ **Not executed.** Phase 2 never ran: no snapshot 1 / 2 / 3 was taken and the 2026-06-07 go/no-go gate never fired. Verified across four independent observation windows (all agent-hub branches, all roles-kaz archives, all GitHub issues / PRs, and 35,540 production DMs from 2026-05-16 to 2026-09-19) — see `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md` (private archive; public context: [#329](https://github.com/kishibashi3/agent-hub/issues/329) / [#364](https://github.com/kishibashi3/agent-hub/issues/364)). 3 of the 21 cells were measured retrospectively on 2026-09-20 (outside the gate), 12 are not measurable as specified, and 6 remain unmeasured. The schedule and criteria below are kept as the original plan of record.
 
 **Weekly Checkpoint Schedule**:
 - **2026-05-24 (snapshot 1)**: Baseline capture (peer count = 5, operator direct-path pattern C dominant expected)
@@ -282,7 +282,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 ### 7.4 Related Documents
 
 - **ADR Philosophy**: [2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md) § Evaluation Axes (Why axis choices matter)
-- **Primary Evidence**: [coordination-convention-test.md](../agent-hub-researcher/research-archive/2026-05-18-coordination-convention-test.md) § 5-case typology + Case pattern C dominance observation
+- **Primary Evidence**: `agent-hub-roles-kaz/researcher/research-archive/2026-05-18-coordination-convention-test.md` (private archive; public context: [PR #61](https://github.com/kishibashi3/agent-hub/pull/61)) § 5-case typology + Case pattern C dominance observation
 - **Landscape Context**: [landscape.md](./landscape.md) § C-type co-presence positioning
 - **Collaboration Model**: [collaboration-model.md](./collaboration-model.md) § Dual-mode specialization (Peer-Mode vs Asymmetric-Mode)
 

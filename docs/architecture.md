@@ -260,7 +260,7 @@ operator が **bridge process 群の運用状態を追跡** する state file。
 | **保存先** | `~/.claude/projects/-home-kishibashi3-app-private-operation/bridge-inventory.md` (= Claude Code memory directory 配下の state file) |
 | **記録内容** | handle / tenant / workdir / log path / pid / 起動時刻 / session 識別子 |
 | **更新 timing** | spawn 時 / stop 時 / session 開始時の reconcile |
-| **詳細 spec** | `private/operation/CLAUDE.md` §Bridge operator role に記載 |
+| **詳細 spec** | [agent-hub-roles/operator/CLAUDE.md](https://github.com/kishibashi3/agent-hub-roles/blob/main/operator/CLAUDE.md) § inventory 管理 に記載 (旧 `private/operation/CLAUDE.md` — 現存しない private path、公開 template に移管済み) |
 
 #### 3.3.1 cross-session pid 限界 (= 重要 caveat)
 
@@ -420,7 +420,7 @@ sequenceDiagram
 | **L1** | 実装 task の開始指示 / 新規 bridge spawn / breaking change PR の merge | operator GO 必須 |
 | **L2** | repo visibility toggle / repo delete / 外部サービス重大影響 | 人間のみ |
 
-詳細は [`/home/kishibashi3/app/private/agent-hub-planner/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-planner) `§ merge 権限ルール` 参照。
+詳細は [`agent-hub-roles/planner/CLAUDE.md` § merge 権限ルール](https://github.com/kishibashi3/agent-hub-roles/blob/main/planner/CLAUDE.md#merge-%E6%A8%A9%E9%99%90%E3%83%AB%E3%83%BC%E3%83%AB) 参照 (運用実体は private fork `agent-hub-roles-kaz/planner/CLAUDE.md`)。
 
 ### 6.3 reviewer の core stance (= 「approve しない / merge しない / commit しない」)
 
