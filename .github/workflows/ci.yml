@@ -34,8 +34,5 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # #321 (16 件の migration テスト失敗修正) 着地までは non-blocking。
-      # #321 完了後、continue-on-error を外して required check 化する (planner フォローアップ予定)。
       - name: Test
         run: npm test
-        continue-on-error: true
