@@ -436,6 +436,101 @@ def mark_message_read(
 
 
 # ============================================================
+# MCP ping responder (= issue #362)
+# ============================================================
+
+# SSE 行の fast-check hint。 `data: {"jsonrpc":"2.0","id":N,"method":"ping"}` を
+# JSON parse する前に文字列含有で絞る (= 既存の
+# `notifications/resources/updated` fast-check と同じ pattern、 毎行 json.loads
+# するコストを避ける)。
+_PING_HINT = '"ping"'
+
+
+def _parse_sse_data_line(raw: str) -> dict[str, Any] | None:
+    """SSE の `data: <json>` 行を JSON-RPC message (dict) として parse。
+
+    MCP SDK (= `WebStandardStreamableHTTPServerTransport.writeSSEEvent`) の出力は
+    `event: message\n` [`id: <n>\n`] `data: <json>\n\n` の 3〜4 行。 本 helper は
+    `data:` 行のみを対象とし、 それ以外の行 (= `event:` / `id:` / 空行) と
+    JSON parse 失敗・非 dict payload は None を返す (= caller は skip)。
+    """
+    if not raw.startswith("data:"):
+        return None
+    payload = raw[len("data:"):].strip()
+    if not payload:
+        return None
+    try:
+        msg = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    return msg if isinstance(msg, dict) else None
+
+
+def respond_ping(
+    headers: dict[str, str], session_id: str, request_id: Any
+) -> None:
+    """server→client の MCP `ping` request に空 result の JSON-RPC response を返す。
+
+    issue #362: server の active ping-presence loop (= `runOneActivePingCycle`) は
+    `server.ping()` で protocol-level ping request を standalone SSE stream
+    (= scheduler が張っている long-lived GET /mcp) に流す。 応答がないと
+    timeout 10s × 3 attempts で session が evict され、 SSE 再接続 →
+    re-initialize を繰り返して `is_online` がフラップする。
+
+    MCP spec (Ping utility) の定めどおり **空 result の response** を返す
+    (= `pong` という method は存在しない)。 StreamableHTTP では server→client
+    request への response は **POST /mcp の body として送る**。 body が
+    response / notification のみの POST に対し transport は `202 Accepted` を
+    返す (= tools/call と違い SSE body は返らない)。
+    """
+    resp = requests.post(
+        HUB_URL,
+        headers={**headers, "mcp-session-id": session_id},
+        data=_encode_json_body({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {},
+        }),
+        timeout=10,
+    )
+    # 202 が正 (= response-only POST)、 実装差で 200 を返す transport も許容。
+    if resp.status_code not in (200, 202):
+        print(
+            f"[WARN] ping response failed: HTTP {resp.status_code}: "
+            f"{resp.text[:200]}",
+            file=sys.stderr,
+        )
+
+
+def _try_handle_ping(
+    headers: dict[str, str], session_id: str, raw: str
+) -> bool:
+    """SSE 行が MCP `ping` request なら response を返し True。 それ以外は False。
+
+    True を返した場合 caller は当該行の以降の処理を skip する (= ping は
+    inbox push とは無関係)。 False の場合は既存の
+    `notifications/resources/updated` 判定に素通りさせる (= 既存経路は無変更)。
+
+    response POST の失敗は致命的ではない (= 次 cycle の ping で retry される、
+    最悪 evict → 再接続で復帰) ため log のみで swallow し、 SSE loop は
+    継続させる。 ここで raise すると inbox 配信が止まる。
+    """
+    msg = _parse_sse_data_line(raw)
+    if msg is None or msg.get("method") != "ping":
+        return False
+    request_id = msg.get("id")
+    if request_id is None:
+        # id 無し = notification 扱い、 response を返してはいけない (JSON-RPC 仕様)。
+        return True
+    try:
+        respond_ping(headers, session_id, request_id)
+        print(f"[sse-pong] ping id={request_id} answered")
+    except Exception as e:
+        print(f"[ERR sse ping] id={request_id}: {e}", file=sys.stderr)
+    return True
+
+
+# ============================================================
 # Command dispatch (= issue #65 bidirectional support)
 # ============================================================
 
@@ -997,7 +1092,8 @@ def sse_listen_loop(
     2. register_self + subscribe_inbox
     3. SSE long-lived GET で `notifications/resources/updated` 待ち
     4. push 到着で fetch_inbox + handle_inbox_command + mark_message_read
-    5. 切断時は 3 秒待って再接続
+    5. server→client の MCP `ping` request には空 result を返す (= issue #362)
+    6. 切断時は 3 秒待って再接続
 
     watch.sh の SSE long-lived 接続 pattern を Python 移植 (= issue #65)。
     main thread の cron loop とは独立した session を持つ (= 同一 user の 2 session、
@@ -1053,6 +1149,12 @@ def sse_listen_loop(
 
                 for raw in resp.iter_lines(decode_unicode=True):
                     if not raw:
+                        continue
+                    # issue #362: server→client の MCP `ping` request に空 result の
+                    # response を返す。 inbox push 判定より前に処理する (= ping 行は
+                    # `notifications/resources/updated` を含まないため、 後段の
+                    # fast-check に到達すると読み捨てられる)。
+                    if _PING_HINT in raw and _try_handle_ping(headers, sid, raw):
                         continue
                     # SSE event は "data: <json>" 形式、 method field を文字列含有判定で fast-check
                     if "notifications/resources/updated" not in raw:
