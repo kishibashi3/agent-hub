@@ -233,7 +233,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 **Measurement Owner**: @reviewer (structural latency audit); @planner (operational responsiveness perception)
 
-> ⚠️ **Contradicts ADR § III.** ADR-001 § III states that peer-mode and asymmetric-mode are "genuinely different permanent stances, not binary toggles". These 3 cells nevertheless measure mode-switch frequency and latency (≤ 2s), i.e. the transition time of a transition the ADR says does not exist. The cells are retained here as-written; resolving the contradiction (delete the cells, or redefine what is measured) is a separate design decision.
+> ⚠️ **Invalid — excluded from the go/no-go judgement.** ADR-001 § III states that peer-mode and asymmetric-mode are "genuinely different permanent stances, not binary toggles". These 3 cells nevertheless measure mode-switch frequency and latency (≤ 2s), i.e. the transition time of a transition the ADR says does not exist. They contradict the ADR body and therefore do not stand as measurement items: **Doubt 5 is excluded from the judgement**. The 3 cells are kept in this document as-written — not deleted — so that the origin of the defect stays readable; the canonical cell count remains 21.
 
 #### Doubt 6: Context-Mismatched Bypass Frequency
 
@@ -245,7 +245,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 **Measurement Owner**: @planner (primary observation + pattern tracking); @ope-ultp1635 (independent human observer + context classification)
 
-> ⚠️ **Duplicates Doubt 1b.** All 3 cells restate Doubt 1b's bypass measurements — the Temporal criterion explicitly defers to "Doubt 1b Observer-Independent" for its primary metric. A single bypass-explainability fact therefore counts twice in the § 7.3 go/no-go arithmetic ("> 3 cells exceed tolerance → No-Go"). Whether Doubt 6 should remain an independent doubt is a separate design decision; this document records the current canonical count as 21.
+> ⚠️ **Identical to Doubt 1b — counted once in the judgement.** All 3 cells restate Doubt 1b's bypass measurements — the Temporal criterion explicitly defers to "Doubt 1b Observer-Independent" for its primary metric. Because Doubt 6 is identical to Doubt 1b, **a bypass-explainability result is counted only once in the § 7.3 go/no-go arithmetic** (Doubt 1b's 3 cells; Doubt 6's 3 cells are not counted a second time). The 3 cells are kept in this document as-written — not deleted — so that the origin of the duplication stays readable; the canonical cell count remains 21.
 
 ### 7.2 Phase 1 Artifacts (Codification Layer)
 
@@ -277,7 +277,7 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 - If > 3 cells exceed tolerance → **No-Go**: Thesis requires structural revision; escalate to @ope-ultp1635 for remediation design
 - If 1-3 cells borderline → **Conditional**: Identify specific cell mitigation + restart Phase 2 for affected cell(s) only
 
-> ⚠️ **The gate arithmetic double-counts.** Doubt 6's 3 cells duplicate Doubt 1b's (see § 7.1), so a single bypass-explainability failure contributes 2 cells to the "> 3 cells exceed tolerance" threshold. Doubt 5's 3 cells measure a mode transition that ADR-001 § III says does not exist. Both defects are annotated but not resolved here — resolving them is a design decision outside this document.
+> ⚠️ **How the gate arithmetic counts these cells.** Doubt 6's 3 cells are identical to Doubt 1b's (see § 7.1), so they are **counted only once** when applying the "> 3 cells exceed tolerance" threshold — a single bypass-explainability failure contributes Doubt 1b's cells alone, not 2×. Doubt 5's 3 cells measure a mode transition that ADR-001 § III says does not exist; they do not stand as measurement items and are **excluded from the judgement**. Both sets of cells remain listed in § 7.1 (canonical count 21) for traceability; only their treatment in the gate arithmetic is fixed here.
 
 ### 7.4 Related Documents
 
