@@ -47,13 +47,28 @@ services:
       AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
       # GitHub Org 制限 (= optional、 pat mode で組織 membership 検証)
       AGENT_HUB_GITHUB_ORG: ${AGENT_HUB_GITHUB_ORG:-}
-      # ---- active ping-presence loop の無効化 (issue #106 / #26) ----
-      # server の active ping loop は client を ping して presence 判定するが、
-      # bridge-claude2(Go) は polling-only 設計 (issue #26) で ping handler を持たない。
-      # loop を ON にすると polling-only bridge が ping 非応答で false-offline/エラーになる。
-      # polling-only フリートに対しては disabled が正しい config。
-      # (従来 Pi5 compose に手編集で入れていた drift を committed compose に恒久化)
+      # ---- active ping-presence loop の制御 (issue #106 / #363) ----
+      # server の active ping loop は client を ping して presence 判定する。
+      # 現在無効化している理由は「@scheduler / VS Code plugin が MCP ping に応答しない」こと
+      # (issue #362 / agent-hub-plugin-vscode#67)。これらが応答できるようになるまで、
+      # loop を ON にすると生きている session が ping 非応答で false-offline / evict される。
+      # (注: bridge-claude2 (Go) は #42 (2026-06-06) 以降 sendPong で応答する。
+      #  稼働中バイナリ (2026-09-17 build) にもシンボルがあることを実測確認済み。
+      #  かつての「Go bridge は ping handler を持たない」という無効化理由は現状に合致しない。)
+      #
+      # 再有効化は段階的に行う (issue #356):
+      #   1. AGENT_HUB_MCP_PING_LOOP_MODE: "observe-only" で 1 日運用し、
+      #      `ping failed ... observe-only mode, NOT disconnecting` の warning ログを確認する
+      #      (= evict は発生しない)
+      #   2. 非応答 session が出なくなったら "enforce" に切り替える
+      #   3. 問題が出たら "disabled" に戻す (= env 書き換え + restart のみ)
+      #
+      # MODE 未設定時は旧 flag AGENT_HUB_MCP_PING_LOOP_DISABLED が効く (= 下の "1")。
+      # MODE を設定した場合は MODE が優先される。旧 flag を残しているのは、
+      # image と compose の更新順序が前後しても無効化が外れないようにするため。
+      # MODE に 3 値以外を書くと server は起動しない (= fail-fast、 issue #363/#384)。
       AGENT_HUB_MCP_PING_LOOP_DISABLED: "1"
+      # AGENT_HUB_MCP_PING_LOOP_MODE: "observe-only"  # ← 段階 1 で有効化する
       # ---- orphan session eviction (= session GC) の無効化 flag (issue #369) ----
       # 未設定 = 有効。orphan eviction は元々 ping loop の内側に実装されており、
       # 上の PING_LOOP_DISABLED=1 で session GC ごと停止していた (issue #361 の根因)。
