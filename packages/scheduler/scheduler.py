@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import signal
 import sys
@@ -445,6 +446,34 @@ def mark_message_read(
 # するコストを避ける)。
 _PING_HINT = '"ping"'
 
+# ping response POST の timeout (秒)。 server 側 `PING_TIMEOUT_MS` = 10_000 より
+# 十分小さくして、 間に合わない pong に reader/responder を張り付かせない
+# (= issue #374 Minor 2)。
+PING_RESPONSE_TIMEOUT_SEC = 5
+
+# responder queue の上限。 通常は 1 件ずつしか積まれない (= `PING_INTERVAL_MS`
+# 30_000)。 溢れる状況は responder が詰まっている = どのみち間に合わないため drop。
+_PING_QUEUE_MAXSIZE = 32
+
+# pong log を N 本ごとの summary に集約する (= issue #374 S5)。
+_PING_LOG_SUMMARY_EVERY = 100
+
+# worker thread が stop_event を polling する間隔 (秒)。
+_WORKER_POLL_SEC = 0.2
+
+# stream 終了時、 読み終えていた ping の pong を流し切るのを待つ上限 (秒)。
+_PING_DRAIN_GRACE_SEC = 1.0
+
+# SSE stream 切断時に worker thread の終了を待つ上限 (秒)。
+# inbox worker は進行中の 1 件 (= 最大 3 POST × timeout 10s) を処理してから抜ける。
+_WORKER_JOIN_TIMEOUT_SEC = 35
+
+# inbox worker の停止 sentinel (= queue に積まれた残件を処理してから終了させる)。
+_STOP_WORKER = object()
+
+# inbox worker への「未読を取りに行け」合図 (= 通知の中身は使わないため単一 token)。
+_INBOX_POLL = object()
+
 
 def _parse_sse_data_line(raw: str) -> dict[str, Any] | None:
     """SSE の `data: <json>` 行を JSON-RPC message (dict) として parse。
@@ -482,6 +511,20 @@ def respond_ping(
     request への response は **POST /mcp の body として送る**。 body が
     response / notification のみの POST に対し transport は `202 Accepted` を
     返す (= tools/call と違い SSE body は返らない)。
+
+    timeout は `PING_RESPONSE_TIMEOUT_SEC` (= server の `PING_TIMEOUT_MS` 10s より
+    十分小さい)。 10s 張り付くと pong が間に合わず evict される側に回るため、
+    間に合わない pong は諦めて次 cycle の ping に賭ける (= issue #374 Minor 2)。
+
+    **session 失効時の実挙動** (= issue #374 Minor 3): stale な `mcp-session-id`
+    を載せた non-initialize POST は、 server の auto-reissue path
+    (= issue #68 / PR #100、 既定 enabled) が横取りして **新 session を発行し
+    202 を返す**。 つまり「session が死んでいれば非 2xx が返る」わけではなく、
+    下の非 2xx WARN 分岐はこのケースでは発火しない。 代わりに pong 1 本ごとに
+    誰も subscribe していない捨て session が生まれる (= `is_online` には影響しない
+    が session table には積まれる)。 そのため caller 側 (`_ping_responder_loop`)
+    は **stream 終了後の pong を抑止** する。 抑止をすり抜けて生まれた orphan は
+    server 側の orphan eviction GC (= issue #369 / #361) に委ねる。
     """
     resp = requests.post(
         HUB_URL,
@@ -491,9 +534,10 @@ def respond_ping(
             "id": request_id,
             "result": {},
         }),
-        timeout=10,
+        timeout=PING_RESPONSE_TIMEOUT_SEC,
     )
     # 202 が正 (= response-only POST)、 実装差で 200 を返す transport も許容。
+    # 非 2xx はほぼ auto-reissue path に乗らなかった異常系のみ (上記 docstring 参照)。
     if resp.status_code not in (200, 202):
         print(
             f"[WARN] ping response failed: HTTP {resp.status_code}: "
@@ -502,18 +546,31 @@ def respond_ping(
         )
 
 
-def _try_handle_ping(
-    headers: dict[str, str], session_id: str, raw: str
-) -> bool:
-    """SSE 行が MCP `ping` request なら response を返し True。 それ以外は False。
+def _valid_request_id(request_id: Any) -> bool:
+    """JSON-RPC 2.0 / MCP Ping utility が許す `id` 型か判定 (= issue #374 S4)。
+
+    spec 上 `id` は String または Number (Null は response 専用)。 bool は Python
+    では int の subclass だが JSON-RPC の Number ではないため除外する。
+    SSE に書けるのは hub server 本体のみなので実害は低いが、 不正 id をそのまま
+    response に echo して transport を混乱させないための入口 guard。
+    """
+    if isinstance(request_id, bool):
+        return False
+    return isinstance(request_id, (str, int))
+
+
+def _try_handle_ping(raw: str, ping_queue: "queue.Queue[Any]") -> bool:
+    """SSE 行が MCP `ping` request なら responder queue に積んで True。 他は False。
+
+    issue #374 Minor 2: 以前はこの場で response を POST していたが、 SSE reader
+    thread が POST (= 最大 10s) でブロックされる間 `iter_lines` が消費されず、
+    後続の ping 行が読まれないまま server 側 timeout に達していた。 reader thread
+    は **行を積むだけ** にし、 実 POST は `_ping_responder_loop` (専用 thread) が
+    行う。
 
     True を返した場合 caller は当該行の以降の処理を skip する (= ping は
     inbox push とは無関係)。 False の場合は既存の
     `notifications/resources/updated` 判定に素通りさせる (= 既存経路は無変更)。
-
-    response POST の失敗は致命的ではない (= 次 cycle の ping で retry される、
-    最悪 evict → 再接続で復帰) ため log のみで swallow し、 SSE loop は
-    継続させる。 ここで raise すると inbox 配信が止まる。
     """
     msg = _parse_sse_data_line(raw)
     if msg is None or msg.get("method") != "ping":
@@ -522,12 +579,62 @@ def _try_handle_ping(
     if request_id is None:
         # id 無し = notification 扱い、 response を返してはいけない (JSON-RPC 仕様)。
         return True
+    if not _valid_request_id(request_id):
+        print(
+            f"[WARN] ping with invalid id type: {str(request_id)[:64]!r}",
+            file=sys.stderr,
+        )
+        return True
     try:
-        respond_ping(headers, session_id, request_id)
-        print(f"[sse-pong] ping id={request_id} answered")
-    except Exception as e:
-        print(f"[ERR sse ping] id={request_id}: {e}", file=sys.stderr)
+        ping_queue.put_nowait(request_id)
+    except queue.Full:
+        # responder が詰まっている = どのみち間に合わない。 落として次 ping に賭ける。
+        print(
+            f"[WARN] ping queue full, dropped id={str(request_id)[:64]}",
+            file=sys.stderr,
+        )
     return True
+
+
+def _ping_responder_loop(
+    headers: dict[str, str],
+    session_id: str,
+    ping_queue: "queue.Queue[Any]",
+    stop_event: threading.Event,
+) -> None:
+    """`_try_handle_ping` が積んだ ping id に response を POST する専用 thread。
+
+    issue #374 Minor 2: SSE reader thread を POST でブロックさせないための分離。
+    inbox dispatch がどれだけ長引いても pong はこの thread から出続ける。
+
+    stop_event が set された後 (= SSE stream 切断後) は queue に**残っている
+    ping を捨てる** (= 取り出さずに終了する)。 死んだ session への pong POST は
+    server の auto-reissue path に拾われて捨て session を生むだけで、 presence
+    には一切寄与しないため (= issue #374 Minor 3)。 既に取り出した 1 件は
+    最後まで処理してから抜ける (= 切断直前に読んだ ping は、 GET 切断後の
+    eviction grace (= issue #355) の間ならまだ意味がある)。
+
+    POST 失敗は致命的ではない (= 次 cycle の ping で retry、 最悪 evict →
+    再接続で復帰) ため log のみで swallow する。
+    """
+    answered = 0
+    while not stop_event.is_set():
+        try:
+            request_id = ping_queue.get(timeout=_WORKER_POLL_SEC)
+        except queue.Empty:
+            continue
+        try:
+            respond_ping(headers, session_id, request_id)
+            answered += 1
+            # issue #374 S5: 毎 ping の stdout 出力 (= 約 2880 行/日) をやめ、
+            # N 本ごとの summary に集約する。
+            if answered % _PING_LOG_SUMMARY_EVERY == 0:
+                print(
+                    f"[sse-pong] answered {answered} pings "
+                    f"(session={session_id[:8]}...)"
+                )
+        except Exception as e:
+            print(f"[ERR sse ping] id={str(request_id)[:64]}: {e}", file=sys.stderr)
 
 
 # ============================================================
@@ -1079,6 +1186,76 @@ def _do_add_entry(
 # ============================================================
 
 
+def _drain_ping_queue(
+    ping_queue: "queue.Queue[Any]", stop_event: threading.Event
+) -> None:
+    """stream 終了時、 既に読み終えていた ping の pong を grace 内で流し切る。
+
+    issue #374 Minor 3: 切断後の pong は原則抑止 (= stale sid の POST は server の
+    auto-reissue path に拾われて捨て session になる) だが、 切断直前に読んだ
+    ping は GET 切断の eviction grace (= issue #355) の間ならまだ session を
+    保つ意味がある。 `_PING_DRAIN_GRACE_SEC` を上限に responder が queue を
+    空にするのを待ち、 越えたら諦めて `stop_event` 側の抑止に任せる。
+
+    `time.sleep` ではなく `stop_event.wait` で待つのは、 待機中に外から
+    stop_event が set された場合に即座に抜けるため。
+    """
+    deadline = time.monotonic() + _PING_DRAIN_GRACE_SEC
+    while not ping_queue.empty() and time.monotonic() < deadline:
+        if stop_event.wait(_WORKER_POLL_SEC):
+            return
+
+
+def _inbox_worker_loop(
+    headers: dict[str, str],
+    session_id: str,
+    inbox_queue: "queue.Queue[Any]",
+    schedules: list[dict[str, Any]],
+    iters: list[Any],
+    next_times: list[datetime],
+    config_path: Path,
+) -> None:
+    """inbox push 通知を受けて fetch_inbox + dispatch + mark_as_read する専用 thread。
+
+    issue #374 Minor 2: これらは 1 件あたり最大 3 回の POST (= `timeout=10`) を
+    伴うため、 SSE reader thread 上で実行すると `iter_lines` が消費されず
+    ping 行が読まれないまま server 側 timeout (= `PING_TIMEOUT_MS` 10s ×
+    `PING_MAX_RETRIES` 2) に達し、 #362 が潰そうとした evict が再現していた。
+
+    `_STOP_WORKER` sentinel を受け取ると終了する。 sentinel は queue の末尾に
+    積まれるため、 **切断時点で積まれていた通知は処理してから** 抜ける
+    (= pong と違い、 取りこぼすと DM が未読のまま残るため)。
+
+    dispatch 中の例外は log のみで swallow する (= 1 通の失敗で worker を
+    落とさない)。 既存の `[ERR sse inbox-handler]` prefix を維持。
+    """
+    while True:
+        item = inbox_queue.get()
+        if item is _STOP_WORKER:
+            return
+        try:
+            msgs = fetch_inbox(headers, session_id)
+            for m in msgs:
+                sender = m.get("from", "@unknown")
+                body = m.get("message", "")
+                msg_id = m.get("id")
+                handle_inbox_command(
+                    headers,
+                    session_id,
+                    sender,
+                    body,
+                    schedules,
+                    iters,
+                    next_times,
+                    config_path,
+                    msg_id=msg_id,  # issue #221: causal chain 追跡
+                )
+                if msg_id:
+                    mark_message_read(headers, session_id, msg_id)
+        except Exception as e:
+            print(f"[ERR sse inbox-handler] {e}", file=sys.stderr)
+
+
 def sse_listen_loop(
     headers: dict[str, str],
     user_id: str,
@@ -1091,13 +1268,23 @@ def sse_listen_loop(
     1. own MCP session を init
     2. register_self + subscribe_inbox
     3. SSE long-lived GET で `notifications/resources/updated` 待ち
-    4. push 到着で fetch_inbox + handle_inbox_command + mark_message_read
-    5. server→client の MCP `ping` request には空 result を返す (= issue #362)
-    6. 切断時は 3 秒待って再接続
+    4. push 到着で inbox worker に合図 (= fetch_inbox + handle_inbox_command +
+       mark_message_read は `_inbox_worker_loop` が別 thread で実行)
+    5. server→client の MCP `ping` request には空 result を返す (= issue #362。
+       実 POST は `_ping_responder_loop` が別 thread で実行)
+    6. 切断時は worker を畳んでから 3 秒待って再接続
 
     watch.sh の SSE long-lived 接続 pattern を Python 移植 (= issue #65)。
     main thread の cron loop とは独立した session を持つ (= 同一 user の 2 session、
     server 側は別 transport として扱う)。
+
+    issue #374 Minor 2: この関数が回す reader loop は **行を読んで振り分ける
+    だけ** で、 HTTP POST を一切行わない。 以前は ping response と inbox
+    dispatch を reader thread 上で直接実行していたため、 inbox 処理中は
+    `iter_lines` が消費されず ping 行が読まれないまま server 側の
+    `PING_TIMEOUT_MS` × `PING_MAX_RETRIES` に達し、 #362 が潰そうとした
+    evict が残っていた。 connection ごとに ping / inbox の 2 worker thread を
+    起こし、 stream 終了時に畳む。
     """
     display_name = f"Scheduler — cron DM + inbox bidirectional (= issue #65)"
     while True:
@@ -1147,43 +1334,68 @@ def sse_listen_loop(
                     time.sleep(5)
                     continue
 
-                for raw in resp.iter_lines(decode_unicode=True):
-                    if not raw:
-                        continue
-                    # issue #362: server→client の MCP `ping` request に空 result の
-                    # response を返す。 inbox push 判定より前に処理する (= ping 行は
-                    # `notifications/resources/updated` を含まないため、 後段の
-                    # fast-check に到達すると読み捨てられる)。
-                    if _PING_HINT in raw and _try_handle_ping(headers, sid, raw):
-                        continue
-                    # SSE event は "data: <json>" 形式、 method field を文字列含有判定で fast-check
-                    if "notifications/resources/updated" not in raw:
-                        continue
+                # 4. worker thread 起動 (= issue #374 Minor 2)。
+                # reader thread は「行を読んで振り分ける」だけにし、 POST を
+                # 伴う処理 (= pong / inbox dispatch) は別 thread に逃がす。
+                # 両者を別 queue / 別 thread にしているのは、 1 本の worker に
+                # 相乗りさせると inbox 処理待ちで pong が再び starve するため。
+                stop_event = threading.Event()
+                ping_queue: queue.Queue[Any] = queue.Queue(
+                    maxsize=_PING_QUEUE_MAXSIZE
+                )
+                inbox_queue: queue.Queue[Any] = queue.Queue()
+                ping_thread = threading.Thread(
+                    target=_ping_responder_loop,
+                    args=(headers, sid, ping_queue, stop_event),
+                    name="sse-ping-responder",
+                    daemon=True,
+                )
+                inbox_thread = threading.Thread(
+                    target=_inbox_worker_loop,
+                    args=(
+                        headers,
+                        sid,
+                        inbox_queue,
+                        schedules,
+                        iters,
+                        next_times,
+                        config_path,
+                    ),
+                    name="sse-inbox-worker",
+                    daemon=True,
+                )
+                ping_thread.start()
+                inbox_thread.start()
 
-                    # 4. inbox fetch + dispatch + mark_as_read
-                    try:
-                        msgs = fetch_inbox(headers, sid)
-                        for m in msgs:
-                            sender = m.get("from", "@unknown")
-                            body = m.get("message", "")
-                            msg_id = m.get("id")
-                            handle_inbox_command(
-                                headers,
-                                sid,
-                                sender,
-                                body,
-                                schedules,
-                                iters,
-                                next_times,
-                                config_path,
-                                msg_id=msg_id,  # issue #221: causal chain 追跡
-                            )
-                            if msg_id:
-                                mark_message_read(headers, sid, msg_id)
-                    except Exception as e:
-                        print(
-                            f"[ERR sse inbox-handler] {e}", file=sys.stderr
-                        )
+                try:
+                    for raw in resp.iter_lines(decode_unicode=True):
+                        if not raw:
+                            continue
+                        # issue #362: server→client の MCP `ping` request に空 result の
+                        # response を返す。 inbox push 判定より前に処理する (= ping 行は
+                        # `notifications/resources/updated` を含まないため、 後段の
+                        # fast-check に到達すると読み捨てられる)。
+                        if _PING_HINT in raw and _try_handle_ping(raw, ping_queue):
+                            continue
+                        # SSE event は "data: <json>" 形式、 method field を文字列含有判定で fast-check
+                        if "notifications/resources/updated" not in raw:
+                            continue
+
+                        # inbox 通知は「未読を取りに行け」の合図でしかなく、
+                        # fetch_inbox は毎回全未読を返す。 既に 1 件積んであるなら
+                        # 積み増さず coalesce する。
+                        if inbox_queue.empty():
+                            inbox_queue.put(_INBOX_POLL)
+                finally:
+                    # stream 終了: 読み終えていた ping は grace 内なら流し切り、
+                    # それ以降の pong は抑止する (= stale sid への POST は捨て
+                    # session を生むだけ、 issue #374 Minor 3)。 inbox は
+                    # 積み残しを処理してから終了させる (= DM 取りこぼし防止)。
+                    _drain_ping_queue(ping_queue, stop_event)
+                    stop_event.set()
+                    inbox_queue.put(_STOP_WORKER)
+                    ping_thread.join(timeout=_WORKER_JOIN_TIMEOUT_SEC)
+                    inbox_thread.join(timeout=_WORKER_JOIN_TIMEOUT_SEC)
 
             # SSE stream closed: reconnect
             print(

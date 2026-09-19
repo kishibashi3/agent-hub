@@ -12,7 +12,9 @@ Unit tests for agent-hub scheduler (issue #49).
 from __future__ import annotations
 
 import json
+import queue
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -810,6 +812,62 @@ class _FakePostResponse:
         self.text = ""
 
 
+def _run_sse_loop_once(
+    tmp_path: Path,
+    lines: list[str],
+    inbox: list[dict],
+    fetch_hook=None,
+):
+    """fake SSE stream を 1 周だけ流して (pong POST, fetch 回数, 既読化) を返す。
+
+    loop 末尾の `time.sleep` を sentinel raise に差し替えて 1 周で脱出する。
+    issue #374 以降 pong / inbox dispatch は worker thread 上で走るが、
+    `sse_listen_loop` は stream 終了時に worker を join してから
+    `time.sleep` に入るため、 戻り値は決定的。
+    `fake_fetch_inbox` に blocking 動作を差し込みたい場合は
+    `fetch_hook` を渡す (= starvation 回帰 test 用)。
+    """
+    cfg = tmp_path / "schedules.json"
+    cfg.write_text("[]", encoding="utf-8")
+
+    pongs: list = []
+    fetch_calls: list = []
+    marked: list = []
+    commands: list = []
+
+    def fake_get(url, headers=None, stream=None, timeout=None):
+        return _FakeSseResponse(lines)
+
+    def fake_post(url, headers=None, data=None, timeout=None):
+        pongs.append(json.loads(data.decode("utf-8")))
+        return _FakePostResponse(202)
+
+    def fake_fetch_inbox(headers, session_id):
+        fetch_calls.append(session_id)
+        if fetch_hook is not None:
+            fetch_hook()
+        return list(inbox)
+
+    def fake_sleep(_secs):
+        raise _StopSseLoop()
+
+    with patch.object(sched, "init_session", return_value="sess-fake"), \
+         patch.object(sched, "register_self"), \
+         patch.object(sched, "subscribe_inbox"), \
+         patch.object(sched, "fetch_inbox", side_effect=fake_fetch_inbox), \
+         patch.object(sched, "mark_message_read", side_effect=lambda h, s, m: marked.append(m)), \
+         patch.object(sched, "handle_inbox_command", side_effect=lambda *a, **k: commands.append(a[2:4])), \
+         patch("scheduler.requests.get", side_effect=fake_get), \
+         patch("scheduler.requests.post", side_effect=fake_post), \
+         patch("scheduler.time.sleep", side_effect=fake_sleep):
+        try:
+            sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+        except _StopSseLoop:
+            pass
+
+    return pongs, fetch_calls, marked, commands
+
+
 class TestIssue362:
     """issue #362: server→client の MCP `ping` request に空 result を返す。
 
@@ -874,116 +932,81 @@ class TestIssue362:
                 assert mock_print.call_count == 0
 
     def test_respond_ping_warns_on_error_status(self) -> None:
-        """4xx/5xx では WARN log を出すが例外は投げない。"""
+        """4xx/5xx では WARN log を出すが例外は投げない (= issue #374 S6)。"""
         with patch("scheduler.requests.post", return_value=_FakePostResponse(404)):
-            sched.respond_ping({}, "sess-abc", 1)  # raise しないこと
+            with patch("scheduler.print") as mock_print:
+                sched.respond_ping({}, "sess-abc", 1)  # raise しないこと
+        assert mock_print.call_count == 1
+        logged = mock_print.call_args.args[0]
+        assert "[WARN] ping response failed: HTTP 404" in logged
+
+    def test_respond_ping_uses_short_timeout(self) -> None:
+        """POST timeout は server の PING_TIMEOUT_MS (10s) より短い (= issue #374 Minor 2)。"""
+        with patch("scheduler.requests.post", return_value=_FakePostResponse(202)) as mock_post:
+            sched.respond_ping({}, "sess-abc", 1)
+        assert mock_post.call_args.kwargs["timeout"] == sched.PING_RESPONSE_TIMEOUT_SEC
+        assert sched.PING_RESPONSE_TIMEOUT_SEC < 10
 
     # ----------------------------------------------------------
-    # _try_handle_ping
+    # _try_handle_ping (= issue #374 で queue 投入に変更)
     # ----------------------------------------------------------
 
-    def test_try_handle_ping_responds_to_ping(self) -> None:
-        """ping 行 → True を返し response を POST する。"""
-        with patch.object(sched, "respond_ping") as mock_respond:
-            handled = sched._try_handle_ping(
-                {}, "sess-1", 'data: {"jsonrpc":"2.0","id":3,"method":"ping"}'
-            )
-        assert handled is True
-        mock_respond.assert_called_once_with({}, "sess-1", 3)
+    def test_try_handle_ping_enqueues_ping(self) -> None:
+        """ping 行 → True を返し request id を responder queue に積む。"""
+        q: queue.Queue = queue.Queue()
+        assert sched._try_handle_ping(
+            'data: {"jsonrpc":"2.0","id":3,"method":"ping"}', q
+        ) is True
+        assert q.get_nowait() == 3
 
-    def test_try_handle_ping_responds_to_id_zero(self) -> None:
-        """id=0 の ping にも response を返す (= falsy な id を取りこぼさない)。"""
-        with patch.object(sched, "respond_ping") as mock_respond:
-            handled = sched._try_handle_ping(
-                {}, "sess-1", 'data: {"jsonrpc":"2.0","id":0,"method":"ping"}'
-            )
-        assert handled is True
-        mock_respond.assert_called_once_with({}, "sess-1", 0)
+    def test_try_handle_ping_enqueues_id_zero(self) -> None:
+        """id=0 の ping も積む (= falsy な id を取りこぼさない)。"""
+        q: queue.Queue = queue.Queue()
+        assert sched._try_handle_ping(
+            'data: {"jsonrpc":"2.0","id":0,"method":"ping"}', q
+        ) is True
+        assert q.get_nowait() == 0
 
     def test_try_handle_ping_ignores_other_methods(self) -> None:
         """ping 以外の行 → False (= 既存の inbox 判定に素通りさせる)。"""
-        with patch.object(sched, "respond_ping") as mock_respond:
-            handled = sched._try_handle_ping(
-                {},
-                "sess-1",
-                'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
-                '"params":{"uri":"inbox://@scheduler"}}',
-            )
-        assert handled is False
-        assert mock_respond.call_count == 0
+        q: queue.Queue = queue.Queue()
+        assert sched._try_handle_ping(
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}',
+            q,
+        ) is False
+        assert q.empty()
 
     def test_try_handle_ping_skips_ping_notification(self) -> None:
         """id 無し ping (= notification) には response を返さない (JSON-RPC 仕様)。"""
-        with patch.object(sched, "respond_ping") as mock_respond:
-            handled = sched._try_handle_ping(
-                {}, "sess-1", 'data: {"jsonrpc":"2.0","method":"ping"}'
-            )
-        assert handled is True
-        assert mock_respond.call_count == 0
+        q: queue.Queue = queue.Queue()
+        assert sched._try_handle_ping(
+            'data: {"jsonrpc":"2.0","method":"ping"}', q
+        ) is True
+        assert q.empty()
 
-    def test_try_handle_ping_swallows_post_failure(self) -> None:
-        """response POST が例外を投げても SSE loop を落とさない。"""
-        with patch.object(sched, "respond_ping", side_effect=RuntimeError("boom")):
-            handled = sched._try_handle_ping(
-                {}, "sess-1", 'data: {"jsonrpc":"2.0","id":9,"method":"ping"}'
+    def test_try_handle_ping_does_not_block_reader(self) -> None:
+        """reader thread 側は POST しない (= respond_ping を呼ばない)。"""
+        q: queue.Queue = queue.Queue()
+        with patch.object(sched, "respond_ping") as mock_respond:
+            sched._try_handle_ping(
+                'data: {"jsonrpc":"2.0","id":9,"method":"ping"}', q
             )
-        assert handled is True
+        assert mock_respond.call_count == 0
 
     # ----------------------------------------------------------
     # sse_listen_loop (= fake SSE stream での統合)
     # ----------------------------------------------------------
 
-    def _run_sse_loop_once(self, tmp_path: Path, lines: list[str], inbox: list[dict]):
-        """fake SSE stream を 1 周だけ流して (pong POST, fetch 回数, 既読化) を返す。
-
-        loop 末尾の `time.sleep` を sentinel raise に差し替えて 1 周で脱出する。
-        """
-        cfg = tmp_path / "schedules.json"
-        cfg.write_text("[]", encoding="utf-8")
-
-        pongs: list = []
-        fetch_calls: list = []
-        marked: list = []
-        commands: list = []
-
-        def fake_get(url, headers=None, stream=None, timeout=None):
-            return _FakeSseResponse(lines)
-
-        def fake_post(url, headers=None, data=None, timeout=None):
-            pongs.append(json.loads(data.decode("utf-8")))
-            return _FakePostResponse(202)
-
-        def fake_fetch_inbox(headers, session_id):
-            fetch_calls.append(session_id)
-            return list(inbox)
-
-        def fake_sleep(_secs):
-            raise _StopSseLoop()
-
-        with patch.object(sched, "init_session", return_value="sess-fake"), \
-             patch.object(sched, "register_self"), \
-             patch.object(sched, "subscribe_inbox"), \
-             patch.object(sched, "fetch_inbox", side_effect=fake_fetch_inbox), \
-             patch.object(sched, "mark_message_read", side_effect=lambda h, s, m: marked.append(m)), \
-             patch.object(sched, "handle_inbox_command", side_effect=lambda *a, **k: commands.append(a[2:4])), \
-             patch("scheduler.requests.get", side_effect=fake_get), \
-             patch("scheduler.requests.post", side_effect=fake_post), \
-             patch("scheduler.time.sleep", side_effect=fake_sleep):
-            try:
-                sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
-            except _StopSseLoop:
-                pass
-
-        return pongs, fetch_calls, marked, commands
-
     def test_sse_loop_answers_ping_frame(self, tmp_path: Path) -> None:
         """fake SSE の ping frame → 空 result の response を POST する。"""
         lines = [
             "event: message",
+            "id: 1",
             'data: {"jsonrpc":"2.0","id":11,"method":"ping"}',
             "",
         ]
-        pongs, fetch_calls, _marked, _cmds = self._run_sse_loop_once(tmp_path, lines, [])
+        pongs, fetch_calls, _marked, _cmds = _run_sse_loop_once(tmp_path, lines, [])
 
         assert pongs == [{"jsonrpc": "2.0", "id": 11, "result": {}}]
         # ping は inbox fetch を発生させない
@@ -993,12 +1016,13 @@ class TestIssue362:
         """既存の `notifications/resources/updated` 経路が退行しない。"""
         lines = [
             "event: message",
+            "id: 1",
             'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
             '"params":{"uri":"inbox://@scheduler"}}',
             "",
         ]
         inbox = [{"id": "msg-1", "from": "@alice", "message": "/ping"}]
-        pongs, fetch_calls, marked, commands = self._run_sse_loop_once(
+        pongs, fetch_calls, marked, commands = _run_sse_loop_once(
             tmp_path, lines, inbox
         )
 
@@ -1012,15 +1036,17 @@ class TestIssue362:
         """ping → inbox push の混在 stream で両方処理される。"""
         lines = [
             "event: message",
+            "id: 1",
             'data: {"jsonrpc":"2.0","id":5,"method":"ping"}',
             "",
             "event: message",
+            "id: 2",
             'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
             '"params":{"uri":"inbox://@scheduler"}}',
             "",
         ]
         inbox = [{"id": "msg-2", "from": "@bob", "message": "/list"}]
-        pongs, fetch_calls, marked, commands = self._run_sse_loop_once(
+        pongs, fetch_calls, marked, commands = _run_sse_loop_once(
             tmp_path, lines, inbox
         )
 
@@ -1028,3 +1054,243 @@ class TestIssue362:
         assert fetch_calls == ["sess-fake"]
         assert marked == ["msg-2"]
         assert commands == [("@bob", "/list")]
+
+
+class TestIssue374:
+    """issue #374: SSE reader thread から pong / inbox dispatch を分離する。
+
+    reader thread が POST でブロックされる間 `iter_lines` が消費されず ping 行が
+    読まれない (= starvation) のが本丸。 module 直下の `_run_sse_loop_once`
+    harness (= TestIssue362 と共用) で fake SSE 統合も検証する。
+    """
+
+    # ----------------------------------------------------------
+    # S4: request_id の型検証
+    # ----------------------------------------------------------
+
+    def test_valid_request_id_accepts_str_and_int(self) -> None:
+        """JSON-RPC の id は String / Number のみ許す。"""
+        assert sched._valid_request_id("abc") is True
+        assert sched._valid_request_id(0) is True
+        assert sched._valid_request_id(-1) is True
+
+    def test_valid_request_id_rejects_bool_and_containers(self) -> None:
+        """bool (= int の subclass) / list / dict / float でない非 Number は弾く。"""
+        assert sched._valid_request_id(True) is False
+        assert sched._valid_request_id(False) is False
+        assert sched._valid_request_id([1]) is False
+        assert sched._valid_request_id({"a": 1}) is False
+
+    def test_try_handle_ping_drops_invalid_id(self) -> None:
+        """不正な型の id は queue に積まず WARN して True (= 行は消費済み)。"""
+        q: queue.Queue = queue.Queue()
+        with patch("scheduler.print") as mock_print:
+            handled = sched._try_handle_ping(
+                'data: {"jsonrpc":"2.0","id":true,"method":"ping"}', q
+            )
+        assert handled is True
+        assert q.empty()
+        assert "invalid id type" in mock_print.call_args.args[0]
+
+    def test_try_handle_ping_drops_when_queue_full(self) -> None:
+        """responder queue が満杯なら落として WARN (= 例外を投げない)。"""
+        q: queue.Queue = queue.Queue(maxsize=1)
+        q.put_nowait(1)
+        with patch("scheduler.print") as mock_print:
+            handled = sched._try_handle_ping(
+                'data: {"jsonrpc":"2.0","id":2,"method":"ping"}', q
+            )
+        assert handled is True
+        assert "ping queue full" in mock_print.call_args.args[0]
+
+    # ----------------------------------------------------------
+    # _ping_responder_loop
+    # ----------------------------------------------------------
+
+    def test_ping_responder_answers_queued_pings(self) -> None:
+        """queue に積まれた id に対し respond_ping を呼ぶ。"""
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(1)
+        q.put_nowait(2)
+        stop = threading.Event()
+        answered: list = []
+
+        def fake_respond(_h, _s, request_id):
+            answered.append(request_id)
+            if len(answered) == 2:
+                stop.set()
+
+        with patch.object(sched, "respond_ping", side_effect=fake_respond):
+            sched._ping_responder_loop({}, "sess-1", q, stop)
+
+        assert answered == [1, 2]
+
+    def test_ping_responder_drops_pings_after_stop(self) -> None:
+        """stop_event 済み (= stream 切断後) は queue の残りを POST しない。"""
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(7)
+        stop = threading.Event()
+        stop.set()
+
+        with patch.object(sched, "respond_ping") as mock_respond:
+            sched._ping_responder_loop({}, "sess-1", q, stop)
+
+        assert mock_respond.call_count == 0
+
+    def test_ping_responder_survives_post_failure(self) -> None:
+        """respond_ping が例外を投げても worker は落ちない。"""
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(1)
+        stop = threading.Event()
+
+        def boom(_h, _s, _id):
+            stop.set()
+            raise RuntimeError("boom")
+
+        with patch.object(sched, "respond_ping", side_effect=boom):
+            with patch("scheduler.print") as mock_print:
+                sched._ping_responder_loop({}, "sess-1", q, stop)
+
+        assert any("[ERR sse ping]" in c.args[0] for c in mock_print.call_args_list)
+
+    def test_ping_responder_logs_summary_not_every_ping(self) -> None:
+        """pong log は N 本ごとの summary に集約する (= issue #374 S5)。"""
+        q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        total = sched._PING_LOG_SUMMARY_EVERY
+        for i in range(total):
+            q.put_nowait(i)
+
+        def fake_respond(_h, _s, request_id):
+            if request_id == total - 1:
+                stop.set()
+
+        with patch.object(sched, "respond_ping", side_effect=fake_respond):
+            with patch("scheduler.print") as mock_print:
+                sched._ping_responder_loop({}, "sess-1", q, stop)
+
+        pong_logs = [c for c in mock_print.call_args_list if "[sse-pong]" in c.args[0]]
+        assert len(pong_logs) == 1
+        assert f"answered {total} pings" in pong_logs[0].args[0]
+
+    # ----------------------------------------------------------
+    # _inbox_worker_loop
+    # ----------------------------------------------------------
+
+    def test_inbox_worker_processes_then_stops(self) -> None:
+        """sentinel の前に積まれた通知は処理してから終了する。"""
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(sched._INBOX_POLL)
+        q.put_nowait(sched._STOP_WORKER)
+        marked: list = []
+        commands: list = []
+
+        with patch.object(
+            sched, "fetch_inbox",
+            return_value=[{"id": "m1", "from": "@alice", "message": "/ping"}],
+        ), patch.object(
+            sched, "handle_inbox_command",
+            side_effect=lambda *a, **k: commands.append(a[2:4]),
+        ), patch.object(
+            sched, "mark_message_read", side_effect=lambda h, s, m: marked.append(m)
+        ):
+            sched._inbox_worker_loop({}, "sess-1", q, [], [], [], Path("x.json"))
+
+        assert commands == [("@alice", "/ping")]
+        assert marked == ["m1"]
+
+    def test_inbox_worker_swallows_dispatch_error(self) -> None:
+        """dispatch 中の例外は log のみで worker を落とさない。"""
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(sched._INBOX_POLL)
+        q.put_nowait(sched._STOP_WORKER)
+
+        with patch.object(sched, "fetch_inbox", side_effect=RuntimeError("boom")):
+            with patch("scheduler.print") as mock_print:
+                sched._inbox_worker_loop({}, "sess-1", q, [], [], [], Path("x.json"))
+
+        assert any(
+            "[ERR sse inbox-handler]" in c.args[0] for c in mock_print.call_args_list
+        )
+
+    # ----------------------------------------------------------
+    # starvation 回帰 (= 本丸)
+    # ----------------------------------------------------------
+
+    def test_ping_answered_while_inbox_handler_blocks(self, tmp_path: Path) -> None:
+        """inbox 処理が長引いても pong は出る (= issue #374 Minor 2 の回帰 test)。
+
+        reviewer 実測の再現条件 (= `fetch_inbox` を長時間ブロック) を event で
+        模す。 分離前の実装では reader thread が `fetch_inbox` で止まり後続の
+        ping 行を読めないため、 `pong_seen` が set されず timeout する。
+        """
+        pong_seen = threading.Event()
+        pong_during_fetch: list[bool] = []
+
+        def blocking_fetch() -> None:
+            # fetch_inbox を長時間ブロックさせ、 その **最中に** pong が出るかを見る。
+            # 分離前は reader thread がここで止まるため pong は出ず、 5s 待って
+            # False が記録される (= 本 test が fail する)。
+            pong_during_fetch.append(pong_seen.wait(timeout=5))
+
+        lines = [
+            "event: message",
+            "id: 1",
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}',
+            "",
+            "event: message",
+            "id: 2",
+            'data: {"jsonrpc":"2.0","id":42,"method":"ping"}',
+            "",
+        ]
+
+        with patch.object(sched, "respond_ping", side_effect=lambda *a: pong_seen.set()):
+            _pongs, fetch_calls, _marked, _cmds = _run_sse_loop_once(
+                tmp_path, lines, [], fetch_hook=blocking_fetch
+            )
+
+        assert pong_during_fetch == [True], (
+            "inbox 処理中に pong が出ていない (= ping starvation)"
+        )
+        assert fetch_calls == ["sess-fake"]
+
+    # ----------------------------------------------------------
+    # _drain_ping_queue (= 切断時の pong 抑止、 issue #374 Minor 3)
+    # ----------------------------------------------------------
+
+    def test_drain_ping_queue_returns_when_empty(self) -> None:
+        """queue が空なら grace を待たず即 return する。"""
+        q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        started = time.monotonic()
+        sched._drain_ping_queue(q, stop)
+        assert time.monotonic() - started < sched._PING_DRAIN_GRACE_SEC
+
+    def test_drain_ping_queue_gives_up_after_grace(self) -> None:
+        """responder が捌けないまま grace を越えたら諦めて return する
+        (= 以降の pong は stop_event 側で抑止される)。"""
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(1)
+        stop = threading.Event()
+        with patch.object(sched, "_PING_DRAIN_GRACE_SEC", 0.3):
+            started = time.monotonic()
+            sched._drain_ping_queue(q, stop)
+            elapsed = time.monotonic() - started
+        assert 0.3 <= elapsed < 3
+        # 諦めただけで queue の中身は消費していない (= responder が stop で捨てる)
+        assert q.qsize() == 1
+
+    def test_stream_close_stops_ping_responder(self, tmp_path: Path) -> None:
+        """stream 終了で responder thread が終了する (= 後続 pong を出さない)。"""
+        lines = [
+            "event: message",
+            "id: 1",
+            'data: {"jsonrpc":"2.0","id":1,"method":"ping"}',
+            "",
+        ]
+        before = {t.name for t in threading.enumerate()}
+        _run_sse_loop_once(tmp_path, lines, [])
+        after = {t.name for t in threading.enumerate()}
+        assert "sse-ping-responder" not in after - before
+        assert "sse-inbox-worker" not in after - before
