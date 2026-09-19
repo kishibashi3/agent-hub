@@ -54,6 +54,12 @@ services:
       # polling-only フリートに対しては disabled が正しい config。
       # (従来 Pi5 compose に手編集で入れていた drift を committed compose に恒久化)
       AGENT_HUB_MCP_PING_LOOP_DISABLED: "1"
+      # ---- orphan session eviction (= session GC) の無効化 flag (issue #369) ----
+      # 未設定 = 有効。orphan eviction は元々 ping loop の内側に実装されており、
+      # 上の PING_LOOP_DISABLED=1 で session GC ごと停止していた (issue #361 の根因)。
+      # #369 で独立 loop に分離したため、ping loop が無効でも GC は動作する。
+      # GC を止めたい場合のみ以下を有効化する (= rollback は env 書き換えのみ):
+      #   AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED: "1"
     healthcheck:
       # compose level の health check (= image HEALTHCHECK と二重で robust)
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]

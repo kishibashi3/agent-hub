@@ -684,7 +684,7 @@ const PING_MAX_RETRIES = 2;
  * Orphan session の idle TTL (= issue #155)。
  *
  * `initialize` 完了後に `subscribe` を送らないまま本値を超えた session を
- * ping cycle 末尾で強制 evict する。
+ * orphan eviction cycle (`runOneOrphanEvictionCycle`) で強制 evict する。
  *
  * 正常系の bridge は `initialize` → `subscribe` を MCP init シーケンス内で
  * 同期実施 (= 通常 < 5 秒)。5 分は安全マージンとして十分。
@@ -880,7 +880,6 @@ export async function runOneActivePingCycle(): Promise<{
   total: number;
   alive: number;
   disconnected: number;
-  orphansEvicted: number;
 }> {
   // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
   const snapshot: Array<[string, Session]> = Array.from(sessions.entries());
@@ -918,26 +917,111 @@ export async function runOneActivePingCycle(): Promise<{
     disconnectedCount++;
   }
 
-  // --- orphan session eviction (issue #155) ---
-  //
-  // `subscribe` を送らないまま ORPHAN_IDLE_TTL_MS を超えた「真の」orphan session を強制回収。
-  //
-  // root cause: bridge の kill → re-spawn 時に MCP initialize が短時間に複数発行される。
-  // 各 initialize で sessions.set() される が、 subscribe に到達するのは最後の 1 session のみ。
-  // 残りは subscribedUris=[] のまま残留し、 StreamableHTTP の接続が alive のため ping も
-  // 成功し続ける → 上の ping フェーズでは回収されない。
-  //
-  // 正常系の TypeScript bridge は initialize → subscribe を数秒以内に実施するため、
-  // 5 分 TTL は安全マージンとして十分。
-  //
-  // ただし Go SDK (bridge-tmux 等) は resources/subscribe を実装しておらず、
-  // subscribedUris.size が常に 0 のまま正常稼働する。このため条件に
-  // lastActivityAt (= POST /mcp を受けるたびに更新) を追加し、
-  // 「unsubscribed かつ最近 POST 活動もない」 session のみを orphan と判定する。
-  // bridge-tmux は 5 秒ごとに get_messages を POST するため eviction 対象外になる。
+  return { total: snapshot.length, alive: aliveCount, disconnected: disconnectedCount };
+}
+
+/**
+ * Active ping loop を起動 (= MCPServer.start() で呼ぶ)。
+ *
+ * 既に起動中なら no-op。 stop function を返すので、 test 等で停止できる。
+ * feature flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` が set されていれば起動 skip。
+ */
+export function startActivePingLoop(): () => void {
+  if (activePingLoopInterval) {
+    return () => stopActivePingLoop();
+  }
+  if (isPingLoopDisabled()) {
+    console.log('[MCP] active ping loop disabled (= AGENT_HUB_MCP_PING_LOOP_DISABLED env set)');
+    return () => {};
+  }
+  console.log(
+    `[MCP] active ping loop starting (= ${PING_INTERVAL_MS / 1000}s interval、 ` +
+      `${PING_TIMEOUT_MS / 1000}s timeout、 ${PING_MAX_RETRIES} retries、 issue #91)`
+  );
+  activePingLoopInterval = setInterval(() => {
+    void runOneActivePingCycle().then((stats) => {
+      if (stats.disconnected > 0) {
+        console.log(
+          `[MCP] ping cycle: total=${stats.total} alive=${stats.alive} ` +
+            `disconnected=${stats.disconnected}`
+        );
+      }
+    });
+  }, PING_INTERVAL_MS);
+  return () => stopActivePingLoop();
+}
+
+/** Active ping loop を停止 (= graceful shutdown 用)。 */
+export function stopActivePingLoop(): void {
+  if (activePingLoopInterval) {
+    clearInterval(activePingLoopInterval);
+    activePingLoopInterval = null;
+    console.log('[MCP] active ping loop stopped');
+  }
+}
+
+// ============================================================
+// Orphan session eviction loop (= issue #155 の GC、 issue #369 で ping loop から分離)
+// ============================================================
+
+/**
+ * Orphan eviction sweep の実行間隔。
+ *
+ * 分離前は ping cycle の末尾に同居していたため `PING_INTERVAL_MS` (= 30s) と同一周期で
+ * 回っていた。分離後も回収頻度を変えないため同じ 30s を使う。
+ */
+const ORPHAN_EVICTION_INTERVAL_MS = 30_000;
+
+/**
+ * Feature flag: `AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED` が set されていれば orphan eviction
+ * loop を無効化する (= rollback path、 issue #369)。
+ *
+ * 「unset = 有効 (= 従来 ping loop 同居時と同じ GC が動く)」が default、
+ * 「set = 無効」が opt-out。値の中身は問わない (= binary signal、 `AGENT_HUB_MCP_PING_LOOP_DISABLED`
+ * と同 pattern)。
+ *
+ * issue #369 の要点: 「ping 非応答で evict するか」と「orphan session を GC するか」は独立の
+ * 判断であり、`AGENT_HUB_MCP_PING_LOOP_DISABLED=1` (= 本番設定、polling-only fleet 向け) で
+ * GC まで一緒に止まるのが不具合だった。本 flag により両者が独立に設定できる。
+ */
+export function isOrphanEvictionDisabled(): boolean {
+  return process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED !== undefined &&
+    process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED !== '';
+}
+
+/** Orphan eviction loop の cleanup handle。 */
+let orphanEvictionLoopInterval: NodeJS.Timeout | null = null;
+
+/**
+ * Orphan session を一回り sweep する (= 1 cycle、 issue #155 / #369)。
+ *
+ * `subscribe` を送らないまま ORPHAN_IDLE_TTL_MS を超えた「真の」orphan session を強制回収。
+ *
+ * root cause: bridge の kill → re-spawn 時に MCP initialize が短時間に複数発行される。
+ * 各 initialize で sessions.set() される が、 subscribe に到達するのは最後の 1 session のみ。
+ * 残りは subscribedUris=[] のまま残留し、 StreamableHTTP の接続が alive のため ping も
+ * 成功し続ける → ping フェーズでは回収されない。
+ *
+ * 正常系の TypeScript bridge は initialize → subscribe を数秒以内に実施するため、
+ * 5 分 TTL は安全マージンとして十分。
+ *
+ * ただし Go SDK (bridge-tmux 等) は resources/subscribe を実装しておらず、
+ * subscribedUris.size が常に 0 のまま正常稼働する。このため条件に
+ * lastActivityAt (= POST /mcp を受けるたびに更新) を追加し、
+ * 「unsubscribed かつ最近 POST 活動もない」 session のみを orphan と判定する。
+ * bridge-tmux は 5 秒ごとに get_messages を POST するため eviction 対象外になる。
+ *
+ * 判定条件は分離前 (= `runOneActivePingCycle` 末尾) と同一。変わったのは呼び出し元だけ。
+ */
+export async function runOneOrphanEvictionCycle(): Promise<{
+  total: number;
+  orphansEvicted: number;
+}> {
+  const total = sessions.size;
   let orphansEvicted = 0;
   const nowMs = Date.now();
-  for (const [sid, session] of sessions) {
+  // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
+  for (const [sid, session] of Array.from(sessions.entries())) {
     if (
       session.subscribedUris.size === 0 &&
       nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS &&
@@ -961,46 +1045,49 @@ export async function runOneActivePingCycle(): Promise<{
     }
   }
 
-  return { total: snapshot.length, alive: aliveCount, disconnected: disconnectedCount, orphansEvicted };
+  return { total, orphansEvicted };
 }
 
 /**
- * Active ping loop を起動 (= MCPServer.start() で呼ぶ)。
+ * Orphan eviction loop を起動 (= MCPServer.start() で呼ぶ、 issue #369)。
+ *
+ * ping loop (`startActivePingLoop`) とは独立に起動する。`AGENT_HUB_MCP_PING_LOOP_DISABLED=1`
+ * で ping loop が止まっていても本 loop は動き、session GC が継続する。
  *
  * 既に起動中なら no-op。 stop function を返すので、 test 等で停止できる。
- * feature flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` が set されていれば起動 skip。
  */
-export function startActivePingLoop(): () => void {
-  if (activePingLoopInterval) {
-    return () => stopActivePingLoop();
+export function startOrphanEvictionLoop(): () => void {
+  if (orphanEvictionLoopInterval) {
+    return () => stopOrphanEvictionLoop();
   }
-  if (isPingLoopDisabled()) {
-    console.log('[MCP] active ping loop disabled (= AGENT_HUB_MCP_PING_LOOP_DISABLED env set)');
+  if (isOrphanEvictionDisabled()) {
+    console.log(
+      '[MCP] orphan eviction loop disabled (= AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED env set)'
+    );
     return () => {};
   }
   console.log(
-    `[MCP] active ping loop starting (= ${PING_INTERVAL_MS / 1000}s interval、 ` +
-      `${PING_TIMEOUT_MS / 1000}s timeout、 ${PING_MAX_RETRIES} retries、 issue #91)`
+    `[MCP] orphan eviction loop starting (= ${ORPHAN_EVICTION_INTERVAL_MS / 1000}s interval、 ` +
+      `${ORPHAN_IDLE_TTL_MS / 60_000}min idle TTL、 issue #155/#369)`
   );
-  activePingLoopInterval = setInterval(() => {
-    void runOneActivePingCycle().then((stats) => {
-      if (stats.disconnected > 0 || stats.orphansEvicted > 0) {
+  orphanEvictionLoopInterval = setInterval(() => {
+    void runOneOrphanEvictionCycle().then((stats) => {
+      if (stats.orphansEvicted > 0) {
         console.log(
-          `[MCP] ping cycle: total=${stats.total} alive=${stats.alive} ` +
-            `disconnected=${stats.disconnected} orphansEvicted=${stats.orphansEvicted}`
+          `[MCP] orphan eviction cycle: total=${stats.total} orphansEvicted=${stats.orphansEvicted}`
         );
       }
     });
-  }, PING_INTERVAL_MS);
-  return () => stopActivePingLoop();
+  }, ORPHAN_EVICTION_INTERVAL_MS);
+  return () => stopOrphanEvictionLoop();
 }
 
-/** Active ping loop を停止 (= graceful shutdown 用)。 */
-export function stopActivePingLoop(): void {
-  if (activePingLoopInterval) {
-    clearInterval(activePingLoopInterval);
-    activePingLoopInterval = null;
-    console.log('[MCP] active ping loop stopped');
+/** Orphan eviction loop を停止 (= graceful shutdown / test 用)。 */
+export function stopOrphanEvictionLoop(): void {
+  if (orphanEvictionLoopInterval) {
+    clearInterval(orphanEvictionLoopInterval);
+    orphanEvictionLoopInterval = null;
+    console.log('[MCP] orphan eviction loop stopped');
   }
 }
 
@@ -1978,6 +2065,11 @@ export class MCPServer {
     // Active ping loop 起動 (= issue #91、 server restart 後の即 cycle 開始)。
     // feature flag AGENT_HUB_MCP_PING_LOOP_DISABLED が set されていれば skip (= rollback path)。
     startActivePingLoop();
+
+    // Orphan session eviction loop 起動 (= issue #155 の GC、 issue #369 で ping loop から分離)。
+    // ping loop が disabled でも session GC は動き続ける。
+    // feature flag AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED が set されていれば skip (= rollback path)。
+    startOrphanEvictionLoop();
 
     return new Promise((resolve) => {
       // httpServer を捕捉して TCP keepalive / timeout を設定する (issue #269)。

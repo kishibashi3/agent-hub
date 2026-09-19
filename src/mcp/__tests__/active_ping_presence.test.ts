@@ -4,6 +4,10 @@ import {
   startActivePingLoop,
   stopActivePingLoop,
   runOneActivePingCycle,
+  isOrphanEvictionDisabled,
+  startOrphanEvictionLoop,
+  stopOrphanEvictionLoop,
+  runOneOrphanEvictionCycle,
   _addSessionForTesting,
   _clearSessionsForTesting,
 } from '../server.js';
@@ -129,8 +133,11 @@ describe('MCP active ping presence (issue #91)', () => {
  * spec: bridge の kill → re-spawn 時に initialize が短時間に複数発行され、
  * subscribe に到達しない orphan session が sessions Map に残留する。
  * ping は alive のまま (StreamableHTTP 接続が alive) なため ping loop で回収されない。
- * → `runOneActivePingCycle` 末尾の eviction sweep で ORPHAN_IDLE_TTL_MS (5 min) 超の
+ * → `runOneOrphanEvictionCycle` の eviction sweep で ORPHAN_IDLE_TTL_MS (5 min) 超の
  *   未 subscribe session を強制 close + delete する。
+ *
+ * issue #369: この sweep は元々 `runOneActivePingCycle` 末尾に同居しており、
+ * `AGENT_HUB_MCP_PING_LOOP_DISABLED=1` で GC ごと停止していた。独立 loop に分離済み。
  *
  * テスト注入: `_addSessionForTesting` / `_clearSessionsForTesting` (issue #155 追加 export)。
  * production コードでは呼ばない (_resetGhostWarnCacheForTests と同 pattern)。
@@ -170,14 +177,13 @@ describe('orphan session eviction (issue #155)', () => {
 
   it('TTL 超え + unsubscribed → evicted (orphansEvicted=1)', async () => {
     _addSessionForTesting('orphan-old', makeMockSession({ ageMs: SIX_MIN_MS }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(1);
-    expect(stats.disconnected).toBe(0); // ping 失敗ではなく eviction で回収
   });
 
   it('TTL 未満 + unsubscribed → not evicted (= 初期化中の猶予)', async () => {
     _addSessionForTesting('new-unsubscribed', makeMockSession({ ageMs: THIRTY_SEC_MS }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(0);
   });
 
@@ -186,7 +192,7 @@ describe('orphan session eviction (issue #155)', () => {
       subscribedUris: ['inbox://@test-user'],
       ageMs: SIX_MIN_MS,
     }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(0);
   });
 
@@ -197,13 +203,13 @@ describe('orphan session eviction (issue #155)', () => {
       subscribedUris: ['inbox://@test-user'],
       ageMs: SIX_MIN_MS,
     }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(2);
     expect(stats.total).toBe(3);
   });
 
-  it('runOneActivePingCycle の返り値に orphansEvicted フィールドが含まれる', async () => {
-    const stats = await runOneActivePingCycle();
+  it('runOneOrphanEvictionCycle の返り値に orphansEvicted フィールドが含まれる', async () => {
+    const stats = await runOneOrphanEvictionCycle();
     expect(typeof stats.orphansEvicted).toBe('number');
   });
 
@@ -218,7 +224,7 @@ describe('orphan session eviction (issue #155)', () => {
       ageMs: SIX_MIN_MS,
       lastActivityAtMs: THIRTY_SEC_MS, // 30 秒前に最後のアクティビティ
     }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(0);
   });
 
@@ -228,7 +234,7 @@ describe('orphan session eviction (issue #155)', () => {
       ageMs: SIX_MIN_MS,
       lastActivityAtMs: SIX_MIN_MS, // 6 分前に最後のアクティビティ (= session 作成以来 POST なし)
     }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(1);
   });
 
@@ -241,8 +247,168 @@ describe('orphan session eviction (issue #155)', () => {
       ageMs: SIX_MIN_MS,
       lastActivityAtMs: SIX_MIN_MS, // 活動なし
     }));
-    const stats = await runOneActivePingCycle();
+    const stats = await runOneOrphanEvictionCycle();
     expect(stats.orphansEvicted).toBe(1);
     expect(stats.total).toBe(2);
+  });
+});
+
+/**
+ * issue #369: orphan eviction を ping loop から分離した結果の behavior test。
+ *
+ * 背景: orphan eviction (#155) が `runOneActivePingCycle()` 末尾に同居していたため、
+ * `AGENT_HUB_MCP_PING_LOOP_DISABLED=1` (= 本番の polling-only fleet 向け設定、#106/#26)
+ * で session GC も一緒に停止し、session が 8700+ まで蓄積していた (#361)。
+ *
+ * spec: 「ping の可否」と「GC の可否」を独立した 2 つの env flag で制御する。
+ * - `AGENT_HUB_MCP_PING_LOOP_DISABLED`   → ping loop のみ
+ * - `AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED` → orphan eviction loop のみ
+ */
+describe('orphan eviction loop の ping loop からの分離 (issue #369)', () => {
+  const SIX_MIN_MS = 6 * 60_000;
+  let originalPingEnv: string | undefined;
+  let originalEvictionEnv: string | undefined;
+
+  function makeOrphanSession(ageMs: number) {
+    return {
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+      server: { ping: vi.fn().mockResolvedValue(undefined) },
+      userId: '@test-user',
+      githubLogin: 'test-user',
+      tenantDomain: 'default',
+      subscribedUris: new Set<string>(),
+      createdAt: Date.now() - ageMs,
+      lastActivityAt: Date.now() - ageMs,
+    };
+  }
+
+  beforeEach(() => {
+    originalPingEnv = process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
+    originalEvictionEnv = process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+  });
+
+  afterEach(() => {
+    stopActivePingLoop();
+    stopOrphanEvictionLoop();
+    _clearSessionsForTesting();
+    vi.useRealTimers();
+    if (originalPingEnv === undefined) {
+      delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
+    } else {
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = originalPingEnv;
+    }
+    if (originalEvictionEnv === undefined) {
+      delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    } else {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = originalEvictionEnv;
+    }
+  });
+
+  describe('isOrphanEvictionDisabled() feature flag', () => {
+    it('env unset → false (= GC 有効、 default behavior)', () => {
+      delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+      expect(isOrphanEvictionDisabled()).toBe(false);
+    });
+
+    it('env empty string → false (= unset 同等、 redline #1 整合)', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = '';
+      expect(isOrphanEvictionDisabled()).toBe(false);
+    });
+
+    it('env="1" → true (= GC 無効、 rollback path)', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = '1';
+      expect(isOrphanEvictionDisabled()).toBe(true);
+    });
+
+    it('env="0" でも true (= 値の中身は問わない binary signal)', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = '0';
+      expect(isOrphanEvictionDisabled()).toBe(true);
+    });
+  });
+
+  describe('flag の独立性', () => {
+    it('PING_LOOP_DISABLED=1 でも orphan eviction loop は動作する (= #369 の本体)', async () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      vi.useFakeTimers();
+      _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+
+      startActivePingLoop();        // flag により no-op
+      startOrphanEvictionLoop();    // こちらは起動する
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const stats = await runOneOrphanEvictionCycle();
+      // 既に interval 側の sweep で回収済み → 2 回目の sweep では 0 件かつ session も空
+      expect(stats.total).toBe(0);
+      expect(stats.orphansEvicted).toBe(0);
+    });
+
+    it('ORPHAN_EVICTION_DISABLED=1 なら loop は起動せず orphan は残る', async () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = '1';
+      vi.useFakeTimers();
+      _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // loop 未起動 → 手動 sweep でまだ回収対象として残っている
+      const stats = await runOneOrphanEvictionCycle();
+      expect(stats.total).toBe(1);
+      expect(stats.orphansEvicted).toBe(1);
+    });
+
+    it('ORPHAN_EVICTION_DISABLED=1 は ping loop 側に影響しない', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = '1';
+      expect(isPingLoopDisabled()).toBe(false);
+    });
+
+    it('PING_LOOP_DISABLED=1 は orphan eviction 側に影響しない', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      expect(isOrphanEvictionDisabled()).toBe(false);
+    });
+  });
+
+  describe('startOrphanEvictionLoop() / stopOrphanEvictionLoop() lifecycle', () => {
+    it('起動 → stop function が返る / stop は idempotent', () => {
+      const stop = startOrphanEvictionLoop();
+      expect(typeof stop).toBe('function');
+      expect(() => stop()).not.toThrow();
+      expect(() => stop()).not.toThrow();
+    });
+
+    it('二重起動しても interval は 1 本 (= 起動 idempotent)', async () => {
+      vi.useFakeTimers();
+      _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+      const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const evictionLogs = spy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan session evicted')
+      );
+      spy.mockRestore();
+      // interval が 2 本走っていれば同一 session の evict ログが 2 回出る
+      expect(evictionLogs).toHaveLength(1);
+    });
+
+    it('未起動で stop しても crash しない (= defensive)', () => {
+      expect(() => stopOrphanEvictionLoop()).not.toThrow();
+    });
+  });
+
+  it('runOneActivePingCycle は orphan を evict しない (= 分離の回帰防止)', async () => {
+    _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+
+    const pingStats = await runOneActivePingCycle();
+    expect(pingStats.total).toBe(1);
+    expect(pingStats.alive).toBe(1); // ping は成功する = ping 経路では回収されない
+
+    // ping cycle 後も session は残っており、orphan sweep 側が回収する
+    const evictionStats = await runOneOrphanEvictionCycle();
+    expect(evictionStats.orphansEvicted).toBe(1);
   });
 });
