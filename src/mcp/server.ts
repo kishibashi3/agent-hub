@@ -839,13 +839,24 @@ const PING_LOOP_MODES: readonly PingLoopMode[] = ['disabled', 'observe-only', 'e
  *   1. `AGENT_HUB_MCP_PING_LOOP_MODE` が valid な 3 値 (= 前後 space 除去 + 小文字化して比較) → その値
  *   2. 上記が未設定 / 空文字 → 旧 flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` が
  *      set (= 空文字以外) なら `disabled`
- *   3. どちらも未設定 → `enforce` (= 旧 flag 未設定時の現行 default と同一)
+ *   3. どちらも未設定 → `observe-only` (= 安全側の既定。旧 flag 未設定時の現行動作
+ *      (`enforce`) とは意図的に変えている。理由は下記)
  *
  * MODE が set されているのに 3 値のいずれでもない場合は `EnvConfigError` を throw する
  * (= fail-fast、 issue #384 と同方針)。旧 flag / default への fall back はしない:
  * typo (例: `observe_only`) を黙って `disabled` に倒すと「warning が出ない = 非応答 session なし」
  * と読めてしまい、段階 2 (enforce) への誤った GO を誘発するため (redline #1: env 不正時の fallback 禁止)。
  * 「typo で意図せず evict が走る」懸念は、起動しないことでより強く満たされる。
+ *
+ * 既定を `enforce` ではなく `observe-only` にしている理由 (operator 判断 2026-09-20):
+ * gate 「#368 が実測されるまで強制を既定にしない」は production だけでなく
+ * 「どこで立ち上がっても成り立つべき条件」として扱う。production は旧 flag
+ * `AGENT_HUB_MCP_PING_LOOP_DISABLED=1` を明示 set しており実効 `disabled` なので、この既定を
+ * どちらにしても production の挙動は変わらない。影響を受けるのは **env を一切 set していない環境だけ**
+ * であり、そこで `enforce` を既定にすると ping に応答できないことが**既知**の client
+ * (= @scheduler の cron 用 session (#368、POST only で原理的に pong 不可) と
+ * VS Code plugin (agent-hub-plugin-vscode#67、pong 未実装)) を即 evict する。
+ * 「現行挙動との一致」より「安全側の既定」を採る。`observe-only` は観測するだけで evict しない。
  *
  * 旧 flag を残しているのは、production (= docker-compose / Pi5 の env) が
  * `AGENT_HUB_MCP_PING_LOOP_DISABLED=1` で動いており、image と compose の更新順序が
@@ -871,7 +882,7 @@ export function resolvePingLoopMode(): PingLoopMode {
   ) {
     return 'disabled';
   }
-  return 'enforce';
+  return 'observe-only';
 }
 
 /**

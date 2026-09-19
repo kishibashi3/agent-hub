@@ -64,6 +64,8 @@ services:
       #   3. 問題が出たら "disabled" に戻す (= env 書き換え + restart のみ)
       #
       # MODE 未設定時は旧 flag AGENT_HUB_MCP_PING_LOOP_DISABLED が効く (= 下の "1")。
+      # 両方とも未設定の環境では code default の "observe-only" になる
+      # (= 安全側の既定。evict はしない。operator 判断 2026-09-20)。
       # MODE を設定した場合は MODE が優先される。旧 flag を残しているのは、
       # image と compose の更新順序が前後しても無効化が外れないようにするため。
       # MODE に 3 値以外を書くと server は起動しない (= fail-fast、 issue #363/#384)。

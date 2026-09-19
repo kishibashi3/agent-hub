@@ -664,8 +664,8 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
   });
 
   describe('resolvePingLoopMode()', () => {
-    it('両 env 未設定 → enforce (= 旧 default と同一)', () => {
-      expect(resolvePingLoopMode()).toBe('enforce');
+    it('両 env 未設定 → observe-only (= 安全側の既定。旧 default (enforce) から意図的に変更)', () => {
+      expect(resolvePingLoopMode()).toBe('observe-only');
       expect(isPingLoopDisabled()).toBe(false);
     });
 
@@ -718,7 +718,7 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
 
     it('MODE が空文字 → 未設定と同等 (= 旧 flag / default に委譲)', () => {
       process.env.AGENT_HUB_MCP_PING_LOOP_MODE = '';
-      expect(resolvePingLoopMode()).toBe('enforce');
+      expect(resolvePingLoopMode()).toBe('observe-only');
       process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
       expect(resolvePingLoopMode()).toBe('disabled');
     });
