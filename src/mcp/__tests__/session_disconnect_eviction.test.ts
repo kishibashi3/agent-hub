@@ -287,6 +287,74 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
       process.env[INTERVAL_ENV] = '-1';
       expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
     });
+
+    /**
+     * issue #381: env 上書きが効いている場合に実効値が起動ログに出ること。
+     * 従来は不正値のときしか log が出ず、正常に上書きされた実効値は無言だった。
+     */
+    describe('env 上書き実効値の log 出力 (issue #381)', () => {
+      it('grace env が有効値なら実効値 (ms) を 1 度だけ log に出す', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        delete process.env[INTERVAL_ENV];
+        process.env[ENV] = '5000';
+
+        validateMcpEnvConfig();
+
+        const graceLogs = log.mock.calls
+          .map((args) => String(args[0]))
+          .filter((line) => line.includes(ENV));
+        expect(graceLogs).toHaveLength(1);
+        expect(graceLogs[0]).toContain('5000ms');
+        expect(graceLogs[0]).toContain(`default ${GET_CLOSE_EVICTION_GRACE_MS}ms`);
+      });
+
+      it('env 未設定なら追加 log を出さない (= 従来どおり無言)', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        delete process.env[ENV];
+        delete process.env[INTERVAL_ENV];
+
+        validateMcpEnvConfig();
+
+        expect(
+          log.mock.calls.map((args) => String(args[0])).filter((line) => line.includes(ENV))
+        ).toHaveLength(0);
+      });
+
+      it('空文字は未設定扱いで追加 log を出さない', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        delete process.env[INTERVAL_ENV];
+        process.env[ENV] = '';
+
+        validateMcpEnvConfig();
+
+        expect(
+          log.mock.calls.map((args) => String(args[0])).filter((line) => line.includes(ENV))
+        ).toHaveLength(0);
+      });
+
+      it('既定値と同じ値を明示 set した場合も log に出す (= drift 検出のため)', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        delete process.env[INTERVAL_ENV];
+        process.env[ENV] = String(GET_CLOSE_EVICTION_GRACE_MS);
+
+        validateMcpEnvConfig();
+
+        expect(
+          log.mock.calls.map((args) => String(args[0])).filter((line) => line.includes(ENV))
+        ).toHaveLength(1);
+      });
+
+      it('grace env が不正値なら throw するので log は出ない', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        delete process.env[INTERVAL_ENV];
+        process.env[ENV] = 'abc';
+
+        expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+        expect(
+          log.mock.calls.map((args) => String(args[0])).filter((line) => line.includes(ENV))
+        ).toHaveLength(0);
+      });
+    });
   });
 
   it('scheduleEvictionOnDisconnect の graceMs 既定値が env を反映する', async () => {
