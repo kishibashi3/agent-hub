@@ -968,9 +968,36 @@ export function stopActivePingLoop(): void {
  * Orphan eviction sweep の実行間隔。
  *
  * 分離前は ping cycle の末尾に同居していたため `PING_INTERVAL_MS` (= 30s) と同一周期で
- * 回っていた。分離後も回収頻度を変えないため同じ 30s を使う。
+ * 回っていた。分離後も回収頻度を変えないため同じ 30s を既定値として使う。
+ *
+ * 実効値は `getOrphanEvictionIntervalMs()` 経由で参照すること
+ * (`AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS` env で上書き可能、 issue #369)。
  */
-const ORPHAN_EVICTION_INTERVAL_MS = 30_000;
+export const ORPHAN_EVICTION_INTERVAL_MS = 30_000;
+
+/**
+ * `ORPHAN_EVICTION_INTERVAL_MS` の実効値を返す (issue #369 / operator 条件 2)。
+ *
+ * `AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS` env が set されていればその値 (ms) で上書きする。
+ * env 未設定時は既定値 (= 30s) を返すため、既存デプロイの挙動は変わらない。
+ * 非数値 / 0 以下の不正値は warning を出して既定値に fall back する。
+ *
+ * `getPingTimeoutMs()` (= issue #240) / `getGetCloseEvictionGraceMs()` (= issue #355) と同 pattern。
+ * 呼び出しのたびに env を読むため、テストから env を差し替えて検証できる (module reload 不要)。
+ */
+export function getOrphanEvictionIntervalMs(): number {
+  const raw = process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+  if (raw === undefined || raw === '') return ORPHAN_EVICTION_INTERVAL_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[MCP] invalid AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: ${JSON.stringify(raw)} — ` +
+        `falling back to default ${ORPHAN_EVICTION_INTERVAL_MS}ms`
+    );
+    return ORPHAN_EVICTION_INTERVAL_MS;
+  }
+  return parsed;
+}
 
 /**
  * Feature flag: `AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED` が set されていれば orphan eviction
@@ -1066,8 +1093,9 @@ export function startOrphanEvictionLoop(): () => void {
     );
     return () => {};
   }
+  const intervalMs = getOrphanEvictionIntervalMs();
   console.log(
-    `[MCP] orphan eviction loop starting (= ${ORPHAN_EVICTION_INTERVAL_MS / 1000}s interval、 ` +
+    `[MCP] orphan eviction loop starting (= ${intervalMs / 1000}s interval、 ` +
       `${ORPHAN_IDLE_TTL_MS / 60_000}min idle TTL、 issue #155/#369)`
   );
   orphanEvictionLoopInterval = setInterval(() => {
@@ -1078,7 +1106,7 @@ export function startOrphanEvictionLoop(): () => void {
         );
       }
     });
-  }, ORPHAN_EVICTION_INTERVAL_MS);
+  }, intervalMs);
   return () => stopOrphanEvictionLoop();
 }
 

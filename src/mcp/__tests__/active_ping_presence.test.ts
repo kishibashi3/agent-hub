@@ -8,6 +8,8 @@ import {
   startOrphanEvictionLoop,
   stopOrphanEvictionLoop,
   runOneOrphanEvictionCycle,
+  getOrphanEvictionIntervalMs,
+  ORPHAN_EVICTION_INTERVAL_MS,
   _addSessionForTesting,
   _clearSessionsForTesting,
 } from '../server.js';
@@ -268,6 +270,7 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
   const SIX_MIN_MS = 6 * 60_000;
   let originalPingEnv: string | undefined;
   let originalEvictionEnv: string | undefined;
+  let originalIntervalEnv: string | undefined;
 
   function makeOrphanSession(ageMs: number) {
     return {
@@ -285,8 +288,10 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
   beforeEach(() => {
     originalPingEnv = process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
     originalEvictionEnv = process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    originalIntervalEnv = process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
     delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
     delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
   });
 
   afterEach(() => {
@@ -303,6 +308,11 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
       delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
     } else {
       process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = originalEvictionEnv;
+    }
+    if (originalIntervalEnv === undefined) {
+      delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+    } else {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = originalIntervalEnv;
     }
   });
 
@@ -397,6 +407,76 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
 
     it('未起動で stop しても crash しない (= defensive)', () => {
       expect(() => stopOrphanEvictionLoop()).not.toThrow();
+    });
+  });
+
+  /**
+   * operator 条件 2 (= GO DM, 2026-09-20): sweep 周期を既定値そのまま (30s) で env から
+   * 変えられるようにする。#355 (`AGENT_HUB_MCP_GET_CLOSE_GRACE_MS`) と同じ作法。
+   */
+  describe('sweep 間隔の env 上書き (AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS)', () => {
+    it('env 未設定 → 既定値 30000ms (= PR 現状と完全に同一挙動)', () => {
+      delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+      expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+      expect(ORPHAN_EVICTION_INTERVAL_MS).toBe(30_000);
+    });
+
+    it('env 空文字 → 既定値 (= unset 同等)', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = '';
+      expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+    });
+
+    it('正常値が反映される', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = '5000';
+      expect(getOrphanEvictionIntervalMs()).toBe(5_000);
+    });
+
+    it('非数値 → 既定値に fall back し warning を出す', () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = 'abc';
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('invalid AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS')
+      );
+      spy.mockRestore();
+    });
+
+    it('0 以下 → 既定値に fall back し warning を出す', () => {
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (const bad of ['0', '-1']) {
+        process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = bad;
+        expect(getOrphanEvictionIntervalMs()).toBe(30_000);
+      }
+      expect(spy).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    });
+
+    it('env 値が実際の loop 周期に反映される (= 5s で sweep が走る)', async () => {
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS = '5000';
+      vi.useFakeTimers();
+      _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      // 既定の 30s を待たずに回収済み
+      const stats = await runOneOrphanEvictionCycle();
+      expect(stats.total).toBe(0);
+      expect(stats.orphansEvicted).toBe(0);
+    });
+
+    it('env 未設定なら 30s 未満では sweep が走らない (= 既定周期の回帰防止)', async () => {
+      delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+      vi.useFakeTimers();
+      _addSessionForTesting('zombie-orphan', makeOrphanSession(SIX_MIN_MS));
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(29_999);
+
+      // まだ 1 度も sweep していない → 手動 sweep で回収対象として残っている
+      const stats = await runOneOrphanEvictionCycle();
+      expect(stats.total).toBe(1);
+      expect(stats.orphansEvicted).toBe(1);
     });
   });
 

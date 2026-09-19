@@ -60,6 +60,9 @@ services:
       # #369 で独立 loop に分離したため、ping loop が無効でも GC は動作する。
       # GC を止めたい場合のみ以下を有効化する (= rollback は env 書き換えのみ):
       #   AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED: "1"
+      # sweep 間隔 (ms) は既定 30000。実機の session 蓄積ペースに応じて調整したい場合のみ
+      # 以下を有効化する (未設定 = 30000ms、不正値は既定値に fall back):
+      #   AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: "30000"
     healthcheck:
       # compose level の health check (= image HEALTHCHECK と二重で robust)
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
