@@ -158,7 +158,7 @@ trigger 条件:
 
 ### 7.0 Overview
 
-Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 2026-06-07). Operationalizes 6 unresolved doubts through 18-cell measurement matrix (3 measurement axes × 6 doubts). Related: ADR [2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md), evidence archive [coordination-convention-test.md](../agent-hub-researcher/research-archive/2026-05-18-coordination-convention-test.md).
+Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 2026-06-07). Operationalizes 7 unresolved doubts through 21-cell measurement matrix (3 measurement axes × 7 doubts: 1a, 1b, 2, 3, 4, 5, 6). (The earlier "18-cell / 6 doubts" label predates the split of Doubt 1 into 1a / 1b; § 7.1 has always enumerated 21 cells.) Related: ADR [2026-05-18-peer-mesh-architecture-decision.md](./decisions/2026-05-18-peer-mesh-architecture-decision.md), evidence archive [coordination-convention-test.md](../agent-hub-researcher/research-archive/2026-05-18-coordination-convention-test.md).
 
 **Measurement Axes** (see ADR § Evaluation Axes for philosophical grounding):
 
@@ -233,6 +233,8 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 **Measurement Owner**: @reviewer (structural latency audit); @planner (operational responsiveness perception)
 
+> ⚠️ **Invalid — excluded from the go/no-go judgement.** ADR-001 § III states that peer-mode and asymmetric-mode are "genuinely different permanent stances, not binary toggles". These 3 cells nevertheless measure mode-switch frequency and latency (≤ 2s), i.e. the transition time of a transition the ADR says does not exist. They contradict the ADR body and therefore do not stand as measurement items: **Doubt 5 is excluded from the judgement**. The 3 cells are kept in this document as-written — not deleted — so that the origin of the defect stays readable; the canonical cell count remains 21.
+
 #### Doubt 6: Context-Mismatched Bypass Frequency
 
 | Axis | Measurement | Go/No-Go Criteria (2026-06-07) |
@@ -242,6 +244,8 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 | **3. Variation Tolerance** | Bypass classification distribution (conscious/inadvertent/context-specific pattern counts) | All patterns present = structural health; pattern C (context-specific) dominant = expected (empirical data from Direct Dialogue) |
 
 **Measurement Owner**: @planner (primary observation + pattern tracking); @ope-ultp1635 (independent human observer + context classification)
+
+> ⚠️ **Identical to Doubt 1b — counted once in the judgement.** All 3 cells restate Doubt 1b's bypass measurements — the Temporal criterion explicitly defers to "Doubt 1b Observer-Independent" for its primary metric. Because Doubt 6 is identical to Doubt 1b, **a bypass-explainability result is counted only once in the § 7.3 go/no-go arithmetic** (Doubt 1b's 3 cells; Doubt 6's 3 cells are not counted a second time). The 3 cells are kept in this document as-written — not deleted — so that the origin of the duplication stays readable; the canonical cell count remains 21.
 
 ### 7.2 Phase 1 Artifacts (Codification Layer)
 
@@ -257,19 +261,23 @@ Testing & validation roadmap for peer-mesh architecture thesis (2026-05-24 to 20
 
 ### 7.3 Phase 2 Testing (Empirical Validation)
 
-**Phase 2** (2026-05-24 to 2026-06-07): Live observation of all 18 cells.
+**Phase 2** (2026-05-24 to 2026-06-07): Live observation of all 21 cells.
+
+> ⚠️ **Not executed.** Phase 2 never ran: no snapshot 1 / 2 / 3 was taken and the 2026-06-07 go/no-go gate never fired. Verified across four independent observation windows (all agent-hub branches, all roles-kaz archives, all GitHub issues / PRs, and 35,540 production DMs from 2026-05-16 to 2026-09-19) — see `agent-hub-roles-kaz/chaos-research/research-archive/2026-09-20-adr001-evidence-recovery.md`. 3 of the 21 cells were measured retrospectively on 2026-09-20 (outside the gate), 12 are not measurable as specified, and 6 remain unmeasured. The schedule and criteria below are kept as the original plan of record.
 
 **Weekly Checkpoint Schedule**:
 - **2026-05-24 (snapshot 1)**: Baseline capture (peer count = 5, operator direct-path pattern C dominant expected)
 - **2026-05-31 (snapshot 2)**: Mid-observation (peer count = 7 possible; latency / bypass pattern trends tracked)
-- **2026-06-07 (snapshot 3)**: Final decision point (all 18-cell measurements complete; go/no-go calls per cell)
+- **2026-06-07 (snapshot 3)**: Final decision point (all 21-cell measurements complete; go/no-go calls per cell)
 
 **Measurement Compilation Role**: @researcher (archive + latency data aggregation); @reviewer (structural audit + independent verification); @planner (operational observation + pattern tracking)
 
 **Go/No-Go Decision Gate** (2026-06-07):
-- If all 18 cells within stated tolerance → **Go**: Thesis validated, advance to Phase 3 (production deployment + scaling)
+- If all 21 cells within stated tolerance → **Go**: Thesis validated, advance to Phase 3 (production deployment + scaling)
 - If > 3 cells exceed tolerance → **No-Go**: Thesis requires structural revision; escalate to @ope-ultp1635 for remediation design
 - If 1-3 cells borderline → **Conditional**: Identify specific cell mitigation + restart Phase 2 for affected cell(s) only
+
+> ⚠️ **How the gate arithmetic counts these cells.** Doubt 6's 3 cells are identical to Doubt 1b's (see § 7.1), so they are **counted only once** when applying the "> 3 cells exceed tolerance" threshold — a single bypass-explainability failure contributes Doubt 1b's cells alone, not 2×. Doubt 5's 3 cells measure a mode transition that ADR-001 § III says does not exist; they do not stand as measurement items and are **excluded from the judgement**. Both sets of cells remain listed in § 7.1 (canonical count 21) for traceability; only their treatment in the gate arithmetic is fixed here.
 
 ### 7.4 Related Documents
 

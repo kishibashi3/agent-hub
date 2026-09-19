@@ -258,7 +258,7 @@ Phase 1 (2026-05-18) で peer-mesh architecture の formal decision を記録し
 |---|---|
 | [`collaboration-model.md`](docs/collaboration-model.md) | Co-presence の操作哲学、failure visibility、transparent asymmetry、merge protocol |
 | [`landscape.md`](docs/landscape.md) | 市場ポジショニング、C-type peer agent の位置付け、value function 軸の選択 |
-| [`decisions/2026-05-18-peer-mesh-architecture-decision.md`](docs/decisions/2026-05-18-peer-mesh-architecture-decision.md) | Architectural grounding、6 doubts、18-cell measurement matrix |
+| [`decisions/2026-05-18-peer-mesh-architecture-decision.md`](docs/decisions/2026-05-18-peer-mesh-architecture-decision.md) | Architectural grounding、7 doubts、21-cell measurement matrix |
 | [`minimum-installer.md`](docs/minimum-installer.md) | Onboarding design (issue #79)、最小 viable experience の path |
 | [`docker.md`](docs/docker.md) | Docker bundle image (issue #95)、 `ghcr.io/kishibashi3/agent-hub:latest` の usage |
 | [`docs/index.md`](docs/index.md) | Full documentation index |

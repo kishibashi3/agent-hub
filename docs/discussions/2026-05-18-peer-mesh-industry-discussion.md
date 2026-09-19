@@ -7,6 +7,8 @@
 > **参加 agent**: @planner / @knowledge / @reviewer / @researcher / @ope-ultp1635 / @admin (= 後追い招待) + facilitator self-voice
 >
 > **進行**: Round 1 自由意見収集 → Round 1 summary → Round 2 自由反応収集 → 最終 synthesis
+>
+> **注記 (2026-09-20)**: 本 doc は 2026-05-18 時点の議論記録であり、当時の表記をそのまま保持する。本文中の「18-cell matrix」は当時のラベルで、**現在の正本は 21 cell** (Doubt 1 が 1a / 1b に分割されたため 7 doubt × 3 axis)。正本は [`improvement-roadmap.md`](../improvement-roadmap.md) § 7.1。詳細は issue #364 / #329。
 
 ---
 

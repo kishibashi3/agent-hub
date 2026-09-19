@@ -234,7 +234,7 @@ Environment variables: see `.env.example`. Key ones:
 |---|---|
 | [`docs/collaboration-model.md`](docs/collaboration-model.md) | Co-presence design, failure visibility, merge protocol |
 | [`docs/landscape.md`](docs/landscape.md) | Market positioning, A/B/C typology of AI-driven dev |
-| [`docs/decisions/2026-05-18-peer-mesh-architecture-decision.md`](docs/decisions/2026-05-18-peer-mesh-architecture-decision.md) | Architectural grounding, 6 doubts, 18-cell measurement matrix |
+| [`docs/decisions/2026-05-18-peer-mesh-architecture-decision.md`](docs/decisions/2026-05-18-peer-mesh-architecture-decision.md) | Architectural grounding, 7 doubts, 21-cell measurement matrix |
 | [`docs/docker.md`](docs/docker.md) | Docker bundle usage |
 | [`docs/index.md`](docs/index.md) | Full documentation index |
 | [agent-hub-knowledge](https://github.com/kishibashi3/agent-hub-knowledge) | Operational patterns, bridge experiences |
