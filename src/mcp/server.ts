@@ -200,7 +200,46 @@ export function _addSessionForTesting(sid: string, session: unknown): void {
  */
 export function _clearSessionsForTesting(): void {
   sessions.clear();
+  evictingSessionIds.clear();
+  orphanSweepInFlight = false;
 }
+
+/**
+ * 1 cycle あたり個別に log を出す evict の上限件数 (issue #377)。
+ *
+ * 初回本番 sweep は ~8700 件が対象で、1 件 2 行 (= evict + session closed) のままだと
+ * 約 17,400 行が一気に出る。operator がまさにこのログで動作確認する場面なので、
+ * 個別行は先頭 N 件に絞り、超過分は末尾のサマリ 1 行に畳む。同一 key の warn を
+ * 抑制する `ghostWarnCache` と同じ発想 (抑制した事実は必ず残す)。
+ *
+ * 通常運用の 1 cycle は 0〜数件なので、既定の運用では個別行がすべて出る。
+ */
+export const ORPHAN_EVICT_LOG_LIMIT = 20;
+
+/**
+ * orphan evict の進行中に close している session id (issue #377)。
+ *
+ * `transport.close()` が発火する `onclose` の `session closed: <sid>` は、evict 経路では
+ * 直前の `orphan session evicted: <sid>` と重複する。ここに入っている間はその 1 行を
+ * 抑止する。evict 以外の経路 (= 通常の切断) では従来どおり出る。
+ */
+const evictingSessionIds = new Set<string>();
+
+/**
+ * Test-only: ある session id が evict 進行中 (= `session closed` log 抑止中) かを返す
+ * (issue #377)。`transport.onclose` の抑止条件そのものを test から観測するための hook。
+ */
+export function _isEvictingSessionForTesting(sid: string): boolean {
+  return evictingSessionIds.has(sid);
+}
+
+/**
+ * orphan eviction sweep が進行中かどうか (issue #377 の in-flight guard)。
+ *
+ * `setInterval` の callback は前回の完了を待たないため、sweep が interval を超えると
+ * 2 本目が走る。この 1 変数で非重複を保証する。
+ */
+let orphanSweepInFlight = false;
 
 /**
  * Edition 設定 (= deployment-time singleton)。
@@ -1305,15 +1344,23 @@ export async function runOneOrphanEvictionCycle(): Promise<{
       nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS &&
       nowMs - session.lastActivityAt > ORPHAN_IDLE_TTL_MS
     ) {
-      console.log(
-        `[MCP] orphan session evicted: ${sid} ` +
-          `(userId=${session.userId} tenant=${session.tenantDomain} ` +
-          `createdAt=${new Date(session.createdAt).toISOString()}, issue #155)`
-      );
+      if (orphansEvicted < ORPHAN_EVICT_LOG_LIMIT) {
+        console.log(
+          `[MCP] orphan session evicted: ${sid} ` +
+            `(userId=${session.userId} tenant=${session.tenantDomain} ` +
+            `createdAt=${new Date(session.createdAt).toISOString()}, issue #155)`
+        );
+      }
+      // transport.close() は onclose を発火し、そちらも `session closed: <sid>` を
+      // 出す。evict 経路では上の 1 行に情報が含まれており重複なので抑止する
+      // (初回本番 sweep で 1 件 2 行 → 1 行に半減する、issue #377)。
+      evictingSessionIds.add(sid);
       try {
         await session.transport.close();
       } catch (err) {
         console.error(`[MCP] orphan evict transport.close failed for sid=${sid} (non-fatal):`, err);
+      } finally {
+        evictingSessionIds.delete(sid);
       }
       // transport.onclose も sessions.delete を呼ぶが、 race 回避で明示削除
       if (sessions.has(sid)) {
@@ -1321,6 +1368,13 @@ export async function runOneOrphanEvictionCycle(): Promise<{
       }
       orphansEvicted++;
     }
+  }
+
+  if (orphansEvicted > ORPHAN_EVICT_LOG_LIMIT) {
+    console.log(
+      `[MCP] orphan session evicted: ${orphansEvicted - ORPHAN_EVICT_LOG_LIMIT} more suppressed ` +
+        `(1 cycle あたり先頭 ${ORPHAN_EVICT_LOG_LIMIT} 件のみ個別に出力、issue #377)`
+    );
   }
 
   return { total, orphansEvicted };
@@ -1350,6 +1404,18 @@ export function startOrphanEvictionLoop(): () => void {
       `${ORPHAN_IDLE_TTL_MS / 60_000}min idle TTL、 issue #155/#369)`
   );
   orphanEvictionLoopInterval = setInterval(() => {
+    // in-flight guard (issue #377): interval callback は前回 sweep の完了を待たない。
+    // sweep が interval を超えると 2 本目が同じ sessions Map に対して走り、重複 close /
+    // 重複ログ / orphansEvicted の過大計上になる。初回本番 sweep は ~8700 件が対象で
+    // 実際に 30s を超えうるため、1 変数で非重複を保証する。
+    if (orphanSweepInFlight) {
+      console.warn(
+        '[MCP] orphan eviction cycle skipped: 前回 sweep が未完了 ' +
+          `(= interval ${intervalMs}ms を超過、issue #377)`
+      );
+      return;
+    }
+    orphanSweepInFlight = true;
     void runOneOrphanEvictionCycle()
       .then((stats) => {
         if (stats.orphansEvicted > 0) {
@@ -1363,6 +1429,11 @@ export function startOrphanEvictionLoop(): () => void {
       // cycle に持ち越して継続する (= GC が止まるより server が落ちる方が重い)。
       .catch((err) => {
         console.error('[MCP] orphan eviction cycle failed (non-fatal):', err);
+      })
+      // guard は必ず降ろす。降ろし損ねると以後 sweep が永久に走らなくなり、
+      // 「GC が止まる」= 本 loop を導入した動機そのものを失う。
+      .finally(() => {
+        orphanSweepInFlight = false;
       });
   }, intervalMs);
   return () => stopOrphanEvictionLoop();
@@ -1554,7 +1625,9 @@ async function reissueSessionAndDispatch(
     const sid = transport.sessionId;
     if (sid && sessions.has(sid)) {
       sessions.delete(sid);
-      console.log(`[MCP] session closed: ${sid} (was reissued from ${staleSessionId})`);
+      if (!evictingSessionIds.has(sid)) {
+        console.log(`[MCP] session closed: ${sid} (was reissued from ${staleSessionId})`);
+      }
     }
   };
 
@@ -2182,7 +2255,11 @@ export class MCPServer {
             const sid = transport.sessionId;
             if (sid && sessions.has(sid)) {
               sessions.delete(sid);
-              console.log(`[MCP] session closed: ${sid}`);
+              // orphan evict 由来の close は `orphan session evicted` が既に
+              // 出ているため重複を抑止する (issue #377)
+              if (!evictingSessionIds.has(sid)) {
+                console.log(`[MCP] session closed: ${sid}`);
+              }
             }
           };
 
