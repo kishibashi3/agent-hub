@@ -293,7 +293,7 @@ server 実装変更はない (= 既存ゲートを活用)。
 - [`docs/edition-model.md`](./edition-model.md) (= CE / PE edition 定義、既存ゲート設計)
 - [`docs/minimum-installer.md`](./minimum-installer.md) (= installer 設計 doc、Phase 1/2 方針)
 - [`agent-hub-installer/install.sh`](https://github.com/kishibashi3/agent-hub-installer/blob/main/install.sh) (= bootstrap installer 実装)
-- `agent-hub-roles-kaz/scripts/start.sh` (= role spawn script。private fork; 公開 template [agent-hub-roles](https://github.com/kishibashi3/agent-hub-roles) には未収録)
+- `agent-hub-roles-kaz/scripts/start.sh` (= role spawn script。private fork; public template: [agent-hub-roles/scripts/start.sh](https://github.com/kishibashi3/agent-hub-roles/blob/main/scripts/start.sh))
 - [`src/mcp/server.ts`](../src/mcp/server.ts) §CE access policy (= 既存 deployment init gate 実装)
 - [`docs/design-last-active-at.md`](./design-last-active-at.md) (= 同形の 2 段ゲート設計前例)
 
