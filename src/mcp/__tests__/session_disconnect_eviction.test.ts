@@ -266,9 +266,14 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
    */
   describe('validateMcpEnvConfig (issue #384)', () => {
     const INTERVAL_ENV = 'AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS';
+    const MAX_BYTES_ENV = 'AGENT_HUB_MCP_GET_MESSAGES_MAX_BYTES';
+    const DEFAULT_LIMIT_ENV = 'AGENT_HUB_MCP_GET_MESSAGES_DEFAULT_LIMIT';
 
     afterEach(() => {
       delete process.env[INTERVAL_ENV];
+      delete process.env[MAX_BYTES_ENV];
+      delete process.env[DEFAULT_LIMIT_ENV];
+      vi.restoreAllMocks();
     });
 
     it('両 env 未設定なら何も throw しない (= 正常系)', () => {
@@ -286,6 +291,45 @@ describe('getGetCloseEvictionGraceMs (issue #355)', () => {
       delete process.env[ENV];
       process.env[INTERVAL_ENV] = '-1';
       expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
+
+    // issue #388: get_messages の env も lazy getter なので、起動時にここを通さないと
+    // 「起動は成功し、最初の get_messages で初めて壊れる」ことになる。
+    it('get_messages の byte budget が不正値なら起動前に EnvConfigError で落ちる', () => {
+      delete process.env[ENV];
+      process.env[MAX_BYTES_ENV] = '0';
+      expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
+
+    it('get_messages の既定 limit が不正値なら起動前に EnvConfigError で落ちる', () => {
+      delete process.env[ENV];
+      process.env[DEFAULT_LIMIT_ENV] = '9999';
+      expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
+
+    it('get_messages の env 未設定時は log を出さない (= 既定値で動いている)', () => {
+      delete process.env[ENV];
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      validateMcpEnvConfig();
+      const logged = log.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(logged).not.toContain('GET_MESSAGES');
+    });
+
+    it('get_messages の env 上書き時は実効値を起動 log に出す (issue #381 と同 pattern)', () => {
+      delete process.env[ENV];
+      process.env[MAX_BYTES_ENV] = '4096';
+      process.env[DEFAULT_LIMIT_ENV] = '50';
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      validateMcpEnvConfig();
+
+      const logged = log.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(logged).toContain('AGENT_HUB_MCP_GET_MESSAGES_MAX_BYTES override active');
+      expect(logged).toContain('4096');
+      expect(logged).toContain(
+        'AGENT_HUB_MCP_GET_MESSAGES_DEFAULT_LIMIT override active'
+      );
+      expect(logged).toContain('50');
     });
 
     /**

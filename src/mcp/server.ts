@@ -36,7 +36,13 @@ import {
 import { getHistoryTool, handleGetHistory } from './tools/get_history.js';
 import { getThreadTool, handleGetThread } from './tools/get_thread.js';
 import { sendMessageTool, handleSendMessage } from './tools/send_message.js';
-import { getMessagesTool, handleGetMessages } from './tools/get_messages.js';
+import {
+  getMessagesTool,
+  handleGetMessages,
+  getGetMessagesMaxBytes,
+  getGetMessagesDefaultLimit,
+  GET_MESSAGES_MAX_BYTES,
+} from './tools/get_messages.js';
 import { markAsReadTool, handleMarkAsRead } from './tools/mark_as_read.js';
 import { flushMessagesTool, handleFlushMessages } from './tools/flush_messages.js';
 import { registerTool, handleRegister } from './tools/register.js';
@@ -1308,6 +1314,33 @@ export function validateMcpEnvConfig(): void {
     console.log(
       `[MCP] AGENT_HUB_MCP_GET_CLOSE_GRACE_MS override active: ` +
         `GET close eviction grace = ${graceMs}ms (default ${GET_CLOSE_EVICTION_GRACE_MS}ms)`
+    );
+  }
+
+  const getMessagesMaxBytes = getGetMessagesMaxBytes();
+  const getMessagesDefaultLimit = getGetMessagesDefaultLimit();
+
+  // log は起動時 1 回に限定する (getter は get_messages 呼び出しのたびに走るため、
+  // getter 側に置くと polling 回数ぶん log が膨らむ)。
+  // env 未設定時は何も出さない (= 既定値で動いていることは log の不在で判る)。
+  const rawMaxBytes = process.env.AGENT_HUB_MCP_GET_MESSAGES_MAX_BYTES;
+  if (rawMaxBytes !== undefined && rawMaxBytes !== '') {
+    console.log(
+      `[MCP] AGENT_HUB_MCP_GET_MESSAGES_MAX_BYTES override active: ` +
+        `get_messages byte budget = ${getMessagesMaxBytes} bytes ` +
+        `(default ${GET_MESSAGES_MAX_BYTES} bytes)`
+    );
+  }
+
+  // 既定 limit は「未設定 = 上限なし = 現行挙動」であり、set されていること自体が
+  // 段階的 deprecation の段 (issue #388 Phase 3) を進めた状態を意味する。実効値を
+  // 起動ログに残さないと、引数なし呼び出しが bounded になっている稼働 hub と
+  // そうでない hub を後から判別できない。
+  if (getMessagesDefaultLimit !== null) {
+    console.log(
+      `[MCP] AGENT_HUB_MCP_GET_MESSAGES_DEFAULT_LIMIT override active: ` +
+        `get_messages default limit = ${getMessagesDefaultLimit} ` +
+        `(default: 未設定 = 上限なし。設定時は引数なし呼び出しも envelope で返る)`
     );
   }
 }
