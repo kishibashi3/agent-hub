@@ -1306,6 +1306,10 @@ def sse_listen_loop(
     起こし、 stream 終了時に畳む。
     """
     display_name = f"Scheduler — cron DM + inbox bidirectional (= issue #65)"
+    # issue #382 Minor 1 follow-up: 打ち切った worker は fetch 済みの残り未読を
+    # 捨てて抜けるため、 次の connection で 1 回だけ catch-up poll を積む
+    # (= 積まないと次の DM が来るまで未読が処理されない窓ができる)。
+    pending_inbox_poll = False
     while True:
         try:
             sid = init_session(headers)
@@ -1403,6 +1407,13 @@ def sse_listen_loop(
                     it.start()
                     inbox_thread = it
 
+                    if pending_inbox_poll:
+                        # 直前の connection で worker を打ち切っている。 その
+                        # fetch で取った残り未読は誰も処理していないため、 通知を
+                        # 待たずに 1 回だけ取りに行かせる。
+                        pending_inbox_poll = False
+                        inbox_queue.put(_INBOX_POLL)
+
                     for raw in resp.iter_lines(decode_unicode=True):
                         if not raw:
                             continue
@@ -1455,6 +1466,14 @@ def sse_listen_loop(
                                     f"(session={sid[:8]}...)",
                                     file=sys.stderr,
                                 )
+                            else:
+                                # 打ち切り済みで既に畳めている = 残り未読を処理
+                                # する主体がいない。 次の connection で catch-up
+                                # poll を 1 回積む。 まだ生きている場合に積まない
+                                # のは、 in-flight の 1 件を新 worker が二重
+                                # dispatch する窓を広げないため (= 上の WARN が
+                                # その縮退を明示している)。
+                                pending_inbox_poll = True
 
             # SSE stream closed: reconnect
             print(

@@ -1406,6 +1406,78 @@ class TestIssue382:
             for c in mock_print.call_args_list
         )
 
+    def test_abandoned_worker_leftovers_are_polled_on_next_connection(
+        self, tmp_path: Path
+    ) -> None:
+        """打ち切りで捨てた残り未読は、 次の connection で 1 回 poll し直す。
+
+        打ち切り後の worker は fetch 済みの残り未読を処理せずに抜けるため、
+        再接続しただけでは **次の DM 到着まで未読が処理されない窓** が残る。
+        新 worker 起動直後に catch-up poll を 1 件積むことで解消する
+        (= 2 本目の stream には通知行が 1 行もない点に注意)。
+        """
+        notify = [
+            "event: message",
+            "id: 1",
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}',
+            "",
+        ]
+        streams = [notify, []]  # 2 本目は無通知 = catch-up poll だけが fetch を起こす
+        inbox = [
+            {"id": "m1", "from": "@alice", "message": "/list"},
+            {"id": "m2", "from": "@bob", "message": "/list"},
+        ]
+
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        fetch_calls: list = []
+        commands: list = []
+        slow_done = threading.Event()
+
+        def fake_get(url, headers=None, stream=None, timeout=None):
+            return _FakeSseResponse(streams.pop(0) if streams else [])
+
+        def fake_handle(*a, **k):
+            commands.append(a[2:4])
+            if not slow_done.is_set():
+                # 1 件目だけ reader の join 上限 (= patch 後 0.1s) を超えて掴む。
+                slow_done.set()
+                threading.Event().wait(0.5)
+
+        sleeps: list = []
+
+        def fake_sleep(_secs):
+            sleeps.append(_secs)
+            if len(sleeps) >= 2:  # 2 connection 分回してから脱出
+                raise _StopSseLoop()
+
+        with patch.object(sched, "_WORKER_JOIN_TIMEOUT_SEC", 0.1), \
+             patch.object(sched, "_WORKER_ABANDON_JOIN_SEC", 5), \
+             patch.object(sched, "init_session", return_value="sess-fake"), \
+             patch.object(sched, "register_self"), \
+             patch.object(sched, "subscribe_inbox"), \
+             patch.object(
+                 sched, "fetch_inbox",
+                 side_effect=lambda h, s: (fetch_calls.append(s), list(inbox))[1],
+             ), \
+             patch.object(sched, "mark_message_read"), \
+             patch.object(sched, "handle_inbox_command", side_effect=fake_handle), \
+             patch("scheduler.requests.get", side_effect=fake_get), \
+             patch("scheduler.requests.post", return_value=_FakePostResponse(202)), \
+             patch("scheduler.time.sleep", side_effect=fake_sleep):
+            try:
+                sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+            except _StopSseLoop:
+                pass
+
+        assert len(fetch_calls) == 2, (
+            "打ち切り後の残り未読が次の connection で取り直されていない "
+            f"(fetch={len(fetch_calls)})"
+        )
+        assert commands[0] == ("@alice", "/list")
+        assert len(commands) >= 2
+
     # ----------------------------------------------------------
     # Minor 2: _drain_ping_queue の削除
     # ----------------------------------------------------------
