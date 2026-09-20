@@ -1078,6 +1078,11 @@ export function _resetPingLoopObserveStateForTests(): void {
   observedFailingSessions.clear();
 }
 
+/** テスト用: observe-only の失敗記録に残っている sid を返す (issue #390)。 */
+export function _getObservedFailingSessionsForTests(): string[] {
+  return Array.from(observedFailingSessions);
+}
+
 /**
  * 全 session を一回り ping する (= 1 cycle)。 各 session を並列に処理 (= Promise.allSettled)、
  * 1 つの slow session が他を block しない。 timeout の retry 後も応答なければ session を
@@ -1096,6 +1101,10 @@ export function _resetPingLoopObserveStateForTests(): void {
  * `disabled` は loop 自体を起動しない判断であり cycle の挙動ではないため、型で排除している
  * (= `PingCycleMode`)。env が `disabled` のときに本関数を直接呼んだ場合は非破壊側 (`observe-only`)
  * として扱う。
+ *
+ * 返り値の `observedTransitions` (issue #390) は **その cycle で起きた observe-only の状態遷移数**
+ * (= 新規失敗 + 復帰)。件数 (`observedFailures`) は「1 件復帰 + 1 件新規失敗」の cycle で変化しない
+ * ため、summary の抑制条件には遷移数を使う (= 相殺による見落としを防ぐ)。
  */
 export async function runOneActivePingCycle(
   mode: PingCycleMode = resolvePingLoopMode() === 'enforce' ? 'enforce' : 'observe-only'
@@ -1104,9 +1113,18 @@ export async function runOneActivePingCycle(
   alive: number;
   disconnected: number;
   observedFailures: number;
+  observedTransitions: number;
 }> {
   // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
   const snapshot: Array<[string, Session]> = Array.from(sessions.entries());
+
+  // observe-only の失敗記録は ping 復帰でしか消えないため、 orphan eviction / GET close
+  // eviction / transport.onclose で消えた session の sid が残り続ける (= プロセス生存期間中の
+  // 単調増加、 issue #390)。 cycle 冒頭で「もう存在しない session」を落とす。
+  // sid は uuid なので別 session と衝突しない (= 誤判定ではなくメモリだけの問題)。
+  for (const sid of observedFailingSessions) {
+    if (!sessions.has(sid)) observedFailingSessions.delete(sid);
+  }
   const results = await Promise.allSettled(
     snapshot.map(async ([sid, session]) => {
       const alive = await pingSessionWithRetry(session);
@@ -1117,6 +1135,7 @@ export async function runOneActivePingCycle(
   let aliveCount = 0;
   let disconnectedCount = 0;
   let observedFailures = 0;
+  let observedTransitions = 0;
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
     const { sid, session, alive } = r.value;
@@ -1124,6 +1143,7 @@ export async function runOneActivePingCycle(
       aliveCount++;
       if (observedFailingSessions.delete(sid)) {
         // observe-only で落ちていた session が復帰した (= 観測記録を閉じる)。
+        observedTransitions++;
         console.log(
           `[MCP] ping recovered for session ${sid} (= ${session.userId}@${session.tenantDomain}) ` +
             `— observe-only mode (issue #363)`
@@ -1139,6 +1159,7 @@ export async function runOneActivePingCycle(
       observedFailures++;
       if (!observedFailingSessions.has(sid)) {
         observedFailingSessions.add(sid);
+        observedTransitions++;
         console.warn(
           `[MCP] ping failed for session ${sid} (= ${session.userId}@${session.tenantDomain}) ` +
             `after ${PING_MAX_RETRIES + 1} attempts — observe-only mode, NOT disconnecting (issue #363)`
@@ -1169,6 +1190,7 @@ export async function runOneActivePingCycle(
     alive: aliveCount,
     disconnected: disconnectedCount,
     observedFailures,
+    observedTransitions,
   };
 }
 
@@ -1192,13 +1214,12 @@ export function startActivePingLoop(): () => void {
     `[MCP] active ping loop starting (= mode=${mode}、 ${PING_INTERVAL_MS / 1000}s interval、 ` +
       `${PING_TIMEOUT_MS / 1000}s timeout、 ${PING_MAX_RETRIES} retries、 issue #91/#363)`
   );
-  // observe-only の cycle summary は「観測数が変わった cycle」だけ出す (= 毎 cycle 出さない)。
-  let lastObservedFailures = 0;
+  // observe-only の cycle summary は「状態遷移があった cycle」だけ出す (= 毎 cycle 出さない)。
+  // 件数比較にすると「1 件復帰 + 1 件新規失敗」が相殺して summary が落ちるため、
+  // 遷移数 (= 新規失敗 + 復帰) を抑制条件にする (issue #390)。
   activePingLoopInterval = setInterval(() => {
     void runOneActivePingCycle(mode).then((stats) => {
-      const observedChanged = stats.observedFailures !== lastObservedFailures;
-      lastObservedFailures = stats.observedFailures;
-      if (stats.disconnected > 0 || observedChanged) {
+      if (stats.disconnected > 0 || stats.observedTransitions > 0) {
         console.log(
           `[MCP] ping cycle: mode=${mode} total=${stats.total} alive=${stats.alive} ` +
             `disconnected=${stats.disconnected} observedFailures=${stats.observedFailures}`
