@@ -22,6 +22,11 @@ import {
   _clearSessionsForTesting,
   _isEvictingSessionForTesting,
   ORPHAN_EVICT_LOG_LIMIT,
+  validateMcpEnvConfig,
+  getOrphanEvictionHeartbeatMs,
+  ORPHAN_EVICTION_HEARTBEAT_MS,
+  ORPHAN_EVICTION_HEARTBEAT_MIN_MS,
+  ORPHAN_EVICTION_HEARTBEAT_MAX_MS,
 } from '../server.js';
 
 /**
@@ -1150,6 +1155,173 @@ describe('orphan eviction sweep: in-flight guard / log 圧縮 (issue #377)', () 
       await runOneOrphanEvictionCycle();
 
       expect(_isEvictingSessionForTesting('orphan-close-throws')).toBe(false);
+    });
+  });
+});
+
+/**
+ * issue #386 (#369 follow-up): orphan eviction cycle の低頻度 heartbeat ログ。
+ *
+ * cycle log は `orphansEvicted > 0` のときだけ出るため、「回収 0 件の正常稼働」と
+ * 「loop が動いていない」が journal 上どちらも沈黙になる。heartbeat はこの 2 状態を
+ * ログだけで区別可能にするための signal。
+ */
+describe('orphan eviction heartbeat log (issue #386)', () => {
+  const HEARTBEAT_ENV = 'AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS';
+
+  function heartbeatLines(log: ReturnType<typeof vi.spyOn>) {
+    return (log.mock.calls as unknown[][]).filter(
+      (c) => typeof c[0] === 'string' && (c[0] as string).includes('orphan eviction heartbeat')
+    );
+  }
+
+  function cycleLines(log: ReturnType<typeof vi.spyOn>) {
+    return (log.mock.calls as unknown[][]).filter(
+      (c) => typeof c[0] === 'string' && (c[0] as string).includes('orphan eviction cycle:')
+    );
+  }
+
+  function makeOrphan() {
+    const sixMinMs = 6 * 60 * 1000;
+    return {
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+      server: { ping: vi.fn().mockResolvedValue(undefined) },
+      userId: '@test-user',
+      githubLogin: 'test-user',
+      tenantDomain: 'default',
+      subscribedUris: new Set<string>(),
+      createdAt: Date.now() - sixMinMs,
+      lastActivityAt: Date.now() - sixMinMs,
+    };
+  }
+
+  beforeEach(() => {
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+    delete process.env[HEARTBEAT_ENV];
+  });
+
+  afterEach(() => {
+    stopOrphanEvictionLoop();
+    _clearSessionsForTesting();
+    delete process.env[HEARTBEAT_ENV];
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  describe('getOrphanEvictionHeartbeatMs()', () => {
+    it('env 未設定 → 既定値 (= 30min)', () => {
+      expect(getOrphanEvictionHeartbeatMs()).toBe(ORPHAN_EVICTION_HEARTBEAT_MS);
+      expect(ORPHAN_EVICTION_HEARTBEAT_MS).toBe(30 * 60_000);
+    });
+
+    it('env 空文字 → 既定値 (= unset 同等)', () => {
+      process.env[HEARTBEAT_ENV] = '';
+      expect(getOrphanEvictionHeartbeatMs()).toBe(ORPHAN_EVICTION_HEARTBEAT_MS);
+    });
+
+    it('env 数値 → その値で上書き', () => {
+      process.env[HEARTBEAT_ENV] = '60000';
+      expect(getOrphanEvictionHeartbeatMs()).toBe(60_000);
+    });
+
+    it('非数値 → EnvConfigError (= 既定値に黙って縮退しない、 issue #384)', () => {
+      process.env[HEARTBEAT_ENV] = 'thirty-minutes';
+      expect(() => getOrphanEvictionHeartbeatMs()).toThrow(EnvConfigError);
+    });
+
+    it('下限未満 → EnvConfigError (= 秒/ms の取り違え防御)', () => {
+      process.env[HEARTBEAT_ENV] = String(ORPHAN_EVICTION_HEARTBEAT_MIN_MS - 1);
+      expect(() => getOrphanEvictionHeartbeatMs()).toThrow(EnvConfigError);
+    });
+
+    it('上限超過 → EnvConfigError (= 桁ミスで事実上 heartbeat なしに倒れない)', () => {
+      process.env[HEARTBEAT_ENV] = String(ORPHAN_EVICTION_HEARTBEAT_MAX_MS + 1);
+      expect(() => getOrphanEvictionHeartbeatMs()).toThrow(EnvConfigError);
+    });
+
+    it('validateMcpEnvConfig() が不正値を listen 前に弾く', () => {
+      process.env[HEARTBEAT_ENV] = '-1';
+      expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
+  });
+
+  describe('startOrphanEvictionLoop() の heartbeat 出力', () => {
+    it('evict 0 件の cycle が続いても heartbeat が一定間隔で出る (完了条件 1)', async () => {
+      vi.useFakeTimers();
+      process.env[HEARTBEAT_ENV] = '60000'; // 60s = interval 30s の 2 cycle 分
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+
+      // 1 cycle 目 (30s): heartbeat 間隔未満なので沈黙のまま
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeatLines(log)).toHaveLength(0);
+
+      // 2 cycle 目 (60s): 起点から heartbeatMs 経過 → 1 行出る
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeatLines(log)).toHaveLength(1);
+      expect(heartbeatLines(log)[0][0]).toContain('orphansEvicted=0');
+
+      // 次の 1 cycle (90s) では出ず、 さらに次 (120s) で 2 行目
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeatLines(log)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeatLines(log)).toHaveLength(2);
+    });
+
+    it('既定値では 30min 未満に heartbeat を出さない (= journal を汚さない)', async () => {
+      vi.useFakeTimers();
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(29 * 60_000);
+      expect(heartbeatLines(log)).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(heartbeatLines(log)).toHaveLength(1);
+    });
+
+    it('evict > 0 の cycle では従来の cycle log が出て heartbeat は重ねない (完了条件 2)', async () => {
+      vi.useFakeTimers();
+      process.env[HEARTBEAT_ENV] = '60000';
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+      _addSessionForTesting('orphan-hb-1', makeOrphan());
+
+      // 1 cycle 目 (30s) で 1 件回収 → 従来の cycle log が出る (= heartbeat の起点が進む)
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(cycleLines(log)).toHaveLength(1);
+      expect(heartbeatLines(log)).toHaveLength(0);
+
+      // 以降は回収 0 件。cycle log から heartbeatMs 経過するまでは heartbeat を重ねない
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeatLines(log)).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeatLines(log)).toHaveLength(1);
+    });
+
+    it('AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED=1 なら heartbeat も出ない (完了条件 3)', async () => {
+      vi.useFakeTimers();
+      process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED = '1';
+      process.env[HEARTBEAT_ENV] = '60000';
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(heartbeatLines(log)).toHaveLength(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('orphan eviction loop disabled'));
+    });
+
+    it('起動 log に heartbeat の実効値が出る (= 設定を journal から確認できる)', () => {
+      process.env[HEARTBEAT_ENV] = '60000';
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      startOrphanEvictionLoop();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('1min heartbeat'));
     });
   });
 });
