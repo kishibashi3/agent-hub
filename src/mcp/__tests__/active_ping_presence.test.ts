@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   isPingLoopDisabled,
+  resolvePingLoopMode,
+  _resetPingLoopObserveStateForTests,
   startActivePingLoop,
   stopActivePingLoop,
   runOneActivePingCycle,
@@ -9,6 +11,7 @@ import {
   stopOrphanEvictionLoop,
   runOneOrphanEvictionCycle,
   getOrphanEvictionIntervalMs,
+  validateMcpEnvConfig,
   EnvConfigError,
   ORPHAN_EVICTION_INTERVAL_MS,
   ORPHAN_EVICTION_INTERVAL_MIN_MS,
@@ -618,5 +621,256 @@ describe('orphan eviction loop の ping loop からの分離 (issue #369)', () =
     // ping cycle 後も session は残っており、orphan sweep 側が回収する
     const evictionStats = await runOneOrphanEvictionCycle();
     expect(evictionStats.orphansEvicted).toBe(1);
+  });
+});
+
+/**
+ * issue #363: ping loop flag の 3 値化 (disabled / observe-only / enforce)。
+ *
+ * spec:
+ * - `AGENT_HUB_MCP_PING_LOOP_MODE` が valid な 3 値ならそれを採用
+ * - 未設定 / 空なら旧 flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` (binary) に委譲
+ * - どちらも未設定なら `observe-only` (= 安全側の既定。旧 default (enforce) から意図的に変更)
+ * - **不正値は `EnvConfigError` で fail-fast** (= 旧 flag / default に倒さない、 issue #384 と同方針)
+ * - `observe-only` は ping 非応答を観測するだけで evict しない
+ *   (= 判定条件は enforce と同一、 結果の扱いだけが違う)
+ */
+describe('ping loop mode 3 値化 (issue #363)', () => {
+  let originalMode: string | undefined;
+  let originalDisabled: string | undefined;
+
+  beforeEach(() => {
+    originalMode = process.env.AGENT_HUB_MCP_PING_LOOP_MODE;
+    originalDisabled = process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
+    delete process.env.AGENT_HUB_MCP_PING_LOOP_MODE;
+    delete process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED;
+    _resetPingLoopObserveStateForTests();
+  });
+
+  afterEach(() => {
+    stopActivePingLoop();
+    _clearSessionsForTesting();
+    _resetPingLoopObserveStateForTests();
+    for (const [key, value] of [
+      ['AGENT_HUB_MCP_PING_LOOP_MODE', originalMode],
+      ['AGENT_HUB_MCP_PING_LOOP_DISABLED', originalDisabled],
+    ] as const) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
+  describe('resolvePingLoopMode()', () => {
+    it('両 env 未設定 → observe-only (= 安全側の既定。旧 default (enforce) から意図的に変更)', () => {
+      expect(resolvePingLoopMode()).toBe('observe-only');
+      expect(isPingLoopDisabled()).toBe(false);
+    });
+
+    it('旧 flag のみ set → disabled (= 後方互換、 production 現行設定)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      expect(resolvePingLoopMode()).toBe('disabled');
+      expect(isPingLoopDisabled()).toBe(true);
+    });
+
+    it('MODE=disabled → disabled', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'disabled';
+      expect(resolvePingLoopMode()).toBe('disabled');
+      expect(isPingLoopDisabled()).toBe(true);
+    });
+
+    it('MODE=observe-only → observe-only (= isPingLoopDisabled は false: loop 自体は動く)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      expect(resolvePingLoopMode()).toBe('observe-only');
+      expect(isPingLoopDisabled()).toBe(false);
+    });
+
+    it('MODE=enforce → enforce (= 旧 flag が set でも MODE が優先)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'enforce';
+      expect(resolvePingLoopMode()).toBe('enforce');
+      expect(isPingLoopDisabled()).toBe(false);
+    });
+
+    it('MODE は前後 space / 大文字小文字を許容する', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = '  Observe-Only ';
+      expect(resolvePingLoopMode()).toBe('observe-only');
+    });
+
+    it('MODE が不正値 → EnvConfigError で fail-fast (= 旧 flag に倒さない)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe_only'; // typo: underscore
+      expect(() => resolvePingLoopMode()).toThrow(EnvConfigError);
+      expect(() => resolvePingLoopMode()).toThrow(/observe_only/);
+    });
+
+    it('MODE が不正値 + 旧 flag 未設定 → EnvConfigError (= default にも倒さない)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'nonsense';
+      expect(() => resolvePingLoopMode()).toThrow(EnvConfigError);
+    });
+
+    it('validateMcpEnvConfig() が不正 MODE を起動前に弾く (= listen 前 fail-fast)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'enfroce';
+      expect(() => validateMcpEnvConfig()).toThrow(EnvConfigError);
+    });
+
+    it('MODE が空文字 → 未設定と同等 (= 旧 flag / default に委譲)', () => {
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = '';
+      expect(resolvePingLoopMode()).toBe('observe-only');
+      process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED = '1';
+      expect(resolvePingLoopMode()).toBe('disabled');
+    });
+  });
+
+  describe('runOneActivePingCycle() の mode 別挙動', () => {
+    /** ping が常に失敗する (= 即 reject) mock session。 */
+    function makeDeadSession() {
+      return {
+        transport: { close: vi.fn().mockResolvedValue(undefined) },
+        server: { ping: vi.fn().mockRejectedValue(new Error('no pong')) },
+        userId: '@dead-peer',
+        githubLogin: 'dead-peer',
+        tenantDomain: 'default',
+        subscribedUris: new Set(['inbox://@dead-peer']),
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+      };
+    }
+
+    /** ping に応答する mock session。 */
+    function makeAliveSession() {
+      return {
+        transport: { close: vi.fn().mockResolvedValue(undefined) },
+        server: { ping: vi.fn().mockResolvedValue(undefined) },
+        userId: '@live-peer',
+        githubLogin: 'live-peer',
+        tenantDomain: 'default',
+        subscribedUris: new Set(['inbox://@live-peer']),
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+      };
+    }
+
+    it('enforce → ping 非応答 session を evict する (= 従来動作)', async () => {
+      const session = makeDeadSession();
+      _addSessionForTesting('dead-1', session);
+      const stats = await runOneActivePingCycle('enforce');
+      expect(stats.disconnected).toBe(1);
+      expect(stats.observedFailures).toBe(0);
+      expect(session.transport.close).toHaveBeenCalled();
+    });
+
+    it('observe-only → ping 非応答でも evict しない (= 観測のみ、 session は残る)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const session = makeDeadSession();
+      _addSessionForTesting('dead-2', session);
+      const stats = await runOneActivePingCycle('observe-only');
+      expect(stats.observedFailures).toBe(1);
+      expect(stats.disconnected).toBe(0);
+      expect(session.transport.close).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('observe-only の warning は落ち続けても 1 回だけ (= 1 日 2,880 行/session を避ける)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('dead-6', makeDeadSession());
+      for (let i = 0; i < 3; i++) {
+        const stats = await runOneActivePingCycle('observe-only');
+        expect(stats.observedFailures).toBe(1); // 観測カウントは毎 cycle 立つ
+      }
+      expect(warn).toHaveBeenCalledOnce();
+      warn.mockRestore();
+    });
+
+    it('observe-only で復帰した session は recovered ログを 1 回出し、再び落ちれば再 warning', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      _addSessionForTesting('flaky-1', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      expect(warn).toHaveBeenCalledOnce();
+
+      _clearSessionsForTesting();
+      _addSessionForTesting('flaky-1', makeAliveSession());
+      await runOneActivePingCycle('observe-only');
+      expect(
+        log.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('ping recovered'))
+      ).toHaveLength(1);
+
+      _clearSessionsForTesting();
+      _addSessionForTesting('flaky-1', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
+      log.mockRestore();
+    });
+
+    it('observe-only でも ping の判定条件は enforce と同一 (= retry 回数分 ping する)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const observed = makeDeadSession();
+      _addSessionForTesting('dead-3', observed);
+      await runOneActivePingCycle('observe-only');
+      const observeCalls = observed.server.ping.mock.calls.length;
+      _clearSessionsForTesting();
+
+      const enforced = makeDeadSession();
+      _addSessionForTesting('dead-4', enforced);
+      await runOneActivePingCycle('enforce');
+      expect(observeCalls).toBe(enforced.server.ping.mock.calls.length);
+      warn.mockRestore();
+    });
+
+    it('observe-only で応答する session は alive に数える (= 誤検知なし)', async () => {
+      _addSessionForTesting('alive-1', makeAliveSession());
+      const stats = await runOneActivePingCycle('observe-only');
+      expect(stats.alive).toBe(1);
+      expect(stats.observedFailures).toBe(0);
+      expect(stats.disconnected).toBe(0);
+    });
+
+    it('mode 引数省略時は env から解決する (= MODE=observe-only なら evict しない)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      const session = makeDeadSession();
+      _addSessionForTesting('dead-5', session);
+      const stats = await runOneActivePingCycle();
+      expect(stats.observedFailures).toBe(1);
+      expect(session.transport.close).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('MODE=disabled で直接呼ばれた場合は非破壊 (= observe-only 扱い)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'disabled';
+      const session = makeDeadSession();
+      _addSessionForTesting('dead-7', session);
+      const stats = await runOneActivePingCycle();
+      expect(stats.observedFailures).toBe(1);
+      expect(stats.disconnected).toBe(0);
+      expect(session.transport.close).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+  });
+
+  describe('startActivePingLoop() の mode 別挙動', () => {
+    it('MODE=disabled → loop を起動しない', () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'disabled';
+      startActivePingLoop();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('disabled'));
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('starting'));
+      log.mockRestore();
+    });
+
+    it('MODE=observe-only → loop を起動する (= mode 付きで log)', () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      startActivePingLoop();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('mode=observe-only'));
+      stopActivePingLoop();
+      log.mockRestore();
+    });
   });
 });

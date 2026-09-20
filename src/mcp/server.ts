@@ -811,16 +811,89 @@ export function writeSseKeepalive(res: {
 }
 
 /**
- * Feature flag: `AGENT_HUB_MCP_PING_LOOP_DISABLED` env が set されていれば active ping loop 無効化
- * (= rollback safety + 既存 SSE-only presence に倒す)。
+ * Ping loop の挙動 3 値 (issue #363)。
  *
- * 「unset = 新 behavior (= active ping)」 が default、 「set = 旧 behavior (= subscribe-only)」 が opt-out。
- * 値の中身は問わない (= binary signal、 redline #1 整合)。 `AGENT_HUB_MCP_AUTO_REISSUE_DISABLED` (= #68) と
- * 同 pattern。
+ * - `disabled`: ping loop を起動しない (= SSE-only presence に倒す。現行 production の設定)
+ * - `observe-only`: ping は送るが、非応答 session を evict せず warning ログのみ出す (= 観測モード)
+ * - `enforce`: 非応答 session を retry 後 evict する (= issue #91 の本来動作)
+ *
+ * `observe-only` は「再有効化の前にまず観測だけで運用してログを確認する」段階を踏むために
+ * 追加した (= ecosystem 規約「破壊的更新は段階的 deprecation で」、issue #356 条件 3)。
+ */
+export type PingLoopMode = 'disabled' | 'observe-only' | 'enforce';
+
+/**
+ * 1 cycle を実際に回すときの mode (issue #363)。
+ *
+ * `disabled` は loop を起動しない判断であって cycle の挙動ではないため、
+ * `runOneActivePingCycle()` の引数からは型で排除する (= 呼び出し側の指定ミスを compile 時に弾く)。
+ */
+export type PingCycleMode = Exclude<PingLoopMode, 'disabled'>;
+
+const PING_LOOP_MODES: readonly PingLoopMode[] = ['disabled', 'observe-only', 'enforce'];
+
+/**
+ * Ping loop mode を env から解決する (issue #363)。
+ *
+ * 優先順位:
+ *   1. `AGENT_HUB_MCP_PING_LOOP_MODE` が valid な 3 値 (= 前後 space 除去 + 小文字化して比較) → その値
+ *   2. 上記が未設定 / 空文字 → 旧 flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` が
+ *      set (= 空文字以外) なら `disabled`
+ *   3. どちらも未設定 → `observe-only` (= 安全側の既定。旧 flag 未設定時の現行動作
+ *      (`enforce`) とは意図的に変えている。理由は下記)
+ *
+ * MODE が set されているのに 3 値のいずれでもない場合は `EnvConfigError` を throw する
+ * (= fail-fast、 issue #384 と同方針)。旧 flag / default への fall back はしない:
+ * typo (例: `observe_only`) を黙って `disabled` に倒すと「warning が出ない = 非応答 session なし」
+ * と読めてしまい、段階 2 (enforce) への誤った GO を誘発するため (redline #1: env 不正時の fallback 禁止)。
+ * 「typo で意図せず evict が走る」懸念は、起動しないことでより強く満たされる。
+ *
+ * 既定を `enforce` ではなく `observe-only` にしている理由 (operator 判断 2026-09-20):
+ * gate 「#368 が実測されるまで強制を既定にしない」は production だけでなく
+ * 「どこで立ち上がっても成り立つべき条件」として扱う。production は旧 flag
+ * `AGENT_HUB_MCP_PING_LOOP_DISABLED=1` を明示 set しており実効 `disabled` なので、この既定を
+ * どちらにしても production の挙動は変わらない。影響を受けるのは **env を一切 set していない環境だけ**
+ * であり、そこで `enforce` を既定にすると ping に応答できないことが**既知**の client
+ * (= @scheduler の cron 用 session (#368、POST only で原理的に pong 不可) と
+ * VS Code plugin (agent-hub-plugin-vscode#67、pong 未実装)) を即 evict する。
+ * 「現行挙動との一致」より「安全側の既定」を採る。`observe-only` は観測するだけで evict しない。
+ *
+ * 旧 flag を残しているのは、production (= docker-compose / Pi5 の env) が
+ * `AGENT_HUB_MCP_PING_LOOP_DISABLED=1` で動いており、image と compose の更新順序が
+ * 前後しても挙動が変わらないようにするため (= サイレント縮退防止)。
+ */
+export function resolvePingLoopMode(): PingLoopMode {
+  const raw = process.env.AGENT_HUB_MCP_PING_LOOP_MODE;
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized !== undefined && normalized !== '') {
+    if ((PING_LOOP_MODES as readonly string[]).includes(normalized)) {
+      return normalized as PingLoopMode;
+    }
+    throw new EnvConfigError(
+      `[MCP] invalid AGENT_HUB_MCP_PING_LOOP_MODE: ${JSON.stringify(raw)} — ` +
+        `expected one of ${PING_LOOP_MODES.join(' / ')}。env が明示的に set されているため ` +
+        `AGENT_HUB_MCP_PING_LOOP_DISABLED / 既定値への fall back は行わない (issue #363/#384)。` +
+        `値を修正するか、旧 flag / 既定値を使う場合は env 自体を unset すること`
+    );
+  }
+  if (
+    process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== undefined &&
+    process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== ''
+  ) {
+    return 'disabled';
+  }
+  return 'observe-only';
+}
+
+/**
+ * Feature flag: ping loop が無効 (= `disabled` mode) かどうか。
+ *
+ * 旧 binary flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` 時代からの互換 API。 判定自体は
+ * `resolvePingLoopMode()` に委譲する (issue #363)。 旧 flag は値の中身を問わない
+ * binary signal (= redline #1 整合、 `AGENT_HUB_MCP_AUTO_REISSUE_DISABLED` (= #68) と同 pattern)。
  */
 export function isPingLoopDisabled(): boolean {
-  return process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== undefined &&
-    process.env.AGENT_HUB_MCP_PING_LOOP_DISABLED !== '';
+  return resolvePingLoopMode() === 'disabled';
 }
 
 /** PING_TIMEOUT_MS の現在値を返す (テスト・ログ参照用)。issue #240 */
@@ -950,6 +1023,19 @@ async function pingSessionWithRetry(session: Session): Promise<boolean> {
 let activePingLoopInterval: NodeJS.Timeout | null = null;
 
 /**
+ * observe-only mode で「現在 ping に失敗し続けている」session id (issue #363)。
+ *
+ * 毎 cycle 同じ warning を出さないための状態遷移フィルタ。復帰 (= ping 成功) で除去され、
+ * 次に落ちたときは再び 1 行出る。`enforce` mode では session ごと evict されるため使わない。
+ */
+const observedFailingSessions = new Set<string>();
+
+/** テスト用: observe-only の失敗記録をリセットする (issue #363)。 */
+export function _resetPingLoopObserveStateForTests(): void {
+  observedFailingSessions.clear();
+}
+
+/**
  * 全 session を一回り ping する (= 1 cycle)。 各 session を並列に処理 (= Promise.allSettled)、
  * 1 つの slow session が他を block しない。 timeout の retry 後も応答なければ session を
  * disconnect (= sessions.delete + transport.close)。
@@ -959,11 +1045,22 @@ let activePingLoopInterval: NodeJS.Timeout | null = null;
  *
  * `is_online` (= `selectNotificationTargets` で session 存在 check) は本 cleanup により
  * 自動的に false に倒れる (= 別途 is_online flag を持つ必要なし)。
+ *
+ * `mode` (issue #363):
+ * - `enforce`: 上記どおり非応答 session を disconnect する (= 従来動作)
+ * - `observe-only`: ping は送るが disconnect せず、`observedFailures` に数える
+ *   (= 再有効化前に「どの session が落ちるか」を無害に観測するため)
+ * `disabled` は loop 自体を起動しない判断であり cycle の挙動ではないため、型で排除している
+ * (= `PingCycleMode`)。env が `disabled` のときに本関数を直接呼んだ場合は非破壊側 (`observe-only`)
+ * として扱う。
  */
-export async function runOneActivePingCycle(): Promise<{
+export async function runOneActivePingCycle(
+  mode: PingCycleMode = resolvePingLoopMode() === 'enforce' ? 'enforce' : 'observe-only'
+): Promise<{
   total: number;
   alive: number;
   disconnected: number;
+  observedFailures: number;
 }> {
   // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
   const snapshot: Array<[string, Session]> = Array.from(sessions.entries());
@@ -976,11 +1073,34 @@ export async function runOneActivePingCycle(): Promise<{
 
   let aliveCount = 0;
   let disconnectedCount = 0;
+  let observedFailures = 0;
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
     const { sid, session, alive } = r.value;
     if (alive) {
       aliveCount++;
+      if (observedFailingSessions.delete(sid)) {
+        // observe-only で落ちていた session が復帰した (= 観測記録を閉じる)。
+        console.log(
+          `[MCP] ping recovered for session ${sid} (= ${session.userId}@${session.tenantDomain}) ` +
+            `— observe-only mode (issue #363)`
+        );
+      }
+      continue;
+    }
+    if (mode !== 'enforce') {
+      // observe-only (issue #363): evict せず観測だけする。 session は sessions に残り
+      // is_online も true のまま (= 判定条件は enforce と同一、 結果の扱いだけが違う)。
+      // ログは「初めて落ちた cycle」でのみ出す: 毎 cycle 出すと 30s 間隔 = 1 日 2,880 行/session
+      // になり、観測ログとして読めなくなるため (= 状態遷移だけを記録する)。
+      observedFailures++;
+      if (!observedFailingSessions.has(sid)) {
+        observedFailingSessions.add(sid);
+        console.warn(
+          `[MCP] ping failed for session ${sid} (= ${session.userId}@${session.tenantDomain}) ` +
+            `after ${PING_MAX_RETRIES + 1} attempts — observe-only mode, NOT disconnecting (issue #363)`
+        );
+      }
       continue;
     }
     // Disconnect: session が `sessions` から消えれば is_online は自動 false に。
@@ -1001,33 +1121,44 @@ export async function runOneActivePingCycle(): Promise<{
     disconnectedCount++;
   }
 
-  return { total: snapshot.length, alive: aliveCount, disconnected: disconnectedCount };
+  return {
+    total: snapshot.length,
+    alive: aliveCount,
+    disconnected: disconnectedCount,
+    observedFailures,
+  };
 }
 
 /**
  * Active ping loop を起動 (= MCPServer.start() で呼ぶ)。
  *
  * 既に起動中なら no-op。 stop function を返すので、 test 等で停止できる。
- * feature flag `AGENT_HUB_MCP_PING_LOOP_DISABLED` が set されていれば起動 skip。
+ * mode (issue #363) が `disabled` なら起動 skip、 `observe-only` / `enforce` なら起動する。
+ * mode は起動時に 1 度だけ解決し、 cycle 間で変わらない (= 途中で挙動が変わらないことを保証)。
  */
 export function startActivePingLoop(): () => void {
   if (activePingLoopInterval) {
     return () => stopActivePingLoop();
   }
-  if (isPingLoopDisabled()) {
-    console.log('[MCP] active ping loop disabled (= AGENT_HUB_MCP_PING_LOOP_DISABLED env set)');
+  const mode = resolvePingLoopMode();
+  if (mode === 'disabled') {
+    console.log('[MCP] active ping loop disabled (= ping loop mode: disabled)');
     return () => {};
   }
   console.log(
-    `[MCP] active ping loop starting (= ${PING_INTERVAL_MS / 1000}s interval、 ` +
-      `${PING_TIMEOUT_MS / 1000}s timeout、 ${PING_MAX_RETRIES} retries、 issue #91)`
+    `[MCP] active ping loop starting (= mode=${mode}、 ${PING_INTERVAL_MS / 1000}s interval、 ` +
+      `${PING_TIMEOUT_MS / 1000}s timeout、 ${PING_MAX_RETRIES} retries、 issue #91/#363)`
   );
+  // observe-only の cycle summary は「観測数が変わった cycle」だけ出す (= 毎 cycle 出さない)。
+  let lastObservedFailures = 0;
   activePingLoopInterval = setInterval(() => {
-    void runOneActivePingCycle().then((stats) => {
-      if (stats.disconnected > 0) {
+    void runOneActivePingCycle(mode).then((stats) => {
+      const observedChanged = stats.observedFailures !== lastObservedFailures;
+      lastObservedFailures = stats.observedFailures;
+      if (stats.disconnected > 0 || observedChanged) {
         console.log(
-          `[MCP] ping cycle: total=${stats.total} alive=${stats.alive} ` +
-            `disconnected=${stats.disconnected}`
+          `[MCP] ping cycle: mode=${mode} total=${stats.total} alive=${stats.alive} ` +
+            `disconnected=${stats.disconnected} observedFailures=${stats.observedFailures}`
         );
       }
     });
@@ -1102,7 +1233,7 @@ export function getOrphanEvictionIntervalMs(): number {
 }
 
 /**
- * MCP layer の数値 env をまとめて検証する (issue #384)。
+ * MCP layer の env をまとめて検証する (issue #384 / #363)。
  *
  * server 起動時に listen より前で呼ぶことで、「env を set したのに解釈できない」設定ミスを
  * 起動時点の `EnvConfigError` として顕在化させる。個々の getter は lazy (= 呼び出し時に env を
@@ -1114,6 +1245,9 @@ export function getOrphanEvictionIntervalMs(): number {
 export function validateMcpEnvConfig(): void {
   getGetCloseEvictionGraceMs();
   getOrphanEvictionIntervalMs();
+  // AGENT_HUB_MCP_PING_LOOP_MODE の不正値も起動時に弾く (issue #363)。
+  // startActivePingLoop() は listen より後に呼ばれるため、ここで先に評価する。
+  resolvePingLoopMode();
 }
 
 /**
@@ -2204,7 +2338,7 @@ export class MCPServer {
    * 起動時 step:
    *   1. edition を解決して singleton に cache (= 全 handler が参照)
    *      - env 不正 / conflict は EditionConfigError で fail-fast
-   *   2. MCP layer の数値 env を検証 (= EnvConfigError で fail-fast、 issue #384)
+   *   2. MCP layer の env を検証 (= EnvConfigError で fail-fast、 issue #384 / #363)
    *   3. DB 初期化 (migration 適用)
    *   4. express listen
    *
@@ -2214,7 +2348,7 @@ export class MCPServer {
   async start(): Promise<void> {
     activeEditionConfig = resolveEdition(process.env);
 
-    // MCP layer の数値 env を listen 前に検証する (issue #384)。
+    // MCP layer の env を listen 前に検証する (issue #384 / #363)。
     // env が set されているのに不正値なら EnvConfigError で fail-fast (= 既定値へ黙って
     // 縮退させない)。env 未設定なら既定値がそのまま使われ、何も起きない。
     validateMcpEnvConfig();
@@ -2222,7 +2356,7 @@ export class MCPServer {
     this.initDatabase();
 
     // Active ping loop 起動 (= issue #91、 server restart 後の即 cycle 開始)。
-    // feature flag AGENT_HUB_MCP_PING_LOOP_DISABLED が set されていれば skip (= rollback path)。
+    // ping loop mode (issue #363) が disabled なら skip (= rollback path)。
     startActivePingLoop();
 
     // Orphan session eviction loop 起動 (= issue #155 の GC、 issue #369 で ping loop から分離)。
