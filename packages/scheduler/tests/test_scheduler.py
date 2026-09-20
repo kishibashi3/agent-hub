@@ -558,14 +558,22 @@ class TestCausedBy:
             sched._shutdown_event.set()
             return {}
 
-        with patch.object(sched, "build_headers", return_value={}), \
-             patch.object(sched, "resolve_user_id", return_value="@test-user"), \
-             patch.object(sched, "init_session", return_value="test-sess"), \
-             patch.object(sched, "send_dm", side_effect=fake_send_dm), \
-             patch.object(sched, "save_schedules"), \
-             patch("threading.Thread"), \
-             patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
-            sched.main()
+        # issue #368: main() は SSE thread が公開した session を使う。 この test は
+        # `threading.Thread` を patch していて SSE thread が走らないため、 公開を
+        # 肩代わりする (= 公開しないと `_SESSION_WAIT_TIMEOUT_S` 分待ってから
+        # ephemeral fallback に倒れる)。
+        sched.publish_session("test-sess")
+        try:
+            with patch.object(sched, "build_headers", return_value={}), \
+                 patch.object(sched, "resolve_user_id", return_value="@test-user"), \
+                 patch.object(sched, "init_session", return_value="test-sess"), \
+                 patch.object(sched, "send_dm", side_effect=fake_send_dm), \
+                 patch.object(sched, "save_schedules"), \
+                 patch("threading.Thread"), \
+                 patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
+                sched.main()
+        finally:
+            sched.invalidate_session()
 
         return fired_args
 
@@ -713,14 +721,22 @@ class TestIssue282:
             sched._shutdown_event.set()
             return {}
 
-        with patch.object(sched, "build_headers", return_value={}), \
-             patch.object(sched, "resolve_user_id", return_value="@test-user"), \
-             patch.object(sched, "init_session", return_value="test-sess"), \
-             patch.object(sched, "send_dm", side_effect=fake_send_dm), \
-             patch.object(sched, "save_schedules"), \
-             patch("threading.Thread"), \
-             patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
-            sched.main()
+        # issue #368: main() は SSE thread が公開した session を使う。 この test は
+        # `threading.Thread` を patch していて SSE thread が走らないため、 公開を
+        # 肩代わりする (= 公開しないと `_SESSION_WAIT_TIMEOUT_S` 分待ってから
+        # ephemeral fallback に倒れる)。
+        sched.publish_session("test-sess")
+        try:
+            with patch.object(sched, "build_headers", return_value={}), \
+                 patch.object(sched, "resolve_user_id", return_value="@test-user"), \
+                 patch.object(sched, "init_session", return_value="test-sess"), \
+                 patch.object(sched, "send_dm", side_effect=fake_send_dm), \
+                 patch.object(sched, "save_schedules"), \
+                 patch("threading.Thread"), \
+                 patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
+                sched.main()
+        finally:
+            sched.invalidate_session()
 
         return fired_args
 
@@ -1568,3 +1584,197 @@ class TestIssue382:
 
         assert captured.count(sched._INBOX_POLL) == 1
         assert captured[-1] is sched._STOP_WORKER
+
+
+# ============================================================
+# issue #368: cron fire を SSE thread の session に一本化する
+# ============================================================
+
+class TestIssue368:
+    """issue #368: POST-only の cron session を廃止し、 SSE session を共有する。
+
+    旧実装は main thread が GET /mcp を張らない専用 session を持っていた。
+    standalone SSE stream が無い session は server→client の ping request を
+    受け取れず、 ping loop `enforce` 下で evict される。 その後の cron fire は
+    HTTP 404 になり、 **リマインダが 1 回分、 エラーも出ずに消える**
+    (= issue #368 コメント 2026-09-19T21:16Z の実測)。
+    """
+
+    @pytest.fixture(autouse=True)
+    def fresh_session_slot(self) -> None:
+        """共有 session スロットを test 間で持ち越さない。"""
+        sched.invalidate_session()
+        yield
+        sched.invalidate_session()
+
+    # ----------------------------------------------------------
+    # 共有スロットの publish / invalidate
+    # ----------------------------------------------------------
+
+    def test_publish_then_current_session_id(self) -> None:
+        """publish した session が読める。"""
+        assert sched.current_session_id() is None
+        sched.publish_session("sess-a")
+        assert sched.current_session_id() == "sess-a"
+
+    def test_invalidate_clears_session(self) -> None:
+        """invalidate で未公開に戻る。"""
+        sched.publish_session("sess-a")
+        sched.invalidate_session()
+        assert sched.current_session_id() is None
+
+    def test_invalidate_stale_generation_is_noop(self) -> None:
+        """旧 connection の後始末が新 session を消さない (= 世代 race)。"""
+        sched.publish_session("sess-old")
+        sched.publish_session("sess-new")
+        sched.invalidate_session("sess-old")
+        assert sched.current_session_id() == "sess-new"
+
+    # ----------------------------------------------------------
+    # acquire_session
+    # ----------------------------------------------------------
+
+    def test_acquire_session_uses_shared_session(self) -> None:
+        """公開済みなら共有 session を返し、 新規 session を作らない。"""
+        sched.publish_session("sess-shared")
+        with patch.object(sched, "init_session") as mock_init:
+            sid, ephemeral = sched.acquire_session({})
+        assert sid == "sess-shared"
+        assert ephemeral is False
+        mock_init.assert_not_called()
+
+    def test_acquire_session_waits_for_publish(self) -> None:
+        """未公開でも timeout 内に publish されれば共有 session を使う。"""
+        def publish_later() -> None:
+            threading.Event().wait(0.2)
+            sched.publish_session("sess-late")
+
+        t = threading.Thread(target=publish_later, daemon=True)
+        t.start()
+        with patch.object(sched, "init_session") as mock_init:
+            sid, ephemeral = sched.acquire_session({}, timeout=3.0)
+        t.join(timeout=2)
+        assert sid == "sess-late"
+        assert ephemeral is False
+        mock_init.assert_not_called()
+
+    def test_acquire_session_falls_back_to_ephemeral(self) -> None:
+        """timeout しても fire を捨てず、 その 1 回限りの session を作る。"""
+        with patch.object(sched, "init_session", return_value="sess-eph") as mock_init:
+            sid, ephemeral = sched.acquire_session({}, timeout=0.1)
+        assert sid == "sess-eph"
+        assert ephemeral is True
+        mock_init.assert_called_once()
+        # fallback した session はスロットに残さない (= 長命な POST-only session を
+        # 作らないことが本 issue の主眼)。
+        assert sched.current_session_id() is None
+
+    # ----------------------------------------------------------
+    # sse_listen_loop が publish / invalidate する
+    # ----------------------------------------------------------
+
+    def test_sse_loop_publishes_while_stream_alive(self, tmp_path: Path) -> None:
+        """GET stream が生きている間だけ sid が公開される。
+
+        公開状態は reader thread 上 (= `iter_lines` の yield 時点) で覗く。 worker
+        thread から覗くと、 stream 終了後の invalidate との順序が非決定になる。
+        """
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        seen: list = []
+
+        class _RecordingSseResponse(_FakeSseResponse):
+            def iter_lines(self, decode_unicode: bool = False):
+                seen.append(sched.current_session_id())
+                yield from self._lines
+
+        def fake_get(url, headers=None, stream=None, timeout=None):
+            return _RecordingSseResponse(["event: message", ""])
+
+        def fake_sleep(_secs):
+            raise _StopSseLoop()
+
+        with patch.object(sched, "init_session", return_value="sess-fake"), \
+             patch.object(sched, "register_self"), \
+             patch.object(sched, "subscribe_inbox"), \
+             patch("scheduler.requests.get", side_effect=fake_get), \
+             patch("scheduler.requests.post", return_value=_FakePostResponse(202)), \
+             patch("scheduler.time.sleep", side_effect=fake_sleep):
+            try:
+                sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+            except _StopSseLoop:
+                pass
+
+        assert seen == ["sess-fake"]
+        # stream 終了後は取り下げられている (= ping に応答できない sid を
+        # main thread が掴み続けない)。
+        assert sched.current_session_id() is None
+
+    # ----------------------------------------------------------
+    # main loop の fire が共有 session を使う
+    # ----------------------------------------------------------
+
+    def _fire_once(self, tmp_path: Path, send_dm_impl) -> list:
+        """due な one-shot entry を 1 回 fire させて、 使われた session を返す。"""
+        cfg = tmp_path / "schedules.json"
+        past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+        cfg.write_text(
+            json.dumps([{
+                "name": "fire-368",
+                "run_at": past,
+                "to": "@planner",
+                "message": "remind-me",
+                "owner": "@ope",
+                "one_shot": True,
+            }]),
+            encoding="utf-8",
+        )
+        sched._shutdown_event.clear()
+        used: list = []
+
+        def fake_send_dm(headers, session_id, to, message, caused_by=None):
+            used.append(session_id)
+            return send_dm_impl(session_id)
+
+        with patch.object(sched, "build_headers", return_value={}), \
+             patch.object(sched, "resolve_user_id", return_value="@test-user"), \
+             patch.object(sched, "init_session", return_value="sess-ephemeral"), \
+             patch.object(sched, "send_dm", side_effect=fake_send_dm), \
+             patch.object(sched, "save_schedules"), \
+             patch("threading.Thread"), \
+             patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
+            sched.main()
+
+        return used
+
+    def test_main_fire_uses_shared_session(self, tmp_path: Path) -> None:
+        """cron fire は SSE thread の session を使い、 自前 session を作らない。"""
+        sched.publish_session("sess-sse")
+
+        def ok(_sid):
+            sched._shutdown_event.set()
+            return {}
+
+        used = self._fire_once(tmp_path, ok)
+
+        assert used == ["sess-sse"]
+
+    def test_main_fire_retries_with_fresh_session_on_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """共有 session での送信が失敗しても、 その fire 分を作り直して再送する。
+
+        旧実装は `init_session()` で session を差し替えるだけで **その回の DM は
+        再送しなかった** (= 実測で確認された「静かに消えるリマインダ」)。
+        """
+        sched.publish_session("sess-dead")
+
+        def dead_then_ok(sid):
+            if sid == "sess-dead":
+                raise RuntimeError("HTTP 404: Session not found")
+            sched._shutdown_event.set()
+            return {}
+
+        used = self._fire_once(tmp_path, dead_then_ok)
+
+        assert used == ["sess-dead", "sess-ephemeral"]
