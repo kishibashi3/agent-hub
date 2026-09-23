@@ -1925,3 +1925,138 @@ class TestIssue368:
         t.start()
         assert sched.wait_for_session(3.0) == "sess-stable"
         t.join(timeout=2)
+
+
+# ============================================================
+# issue #412: SSE GET の read timeout で half-open を検知する
+# ============================================================
+
+class TestIssue412:
+    """issue #412: GET stream が無音になったら sid を取り下げて再接続する。"""
+
+    def test_sse_get_uses_finite_read_timeout(self, tmp_path: Path) -> None:
+        """GET に有限の read timeout を渡す (= 旧実装は `timeout=None`)。
+
+        server の keepalive (= 15s 周期) より十分長くないと、 健全な stream を
+        切ってしまう。
+        """
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        timeouts: list = []
+
+        def fake_get(url, headers=None, stream=None, timeout=None):
+            timeouts.append(timeout)
+            return _FakeSseResponse([])
+
+        def fake_sleep(_secs):
+            raise _StopSseLoop()
+
+        with patch.object(sched, "init_session", return_value="sess-fake"), \
+             patch.object(sched, "register_self"), \
+             patch.object(sched, "subscribe_inbox"), \
+             patch("scheduler.requests.get", side_effect=fake_get), \
+             patch("scheduler.time.sleep", side_effect=fake_sleep):
+            try:
+                sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+            except _StopSseLoop:
+                pass
+
+        assert len(timeouts) == 1
+        connect_timeout, read_timeout = timeouts[0]
+        assert connect_timeout is not None and connect_timeout > 0
+        assert read_timeout is not None
+        # server `SSE_KEEPALIVE_INTERVAL_MS` = 15_000 の 3 周期以上
+        assert read_timeout >= 45
+
+    def test_silent_stream_invalidates_session_and_reconnects(
+        self, tmp_path: Path
+    ) -> None:
+        """実 socket で「header + keepalive 1 行の後に無音」 を再現する。
+
+        `requests` が read timeout で投げる実際の例外で、 sid が取り下げられ、
+        次の周期で `init_session` がもう一度呼ばれること (= 再接続) を確かめる。
+        """
+        import http.server
+        import socketserver
+
+        release = threading.Event()
+
+        class _SilentSseHandler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                body = b": keepalive\n\n"
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(body), body))
+                self.wfile.flush()
+                # half-open 相当: 接続は閉じず、 以後何も書かない。 旧実装
+                # (= timeout=None) で test が hang しないよう、 release 後は
+                # 接続を閉じる (= 旧実装はここまで block し、 elapsed で落ちる)。
+                release.wait(10)
+                self.close_connection = True
+
+            def log_message(self, *_args) -> None:
+                pass
+
+        class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+            daemon_threads = True
+
+        server = _Server(("127.0.0.1", 0), _SilentSseHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{server.server_address[1]}/mcp"
+
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        sids = iter(["sess-dead", "sess-new"])
+        published_during_stream: list = []
+        sleeps: list = []
+
+        real_get = requests.get
+
+        def recording_get(*args, **kwargs):
+            resp = real_get(*args, **kwargs)
+            original = resp.iter_lines
+
+            def iter_lines(*a, **k):
+                for raw in original(*a, **k):
+                    published_during_stream.append(sched.current_session_id())
+                    yield raw
+
+            resp.iter_lines = iter_lines
+            return resp
+
+        def fake_init(_headers):
+            sid = next(sids)
+            if sid == "sess-new":
+                # 再接続まで来た = 期待どおり。 ここで loop を止める。
+                raise _StopSseLoop()
+            return sid
+
+        try:
+            with patch.object(sched, "HUB_URL", url), \
+                 patch.object(sched, "SSE_READ_TIMEOUT_SEC", 0.5), \
+                 patch.object(sched, "init_session", side_effect=fake_init), \
+                 patch.object(sched, "register_self"), \
+                 patch.object(sched, "subscribe_inbox"), \
+                 patch("scheduler.requests.get", side_effect=recording_get), \
+                 patch("scheduler.time.sleep", side_effect=lambda s: sleeps.append(s)):
+                started = time.monotonic()
+                with pytest.raises(_StopSseLoop):
+                    sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+                elapsed = time.monotonic() - started
+        finally:
+            release.set()
+            server.shutdown()
+            server.server_close()
+
+        # keepalive 行を読んでいる間は dead sid が公開されていた
+        assert published_during_stream and published_during_stream[0] == "sess-dead"
+        # read timeout 後に取り下げられた
+        assert sched.current_session_id() is None
+        # 外側 except の 5s 待ちを経て再接続に進んだ
+        assert sleeps == [5]
+        # 有限時間で抜けている (= 旧実装なら release.wait(10) まで block)
+        assert elapsed < 5
