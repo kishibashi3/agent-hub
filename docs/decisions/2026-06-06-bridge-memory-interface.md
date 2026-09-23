@@ -1,5 +1,6 @@
-# ADR: Bridge Memory Interface — context persistence across sessions
+# ADR-007: Bridge Memory Interface — context persistence across sessions
 
+**Number**: ADR-007  
 **Date**: 2026-06-06  
 **Status**: Proposed  
 **Author**: @ope-ultp1635  
