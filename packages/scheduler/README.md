@@ -218,6 +218,24 @@ operator → @scheduler: 今日の schedule 教えて
 - **inbox command エラー**: `[ERR] handle_inbox_command failed` log、 next command 受付可能 (= thread 落ちない)
 - **SIGINT (Ctrl-C) / SIGTERM (systemd / supervisor stop)**: graceful shutdown (= issue #50)。 signal handler が `_shutdown_event` set → main loop が次回 iteration で graceful exit → SSE thread (= daemon=True) は main 終了に連動して自動 cleanup → `[shutdown] exiting cleanly` log 出力。 systemd `systemctl stop` での「正常終了かクラッシュか」 判別が log で可能。
 
+### fire 失敗時の再送判定と 5xx (issue #418)
+
+fire の `send_dm` が失敗したとき、 再送するかどうかは `classify_send_failure` (`scheduler.py`) だけで決める。 再送するのは **未配送が確実な失敗** (`ConnectTimeout` / 接続拒否 / HTTP 400・404) だけ。 one-shot は二重配送を避けるため、 配送済みかもしれない失敗では再送せずに消える (PR #410 review M1)。
+
+**5xx は再送しない** (`maybe_delivered` 扱い)。 理由:
+
+- hub が返す 5xx は 500 / 503 と、 `@hono/node-server` が fetch handler の timeout で返す 504。 500 と 504 は tools/call の途中でも起きるので、 配送済みの可能性がある
+- hub が返す 503 (`deployment_not_initialized`) は tools/call より前に返るので未配送だが、 CE の初期化前にしか出ず、 再送しても同じ理由でまた 503 になる
+- 今の deploy (Pi5 compose) では scheduler は docker network 内で hub に直接つないでいて (`AGENT_HUB_URL: http://agent-hub:3000/mcp`)、 reverse proxy を通らない。 proxy が返す 502 / 503 は起きない
+
+**scheduler と hub の間に reverse proxy を挟む構成にするときは、 この判定を見直す**。 見直すときの方針:
+
+- 再送の対象に足すのは **503 だけ**。 proxy の 503 (rate limit や upstream 全滅での拒否) は upstream へ転送する前に返るので、 ほぼ未配送と言える
+- **502 は `maybe_delivered` のまま残す**。 502 は upstream が request を受けたあと、 response を返す前に接続が切れたときにも返るので、 配送済みのことがある。 504 (upstream の read timeout) も同じ理由で再送しない
+- 503 を再送対象にすると hub 自身の `deployment_not_initialized` も再送される。 再送が fresh session で 1 回だけに収まることをテストで確かめる
+
+調査の詳細: https://github.com/kishibashi3/agent-hub/issues/418#issuecomment-5800905417
+
 ## Pi5 deployment
 
 agent-hub server と並走させる Pi5 deployment の **完全手順書**。 想定 user は **SSH 直接アクセスなしで Pi5 を運用する admin** (= `@admin` Pi5 ops persona 想定)、 git pull + systemd / crontab reload で deployment cycle を完結する workflow。
