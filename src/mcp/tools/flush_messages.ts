@@ -68,7 +68,7 @@ export function handleFlushMessages(
     const unread = scope.getUnreadDmBroadcastMessages(target.name);
     scope.db.transaction(() => {
       for (const message of unread) {
-        scope.markAsRead(message.id, target.name);
+        scope.markAsRead(message.id, target.name, userId);
       }
     })();
 
