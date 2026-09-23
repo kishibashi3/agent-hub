@@ -1065,6 +1065,44 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       expect(lines[1]).toContain('observedFailures=0');
       expect(lines[1]).toContain('observedPruned=1');
     });
+
+    it('cycle が重なっても、途中で消えた session の sid は失敗記録に戻らず prune は 1 回だけ (issue #431)', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      // cycle 1 の 3 attempt はすぐ失敗し、それ以降は応答しない (= cycle 2 は timeout 10s × 3 回 = 30s かかる)。
+      const session = makeSession(false);
+      session.server.ping = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('no pong'))
+        .mockRejectedValueOnce(new Error('no pong'))
+        .mockRejectedValueOnce(new Error('no pong'))
+        .mockImplementation(() => new Promise(() => {}));
+      _addSessionForTesting('overlap-1', session);
+      startActivePingLoop();
+
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // t=30s cycle 1: 新規失敗
+      expect(_getObservedFailingSessionsForTests()).toEqual(['overlap-1']);
+      expect(warn).toHaveBeenCalledOnce();
+
+      // t=60s cycle 2 が始まり、応答待ちの間 (t=70s) に session が eviction / close で消える。
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS + 10_000);
+      _clearSessionsForTesting();
+
+      // t=90s: cycle 3 の冒頭 prune のあとに cycle 2 が終わる (= cycle が重なる)。
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(_getObservedFailingSessionsForTests()).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // t=120s cycle 4
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // t=150s cycle 5
+      const pruned = summaryLines(log)
+        .map((l) => Number(/observedPruned=(\d+)/.exec(l)?.[1] ?? 0))
+        .reduce((a, b) => a + b, 0);
+      expect(pruned).toBe(1);
+      expect(_getObservedFailingSessionsForTests()).toEqual([]);
+      // もう存在しない session に「NOT disconnecting」を出さない
+      expect(warn).toHaveBeenCalledOnce();
+    });
   });
 });
 

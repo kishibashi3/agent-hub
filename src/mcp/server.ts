@@ -1172,6 +1172,10 @@ export async function runOneActivePingCycle(
       // is_online も true のまま (= 判定条件は enforce と同一、 結果の扱いだけが違う)。
       // ログは「初めて落ちた cycle」でのみ出す: 毎 cycle 出すと 30s 間隔 = 1 日 2,880 行/session
       // になり、観測ログとして読めなくなるため (= 状態遷移だけを記録する)。
+      // ping 待ちの間に eviction / close で消えた session は失敗として記録しない: cycle は重なる
+      // ことがあり (= 非応答 session は約 30s かかり PING_INTERVAL_MS と同じ)、次の cycle の prune
+      // が済んだ後に add すると同じ sid がもう一度 prune として数えられるため (issue #431)。
+      if (!sessions.has(sid)) continue;
       observedFailures++;
       if (!observedFailingSessions.has(sid)) {
         observedFailingSessions.add(sid);
