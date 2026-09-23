@@ -1124,6 +1124,7 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       _clearSessionsForTesting();
 
       // t=90s: cycle 3 の冒頭 prune のあとに cycle 2 が終わる (= cycle が重なる)。
+      // 同時刻の timer が作成順に発火すること (cycle 3 の tick が cycle 2 の 3 回目の ping timeout より先) に依存しており、順序が逆になるとこのテストは修正がなくても pass して何も検証しなくなる。
       await vi.advanceTimersByTimeAsync(20_000);
       expect(_getObservedFailingSessionsForTests()).toEqual([]);
 
