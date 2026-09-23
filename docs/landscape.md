@@ -103,6 +103,6 @@ Negroponte / Knowledge Navigator の系譜に思想的祖先があり、2026 年
 - messaging primitive: [`messaging-vs-rpc.md`](./messaging-vs-rpc.md)
 - A2A 調査（不採用）: [`a2a.md`](./a2a.md)
 - Direct Dialogue digest + Unified View v1: [`discussions/2026-05-18-peer-mesh-industry-discussion.md`](./discussions/2026-05-18-peer-mesh-industry-discussion.md)
-- Evidence archive: [agent-hub-researcher: research-archive/2026-05-18-coordination-convention-test.md](https://github.com/kishibashi3/agent-hub-researcher/blob/main/research-archive/2026-05-18-coordination-convention-test.md)
+- Evidence archive: `agent-hub-roles-kaz/researcher/research-archive/2026-05-18-coordination-convention-test.md` (private archive; public context: [PR #61](https://github.com/kishibashi3/agent-hub/pull/61))
 - **詳細調査レポート (2026-05-22)**: `deep-research/research-archive/2026-05-22-landscape-competitive-analysis.md` — 5トラック並列調査、Adversarial Check 済み
 - **Letta 詳細評価**: `deep-research/research-archive/2026-05-22-letta-c-type-proximity-assessment.md`

@@ -151,4 +151,4 @@ agent-hub のハンドオフ方式: GitHub PR + DM heads-up (同一 primitive �
 - ecosystem 全体 conventions (= L0/L1/L2 merge actor split の active rule): `ecosystem root CLAUDE.md` § Conventions (private; 公開 repo 外)
 - merge 権限の詳細 spec: [`agent-hub-roles/planner/CLAUDE.md` § merge 権限ルール](https://github.com/kishibashi3/agent-hub-roles/blob/main/planner/CLAUDE.md#merge-%E6%A8%A9%E9%99%90%E3%83%AB%E3%83%BC%E3%83%AB)
 - Direct Dialogue digest + Unified View v1: [`discussions/2026-05-18-peer-mesh-industry-discussion.md`](./discussions/2026-05-18-peer-mesh-industry-discussion.md)
-- Evidence archive(5-case typology + 7-framework inventory + Pattern D structural decline): [agent-hub-researcher: research-archive/2026-05-18-coordination-convention-test.md](https://github.com/kishibashi3/agent-hub-researcher/blob/main/research-archive/2026-05-18-coordination-convention-test.md)
+- Evidence archive(5-case typology + 7-framework inventory + Pattern D structural decline): `agent-hub-roles-kaz/researcher/research-archive/2026-05-18-coordination-convention-test.md` (private archive; public context: [PR #61](https://github.com/kishibashi3/agent-hub/pull/61))
