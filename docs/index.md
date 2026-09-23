@@ -43,6 +43,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [docker.md](./docker.md) — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)
 - [minimum-installer.md](./minimum-installer.md) — Onboarding design (issue #79)、 最小 viable experience の path
 - [deployment-pi5.md](./deployment-pi5.md) — Pi5 deployment 完全手順書 (= server + bridges + scheduler)
+- [ping-loop-mode.md](./ping-loop-mode.md) — ping loop の 3 値 (`disabled` / `observe-only` / `enforce`) の挙動・env の解決規則・切り替え条件 (issue #363 / #392)
 
 ## 競合 / 調査
 

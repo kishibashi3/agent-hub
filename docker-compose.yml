@@ -69,6 +69,7 @@ services:
       # MODE を設定した場合は MODE が優先される。旧 flag を残しているのは、
       # image と compose の更新順序が前後しても無効化が外れないようにするため。
       # MODE に 3 値以外を書くと server は起動しない (= fail-fast、 issue #363/#384)。
+      # 3 値の挙動・env の解決規則・切り替え条件の一覧: docs/ping-loop-mode.md (issue #392)
       AGENT_HUB_MCP_PING_LOOP_DISABLED: "1"
       # AGENT_HUB_MCP_PING_LOOP_MODE: "observe-only"  # ← 段階 1 で有効化する
       # ---- orphan session eviction (= session GC) の無効化 flag (issue #369) ----
