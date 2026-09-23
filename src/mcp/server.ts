@@ -1187,6 +1187,10 @@ export async function runOneActivePingCycle(
       }
       continue;
     }
+    // ping 待ちの間に eviction / close で先に消えた session は、 消した側が transport を close
+    // 済みなので、 ここでは close も count もしない (= close の二重呼び出しと disconnected の
+    // 過大計上を避ける、 observe-only 側の #431 と同じ guard、 issue #447)。
+    if (!sessions.has(sid)) continue;
     // Disconnect: session が `sessions` から消えれば is_online は自動 false に。
     // transport.close() で SSE GET 側の long-lived connection も切断 (= bridge の reconnect loop が trigger される)。
     console.log(
