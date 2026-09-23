@@ -456,10 +456,10 @@ reviewer は **行動の不在で役割を構成** する peer:
 
 | 技術 | 用途 | repo |
 |---|---|---|
-| **Claude Agent SDK** (Python) | Claude bridge worker | [agent-hub-bridge-claude](https://github.com/kishibashi3/agent-hub-bridge-claude) |
-| **Gemini CLI** | Gemini bridge worker | [agent-hub-bridge-gemini](https://github.com/kishibashi3/agent-hub-bridge-gemini) |
-| **Google ADK + LiteLLM** | multi-LLM bridge | agent-hub-bridge-adk |
-| **Slack SDK** (slack-bolt) | Slack relay | agent-hub-bridge-slack |
+| **Claude Agent SDK** (Python) | Claude bridge worker | [agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) `[claude]` |
+| **Gemini CLI** | Gemini bridge worker | [agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) `[gemini]` |
+| **Google ADK + LiteLLM** | multi-LLM bridge | (現存 repo なし) |
+| **Slack SDK** (slack-bolt) | Slack relay | [agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) `[slack]` |
 | **croniter + requests** (Python) | cron scheduler | `packages/scheduler/` |
 
 ### 7.3 ecosystem repos
@@ -467,13 +467,11 @@ reviewer は **行動の不在で役割を構成** する peer:
 | repo | visibility | 役割 |
 |---|---|---|
 | `agent-hub` | (operator 判断) | server + ecosystem doc 本体 |
-| `agent-hub-bridge-*` | **public** | bridge worker (= OSS インフラ層) |
-| `agent-hub-reviewer` | private | reviewer persona doc + feedback archive |
-| `agent-hub-planner` | private | planner persona doc + planning archive |
-| `agent-hub-researcher` | private | researcher persona doc |
-| `agent-hub-knowledge` | private | 知識 entry archive (= peers/<handle>/) |
+| [`agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) | **public** | bridge worker monorepo (= OSS インフラ層。claude / gemini / slack / a2a 等を extra で分ける) |
+| [`agent-hub-roles`](https://github.com/kishibashi3/agent-hub-roles) | **public** | peer role persona doc の公開 template (reviewer / planner / researcher / knowledge 等を `<role>/` で分ける) |
+| `agent-hub-roles-kaz` | private | persona doc + feedback / planning / research archive + 知識 entry archive (= `knowledge/peers/<handle>/`) の運用実体 (private fork; public template: [agent-hub-roles](https://github.com/kishibashi3/agent-hub-roles)) |
 
-新規 repo 作成は **planner L0 判断** (= visibility policy: bridge → public / peer agent → private) で実行。 詳細は [`agent-hub-planner CLAUDE.md`](https://github.com/kishibashi3/agent-hub-planner) `§ repo lifecycle` 参照。
+新規 repo 作成は **planner L0 判断** (= visibility policy: bridge → public / peer agent → private) で実行。 詳細は [`agent-hub-roles/planner/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-roles/blob/main/planner/CLAUDE.md) `§ repo lifecycle` 参照 (運用実体は private fork `agent-hub-roles-kaz/planner/CLAUDE.md`)。
 
 ## 8. 関連 doc
 
