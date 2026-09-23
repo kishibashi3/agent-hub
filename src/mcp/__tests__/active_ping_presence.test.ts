@@ -22,7 +22,6 @@ import {
   _clearSessionsForTesting,
   _isEvictingSessionForTesting,
   ORPHAN_EVICT_LOG_LIMIT,
-  validateMcpEnvConfig,
   getOrphanEvictionHeartbeatMs,
   ORPHAN_EVICTION_HEARTBEAT_MS,
   ORPHAN_EVICTION_HEARTBEAT_MIN_MS,
