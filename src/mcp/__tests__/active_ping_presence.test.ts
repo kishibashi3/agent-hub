@@ -769,6 +769,30 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       expect(session.transport.close).toHaveBeenCalled();
     });
 
+    it('enforce → ping 待ちの間に消えた session は close も count もしない (issue #447)', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const gone = makeDeadSession();
+      const stay = makeDeadSession();
+      // gone の最初の ping の応答待ちの間に、 gone だけが eviction / close で sessions から消える。
+      gone.server.ping.mockImplementationOnce(async () => {
+        _clearSessionsForTesting();
+        _addSessionForTesting('enforce-stay', stay);
+        throw new Error('no pong');
+      });
+      _addSessionForTesting('enforce-gone', gone);
+      _addSessionForTesting('enforce-stay', stay);
+      const stats = await runOneActivePingCycle('enforce');
+      expect(stats.total).toBe(2);
+      expect(gone.transport.close).not.toHaveBeenCalled();
+      // 待っている間も残っていた非応答 session は従来どおり disconnect する (= 対照ケース)
+      expect(stay.transport.close).toHaveBeenCalledOnce();
+      expect(stats.disconnected).toBe(1);
+      expect(
+        log.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('enforce-gone'))
+      ).toHaveLength(0);
+      log.mockRestore();
+    });
+
     it('observe-only → ping 非応答でも evict しない (= 観測のみ、 session は残る)', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const session = makeDeadSession();
