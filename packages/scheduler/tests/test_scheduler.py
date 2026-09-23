@@ -1880,18 +1880,21 @@ class TestIssue368:
     @pytest.mark.parametrize(
         "exc, expected",
         [
-            (sched.SendDmHttpError(404, "not found"), True),
-            (sched.SendDmHttpError(400, "bad request"), True),
-            (sched.SendDmHttpError(500, "server error"), False),
-            (requests.exceptions.ConnectTimeout("connect timed out"), True),
-            (requests.exceptions.ReadTimeout("read timed out"), False),
+            (sched.SendDmHttpError(404, "not found"), "retryable"),
+            (sched.SendDmHttpError(400, "bad request"), "retryable"),
+            (sched.SendDmHttpError(500, "server error"), "maybe_delivered"),
+            (requests.exceptions.ConnectTimeout("connect timed out"), "retryable"),
+            (requests.exceptions.ReadTimeout("read timed out"), "maybe_delivered"),
             # 送信後の切断 (= RemoteDisconnected 等) は配送済みの可能性がある
-            (requests.exceptions.ConnectionError("Connection aborted."), False),
-            (ValueError("unparseable response body"), False),
+            (
+                requests.exceptions.ConnectionError("Connection aborted."),
+                "maybe_delivered",
+            ),
+            (ValueError("unparseable response body"), "maybe_delivered"),
         ],
     )
-    def test_is_undelivered_send_failure(self, exc, expected) -> None:
-        assert sched.is_undelivered_send_failure(exc) is expected
+    def test_classify_send_failure(self, exc, expected) -> None:
+        assert sched.classify_send_failure(exc) == expected
 
     def test_send_dm_raises_http_error_with_status(self) -> None:
         """HTTP 200 以外は status 付きの `SendDmHttpError` になる。"""
@@ -2152,9 +2155,9 @@ class TestIssue422:
         with patch("scheduler.requests.post", return_value=_FakeRpcResponse(body)):
             assert sched.send_dm({}, "sess", "@x", "hi") == body
 
-    def test_tool_error_counts_as_undelivered(self) -> None:
-        """拒否は未配送確実 (= 配送済み扱いで握りつぶさない)。"""
-        assert sched.is_undelivered_send_failure(sched.SendDmToolError("x"))
+    def test_tool_error_is_classified_as_rejected(self) -> None:
+        """拒否は未配送確実だが再送しない (= 配送済み扱いで握りつぶさない)。"""
+        assert sched.classify_send_failure(sched.SendDmToolError("x")) == "rejected"
 
     # ----------------------------------------------------------
     # main loop の fire

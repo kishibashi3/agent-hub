@@ -68,7 +68,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import requests
 import urllib3
@@ -478,32 +478,41 @@ class SendDmToolError(RuntimeError):
 _UNDELIVERED_HTTP_STATUSES = frozenset({400, 404})
 
 
-def is_undelivered_send_failure(exc: BaseException) -> bool:
-    """`send_dm` の失敗が **未配送確実** なら True (= PR #410 review M1)。
+SendFailureClass = Literal["retryable", "maybe_delivered", "rejected"]
 
-    再送してよいのは server に request が届いていない / 届いても tools/call の
-    前で弾かれた場合だけ。 `ReadTimeout`、 接続確立後の切断、 5xx、 response の
-    parse 失敗は server 側で配送済みの可能性があり、 再送すると DM が二重に届く。
 
-    - `ConnectTimeout`: 接続確立前に timeout
-    - `ConnectionError` のうち urllib3 の `NewConnectionError` 起因 (= 接続拒否 /
-      名前解決失敗)。 `RemoteDisconnected` 等の送信後切断は含めない
-    - HTTP 400 / 404 (= `_UNDELIVERED_HTTP_STATUSES`)
-    - `SendDmToolError` (= issue #422、 server が tools/call を拒否した)。 未配送
-      確実だが再送しても通らない見込みが高いので、 fire 経路は再送せずに扱う
+def classify_send_failure(exc: BaseException) -> SendFailureClass:
+    """`send_dm` の失敗を再送可否で分類する (= issue #429、 判定はここだけ)。
+
+    - `"retryable"`: **未配送確実** で、 fresh session で再送してよい
+      (= PR #410 review M1)。 server に request が届いていない / 届いても
+      tools/call の前で弾かれた場合
+      - `ConnectTimeout`: 接続確立前に timeout
+      - `ConnectionError` のうち urllib3 の `NewConnectionError` 起因 (= 接続拒否 /
+        名前解決失敗)。 `RemoteDisconnected` 等の送信後切断は含めない
+      - HTTP 400 / 404 (= `_UNDELIVERED_HTTP_STATUSES`)
+    - `"rejected"`: `SendDmToolError` (= issue #422、 server が tools/call を
+      拒否した)。 未配送確実だが再送しても同じ理由で拒否される見込みが高いので
+      再送しない
+    - `"maybe_delivered"`: 上記以外。 `ReadTimeout`、 接続確立後の切断、 5xx、
+      response の parse 失敗は server 側で配送済みの可能性があり、 再送すると
+      DM が二重に届くので再送しない
     """
     if isinstance(exc, SendDmToolError):
-        return True
+        return "rejected"
     if isinstance(exc, SendDmHttpError):
-        return exc.status_code in _UNDELIVERED_HTTP_STATUSES
+        if exc.status_code in _UNDELIVERED_HTTP_STATUSES:
+            return "retryable"
+        return "maybe_delivered"
     if isinstance(exc, requests.exceptions.ConnectTimeout):
-        return True
+        return "retryable"
     if isinstance(exc, requests.exceptions.ConnectionError):
         reason = exc.args[0] if exc.args else None
         if isinstance(reason, urllib3.exceptions.MaxRetryError):
             reason = reason.reason
-        return isinstance(reason, urllib3.exceptions.NewConnectionError)
-    return False
+        if isinstance(reason, urllib3.exceptions.NewConnectionError):
+            return "retryable"
+    return "maybe_delivered"
 
 
 def close_session(headers: dict[str, str], session_id: str) -> None:
@@ -2120,10 +2129,10 @@ def main() -> None:
             )
 
         send_ok = False
-        # 配送済みかもしれない失敗 (= `is_undelivered_send_failure` が False)。
+        # 配送済みかもしれない失敗 (= `classify_send_failure` が "maybe_delivered")。
         # 再送せず、 one-shot は二重配送を避けて配送済み扱いで消す。
         maybe_delivered = False
-        # issue #422: server が send_message を拒否した (= `SendDmToolError`)。
+        # issue #422: server が send_message を拒否した (= "rejected")。
         # 未配送確実だが再送しても同じ理由で拒否されるので、 再送しない。
         rejected = False
         first_err: Exception | None = None
@@ -2155,8 +2164,9 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 first_err = e
-                rejected = isinstance(e, SendDmToolError)
-                maybe_delivered = not is_undelivered_send_failure(e)
+                failure = classify_send_failure(e)
+                rejected = failure == "rejected"
+                maybe_delivered = failure == "maybe_delivered"
             finally:
                 if ephemeral:
                     close_session(headers, session_id)
@@ -2187,8 +2197,9 @@ def main() -> None:
                 )
                 # init_session の失敗は未配送。 send_dm の失敗は再度判定する。
                 if retry_sid is not None:
-                    rejected = isinstance(e2, SendDmToolError)
-                    maybe_delivered = not is_undelivered_send_failure(e2)
+                    failure = classify_send_failure(e2)
+                    rejected = failure == "rejected"
+                    maybe_delivered = failure == "maybe_delivered"
                 if not maybe_delivered and not rejected:
                     # hub 自体が落ちている場合の hot loop 回避 (= one-shot は
                     # send_ok=False で entry が残り、 次 iteration で即 due になる)。
