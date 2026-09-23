@@ -175,8 +175,8 @@ agent-hub ecosystem は **6 layer** で構成される:
 #### 1.3.1 具体例で understand
 
 - **@bridge-claude** (= layer (a)、 青、 process): Claude Agent SDK を使う stateful daemon。 1 つの process。 `--user reviewer` / `--user planner` 等で起動時に peer switch 可能
-- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --user reviewer --workdir agent-hub-reviewer` で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
-- **@bridge-claude-impl** (= layer (c)、 黄、 impl role): `@bridge-claude` の **実装 code を書く** agent。 自身も bridge worker process 上で動くが、 役割は 「`agent-hub-bridge-claude` repo の code 編集 + PR 起票 + reviewer review 経由 merge」
+- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --user reviewer --workdir agent-hub-roles-kaz/reviewer` で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
+- **@bridge-claude-impl** (= layer (c)、 黄、 impl role): `@bridge-claude` の **実装 code を書く** agent。 自身も bridge worker process 上で動くが、 役割は 「`agent-hub-bridges` repo の Claude bridge code 編集 + PR 起票 + reviewer review 経由 merge」
 - **@agent-hub-impl** (= layer (c)、 黄、 impl role): `agent-hub` server (= TypeScript MCP server) の **実装 code + ecosystem doc を書く** agent。 sibling として `agent-hub` server + `docs/*` を保守
 
 = **「`@bridge-claude` を作る (c) と `@bridge-claude` 自身 (a) は別 peer」** が core insight、 新規 engineer の 「bridge と bridge-impl の区別」 confusion 解消。
@@ -187,8 +187,8 @@ implementation role peer (= layer (c)) は対応する bridge worker (= layer (a
 
 | impl role (c) | maintains | bridge worker (a) / server |
 |---|---|---|
-| `@bridge-claude-impl` | → | `@bridge-claude` (= agent-hub-bridge-claude repo) |
-| `@bridge-gemini-impl` | → | `@bridge-gemini` (= agent-hub-bridge-gemini repo) |
+| `@bridge-claude-impl` | → | `@bridge-claude` (= agent-hub-bridges repo の `bridge-claude2/` / `[claude]`) |
+| `@bridge-gemini-impl` | → | `@bridge-gemini` (= agent-hub-bridges repo の `[gemini]`) |
 | `@agent-hub-impl` | → | `agent-hub` server (= MCP layer + docs) |
 
 = 「impl role peer が bridge worker の code を書く」 1-to-1 mapping、 ecosystem で実装担当が明示化されている構造。
@@ -204,8 +204,8 @@ ecosystem 内 peer は §1.2.1 で示した **3 concept (a) / (b) / (c)** + OS l
 | **@knowledge** | **(b) 緑、 persona role** | 知識整理・entry 管理 / dedup / indexing / curator | Claude Agent SDK |
 | **@reviewer** | **(b) 緑、 persona role** | PR / design review / 観点別 check (= security / correctness / perf / readability / test / consistency) | Claude Agent SDK |
 | **@agent-hub-impl** | **(c) 黄、 implementation role** | `agent-hub` server (= TypeScript MCP server) + ecosystem docs の実装担当 | Claude Agent SDK |
-| **@bridge-claude-impl** | **(c) 黄、 implementation role** | `agent-hub-bridge-claude` repo (= bridge-claude worker code) の実装担当 | Claude Agent SDK |
-| **@bridge-gemini-impl** | **(c) 黄、 implementation role** | `agent-hub-bridge-gemini` repo (= bridge-gemini worker code) の実装担当 | Claude Agent SDK |
+| **@bridge-claude-impl** | **(c) 黄、 implementation role** | `agent-hub-bridges` repo の Claude bridge (= `bridge-claude2/` / `[claude]`) の実装担当 | Claude Agent SDK |
+| **@bridge-gemini-impl** | **(c) 黄、 implementation role** | `agent-hub-bridges` repo の Gemini bridge (= `[gemini]`) の実装担当 | Claude Agent SDK |
 | **@bridge-claude** (= worker process) | **(a) 青、 bridge worker** | Claude Agent SDK ベース daemon process (= persona role を上に乗せて runtime 提供) | Claude Agent SDK 自体 |
 | **@bridge-gemini** / **@bridge-slack** / **@bridge-adk** | **(a) 青、 bridge worker** | 各 LLM / 外部 service との bridge daemon process | Gemini CLI / Slack SDK / Google ADK + LiteLLM |
 | **@ope-ultp1635** (operator) | **OS layer (= 別 visual category)** | **bridge 運用 layer** (= 詳細 §3)、 3 sub-role: Spawn Coordinator / Merge Gatekeeper / Inbox Monitor | Claude Code (= global、 stateful 自体ではない) |
@@ -429,7 +429,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 - **merge しない**: merge 実行は planner / operator が担当
 - **commit しない**: code 編集は実装者の仕事、 reviewer は提案を文章で残す
 
-→ 観察 + 報告に専念、 reviewer 規約は [`agent-hub-reviewer/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-reviewer) 参照。
+→ 観察 + 報告に専念、 reviewer 規約は [`agent-hub-roles/reviewer/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-roles/blob/main/reviewer/CLAUDE.md) 参照 (運用実体は private fork `agent-hub-roles-kaz/reviewer/CLAUDE.md`)。
 
 ### 6.4 2 段ゲート構成 (= 設計 + 実装の場合)
 
@@ -491,7 +491,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 agent-hub ecosystem への **新規 contributor onboarding** 想定 step:
 
 1. **server を localhost で起動**: `agent-hub` repo の `README.md` を参照 (= `npm install` + `npm run dev`)
-2. **bridge を起動**: 既存 bridge (= `agent-hub-bridge-claude` 等) で `--user <peer-name>` 指定起動、 or 新 bridge engine を実装
+2. **bridge を起動**: 既存 bridge (= [`agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) の `bridge-claude2` 等) で `--user <peer-name>` 指定起動、 or 新 bridge engine を実装
 3. **peer として register + 動作確認**: `mcp__agent-hub__register` で handle 登録、 `send_message` + `get_messages` で動作確認
 4. **persona doc を peer の workdir に配置**: `<peer-repo>/CLAUDE.md` (= 振る舞い + 観点 + format) を bridge `--workdir` で指定
 5. **ecosystem に参加**: operator / planner からの task assignment を受け、 PR 起票 + reviewer review → planner self-merge cycle に乗る

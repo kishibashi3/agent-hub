@@ -88,7 +88,7 @@ Pi5 8GB RAM に **常駐する process 群** (= 2026-05 現在の確定構成):
 │   ├── data/app.db                 ← SQLite (mkdir 必要)
 │   ├── packages/scheduler/         ← Python scheduler
 │   └── .env                        ← agent-hub server config (= git ignored)
-├── agent-hub-bridge-slack/         ← bridge-slack repo (別途 clone)
+├── agent-hub-bridge-slack/         ← bridge-slack の venv (= agent-hub-bridges `[slack]` を install)
 │   └── .env                        ← bridge-slack secrets
 └── .config/systemd/user/           ← optional user-level systemd
 ```
@@ -98,6 +98,8 @@ Pi5 8GB RAM に **常駐する process 群** (= 2026-05 現在の確定構成):
 ---
 
 ## 3. Quick deployment overview (= TL;DR for experienced admin)
+
+> **注意 (2026-09-24 時点)**: 本節と §4 は systemd で常駐させる**旧手順**。 今の Pi5 は systemd unit を使っておらず、 repo 直下の [`docker-compose.yml`](../docker-compose.yml) で hub / scheduler 等を ghcr の image から起動している。 bridge-slack は今の Pi5 では動いていない。
 
 ```bash
 # 1. clone + npm install + npm migrate (= agent-hub server)
@@ -115,9 +117,9 @@ EOF
 sudo cp deploy/agent-hub.service /etc/systemd/system/   # (※ deploy/ は本 doc 起票以降の deliverable、 §4.1 参照)
 sudo systemctl daemon-reload && sudo systemctl enable --now agent-hub
 
-# 4. bridge-slack deploy (= 別 repo)
-cd /home/pi && git clone https://github.com/kishibashi3/agent-hub-bridge-slack.git
-cd agent-hub-bridge-slack && npm ci
+# 4. bridge-slack deploy (= agent-hub-bridges の [slack] extra)
+python3 -m venv /home/pi/agent-hub-bridge-slack
+/home/pi/agent-hub-bridge-slack/bin/pip install "agent-hub-bridges[slack] @ git+https://github.com/kishibashi3/agent-hub-bridges.git"
 # .env 作成 + systemd 起動 (= §4.2)
 
 # 5. scheduler deploy (= packages/scheduler/、 詳細は別 README)
@@ -213,15 +215,15 @@ curl http://localhost:3000/health | jq
 
 ### 4.2 bridge-slack (= Slack relay)
 
-bridge-slack は **別 repo** (`kishibashi3/agent-hub-bridge-slack`) で管理。 Pi5 deployment 自体は同 pattern (= clone + npm ci + .env + systemd) で標準化済。
+bridge-slack は [`kishibashi3/agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) monorepo の `[slack]` extra で管理 (= 旧単独 repo は archived)。 install 方法の正本は [agent-hub-bridges の README](https://github.com/kishibashi3/agent-hub-bridges/blob/main/README.md) § Install。
 
-#### Clone + install
+> **注意**: 以下の systemd 手順は旧手順で、 今の Pi5 (= compose 運用、 bridge-slack は未稼働) では検証していない (§3 の注意参照)。
+
+#### Install
 
 ```bash
-cd /home/pi
-git clone https://github.com/kishibashi3/agent-hub-bridge-slack.git
-cd agent-hub-bridge-slack
-npm ci
+python3 -m venv /home/pi/agent-hub-bridge-slack
+/home/pi/agent-hub-bridge-slack/bin/pip install "agent-hub-bridges[slack] @ git+https://github.com/kishibashi3/agent-hub-bridges.git"
 ```
 
 #### Config (= `/home/pi/agent-hub-bridge-slack/.env`)
@@ -251,7 +253,7 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/agent-hub-bridge-slack
 EnvironmentFile=/home/pi/agent-hub-bridge-slack/.env
-ExecStart=/usr/bin/npm start
+ExecStart=/home/pi/agent-hub-bridge-slack/bin/agent-hub-bridge-slack
 Restart=always              # = Slack connection lost → 自動再接続
 RestartSec=15
 StandardOutput=journal
@@ -308,7 +310,7 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 - public 化: AGENT_HUB_EDITION=community + AUTH_MODE=pat 必須 (= PE の trust mode は LAN 専用)、 TLS reverse proxy 推奨
 
 各 bridge の deployment は **bridge ごとの repo README** を参照:
-- `kishibashi3/agent-hub-bridge-claude`
+- [`kishibashi3/agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) (= bridge-claude は `bridge-claude2/`)
 - `kishibashi3/agent-hub-bridge-adk`
 - `kishibashi3/agent-hub-client-litellm`
 
@@ -479,8 +481,7 @@ curl -X POST http://localhost:3000/mcp \
 
 ### 9.2 External (= 別 repo deployment)
 
-- `kishibashi3/agent-hub-bridge-slack` — Slack relay bridge
-- `kishibashi3/agent-hub-bridge-claude` — Claude Agent SDK worker
+- [`kishibashi3/agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) — bridge worker monorepo (= Slack relay は `[slack]`、 Claude worker は `bridge-claude2/`)
 - `kishibashi3/agent-hub-bridge-adk` — Google ADK + LiteLLM worker
 - `kishibashi3/agent-hub-client-litellm` — Generic LLM client
 
