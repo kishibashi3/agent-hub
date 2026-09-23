@@ -819,6 +819,7 @@ def _run_sse_loop_once(
     lines: list[str],
     inbox: list[dict],
     fetch_hook=None,
+    command_hook=None,
 ):
     """fake SSE stream を 1 周だけ流して (pong POST, fetch 回数, 既読化) を返す。
 
@@ -827,7 +828,9 @@ def _run_sse_loop_once(
     `sse_listen_loop` は stream 終了時に worker を join してから
     `time.sleep` に入るため、 戻り値は決定的。
     `fake_fetch_inbox` に blocking 動作を差し込みたい場合は
-    `fetch_hook` を渡す (= starvation 回帰 test 用)。
+    `fetch_hook` を渡す (= starvation 回帰 test 用)。 dispatch 側を遅らせたい
+    場合は `command_hook` を渡す (= issue #382 Minor 1 の回帰 test 用、
+    `(sender, body)` を受け取る)。
     """
     cfg = tmp_path / "schedules.json"
     cfg.write_text("[]", encoding="utf-8")
@@ -853,12 +856,17 @@ def _run_sse_loop_once(
     def fake_sleep(_secs):
         raise _StopSseLoop()
 
+    def fake_handle_inbox_command(*a, **k):
+        commands.append(a[2:4])
+        if command_hook is not None:
+            command_hook(*a[2:4])
+
     with patch.object(sched, "init_session", return_value="sess-fake"), \
          patch.object(sched, "register_self"), \
          patch.object(sched, "subscribe_inbox"), \
          patch.object(sched, "fetch_inbox", side_effect=fake_fetch_inbox), \
          patch.object(sched, "mark_message_read", side_effect=lambda h, s, m: marked.append(m)), \
-         patch.object(sched, "handle_inbox_command", side_effect=lambda *a, **k: commands.append(a[2:4])), \
+         patch.object(sched, "handle_inbox_command", side_effect=fake_handle_inbox_command), \
          patch("scheduler.requests.get", side_effect=fake_get), \
          patch("scheduler.requests.post", side_effect=fake_post), \
          patch("scheduler.time.sleep", side_effect=fake_sleep):
@@ -1082,6 +1090,10 @@ class TestIssue374:
         assert sched._valid_request_id(False) is False
         assert sched._valid_request_id([1]) is False
         assert sched._valid_request_id({"a": 1}) is False
+        # issue #382 S-e: float も拒否する (= JSON-RPC 2.0 の
+        # "Numbers SHOULD NOT contain fractional parts")。 拒否 = pong を出さない
+        # = evict される側なので、 意図を assert 1 行で固定しておく。
+        assert sched._valid_request_id(1.5) is False
 
     def test_try_handle_ping_drops_invalid_id(self) -> None:
         """不正な型の id は queue に積まず WARN して True (= 行は消費済み)。"""
@@ -1258,41 +1270,301 @@ class TestIssue374:
         assert fetch_calls == ["sess-fake"]
 
     # ----------------------------------------------------------
-    # _drain_ping_queue (= 切断時の pong 抑止、 issue #374 Minor 3)
+    # 切断時の pong 抑止 (= issue #374 Minor 3 / #382 Minor 2)
     # ----------------------------------------------------------
 
-    def test_drain_ping_queue_returns_when_empty(self) -> None:
-        """queue が空なら grace を待たず即 return する。"""
-        q: queue.Queue = queue.Queue()
-        stop = threading.Event()
-        started = time.monotonic()
-        sched._drain_ping_queue(q, stop)
-        assert time.monotonic() - started < sched._PING_DRAIN_GRACE_SEC
-
-    def test_drain_ping_queue_gives_up_after_grace(self) -> None:
-        """responder が捌けないまま grace を越えたら諦めて return する
-        (= 以降の pong は stop_event 側で抑止される)。"""
-        q: queue.Queue = queue.Queue()
-        q.put_nowait(1)
-        stop = threading.Event()
-        with patch.object(sched, "_PING_DRAIN_GRACE_SEC", 0.3):
-            started = time.monotonic()
-            sched._drain_ping_queue(q, stop)
-            elapsed = time.monotonic() - started
-        assert 0.3 <= elapsed < 3
-        # 諦めただけで queue の中身は消費していない (= responder が stop で捨てる)
-        assert q.qsize() == 1
-
     def test_stream_close_stops_ping_responder(self, tmp_path: Path) -> None:
-        """stream 終了で responder thread が終了する (= 後続 pong を出さない)。"""
+        """stream 終了で worker thread が終了する (= 後続 pong を出さない)。
+
+        issue #382 S-d: 以前は `after - before` の集合差で判定していたため、
+        前段 test が同名 thread を残していた場合 (= まさに検出したい障害)
+        `before` 側にも入って差分から消え、 vacuous に pass していた。
+        `is_alive()` な同名 thread を直接数える。
+        """
         lines = [
             "event: message",
             "id: 1",
             'data: {"jsonrpc":"2.0","id":1,"method":"ping"}',
             "",
         ]
-        before = {t.name for t in threading.enumerate()}
         _run_sse_loop_once(tmp_path, lines, [])
-        after = {t.name for t in threading.enumerate()}
-        assert "sse-ping-responder" not in after - before
-        assert "sse-inbox-worker" not in after - before
+        alive = [
+            t.name
+            for t in threading.enumerate()
+            if t.name in ("sse-ping-responder", "sse-inbox-worker") and t.is_alive()
+        ]
+        assert alive == []
+
+
+class TestIssue382:
+    """issue #382: PR #375 レビューの Minor 3 件 + Suggestion。
+
+    Minor 1 (inbox 二重 dispatch) が本丸。 Minor 2 は `_drain_ping_queue` 削除、
+    Minor 3 は `[sse-pong]` summary の flush。
+    """
+
+    # ----------------------------------------------------------
+    # Minor 1: join timeout 時の二重 dispatch
+    # ----------------------------------------------------------
+
+    def test_inbox_worker_stops_dispatch_when_abandoned(self) -> None:
+        """abandon_event が立ったら残りの未読を dispatch せずに抜ける。
+
+        修正前は `for m in msgs:` が最後まで回り切るため、 reader が join を
+        諦めて再接続した後も旧 worker が dispatch を続け、 新 worker と同じ DM
+        を二重に処理していた (= `/add foo` が `foo` と `foo-1` になる縮退)。
+        """
+        q: queue.Queue = queue.Queue()
+        q.put_nowait(sched._INBOX_POLL)
+        q.put_nowait(sched._STOP_WORKER)
+        abandon = threading.Event()
+        marked: list = []
+        commands: list = []
+
+        def fake_handle(*a, **k):
+            commands.append(a[2:4])
+            # 1 件目の dispatch 中に reader が join を諦めた状況を模す。
+            abandon.set()
+
+        msgs = [
+            {"id": "m1", "from": "@alice", "message": "/add a * * * * * @x hi"},
+            {"id": "m2", "from": "@bob", "message": "/add b * * * * * @x hi"},
+        ]
+        with patch.object(sched, "fetch_inbox", return_value=msgs), \
+             patch.object(sched, "handle_inbox_command", side_effect=fake_handle), \
+             patch.object(
+                 sched, "mark_message_read",
+                 side_effect=lambda h, s, m: marked.append(m)
+             ):
+            sched._inbox_worker_loop(
+                {}, "sess-1", q, [], [], [], Path("x.json"), abandon
+            )
+
+        # 進行中の 1 件は mark_message_read まで終わらせる (= 未読のまま残すと
+        # 新 worker が再実行してしまい、 塞ぎたかった窓が残る)。
+        assert commands == [("@alice", "/add a * * * * * @x hi")]
+        assert marked == ["m1"]
+
+    def test_stream_close_abandons_slow_inbox_worker(self, tmp_path: Path) -> None:
+        """join が timeout したら reader は旧 worker を打ち切ってから再接続する。
+
+        修正前は join timeout を検知せず再接続していたため、 旧 worker が
+        2 件目以降を dispatch し続けた (= 新 worker と二重実行)。
+        """
+        lines = [
+            "event: message",
+            "id: 1",
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}',
+            "",
+        ]
+        inbox = [
+            {"id": "m1", "from": "@alice", "message": "/list"},
+            {"id": "m2", "from": "@bob", "message": "/list"},
+        ]
+
+        def slow_first_command(_sender, _body):
+            # reader 側の join 上限 (= patch 後 0.1s) を必ず超える長さでブロック。
+            threading.Event().wait(0.5)
+
+        with patch.object(sched, "_WORKER_JOIN_TIMEOUT_SEC", 0.1), \
+             patch.object(sched, "_WORKER_ABANDON_JOIN_SEC", 5):
+            _pongs, _fetch, marked, commands = _run_sse_loop_once(
+                tmp_path, lines, inbox, command_hook=slow_first_command
+            )
+
+        assert commands == [("@alice", "/list")], (
+            "join timeout 後も旧 worker が dispatch を続けている (= 二重 dispatch)"
+        )
+        assert marked == ["m1"]
+
+    def test_stream_close_warns_when_worker_overruns_join(
+        self, tmp_path: Path
+    ) -> None:
+        """打ち切り時に WARN を出し、 検知可能にする。"""
+        lines = [
+            "event: message",
+            "id: 1",
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}',
+            "",
+        ]
+        inbox = [{"id": "m1", "from": "@alice", "message": "/list"}]
+
+        def slow_command(_sender, _body):
+            threading.Event().wait(0.4)
+
+        with patch.object(sched, "_WORKER_JOIN_TIMEOUT_SEC", 0.1), \
+             patch.object(sched, "_WORKER_ABANDON_JOIN_SEC", 5), \
+             patch("scheduler.print") as mock_print:
+            _run_sse_loop_once(
+                tmp_path, lines, inbox, command_hook=slow_command
+            )
+
+        assert any(
+            "inbox worker still running after" in c.args[0]
+            for c in mock_print.call_args_list
+        )
+
+    def test_abandoned_worker_leftovers_are_polled_on_next_connection(
+        self, tmp_path: Path
+    ) -> None:
+        """打ち切りで捨てた残り未読は、 次の connection で 1 回 poll し直す。
+
+        打ち切り後の worker は fetch 済みの残り未読を処理せずに抜けるため、
+        再接続しただけでは **次の DM 到着まで未読が処理されない窓** が残る。
+        新 worker 起動直後に catch-up poll を 1 件積むことで解消する
+        (= 2 本目の stream には通知行が 1 行もない点に注意)。
+        """
+        notify = [
+            "event: message",
+            "id: 1",
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}',
+            "",
+        ]
+        streams = [notify, []]  # 2 本目は無通知 = catch-up poll だけが fetch を起こす
+        inbox = [
+            {"id": "m1", "from": "@alice", "message": "/list"},
+            {"id": "m2", "from": "@bob", "message": "/list"},
+        ]
+
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        fetch_calls: list = []
+        commands: list = []
+        slow_done = threading.Event()
+
+        def fake_get(url, headers=None, stream=None, timeout=None):
+            return _FakeSseResponse(streams.pop(0) if streams else [])
+
+        def fake_handle(*a, **k):
+            commands.append(a[2:4])
+            if not slow_done.is_set():
+                # 1 件目だけ reader の join 上限 (= patch 後 0.1s) を超えて掴む。
+                slow_done.set()
+                threading.Event().wait(0.5)
+
+        sleeps: list = []
+
+        def fake_sleep(_secs):
+            sleeps.append(_secs)
+            if len(sleeps) >= 2:  # 2 connection 分回してから脱出
+                raise _StopSseLoop()
+
+        with patch.object(sched, "_WORKER_JOIN_TIMEOUT_SEC", 0.1), \
+             patch.object(sched, "_WORKER_ABANDON_JOIN_SEC", 5), \
+             patch.object(sched, "init_session", return_value="sess-fake"), \
+             patch.object(sched, "register_self"), \
+             patch.object(sched, "subscribe_inbox"), \
+             patch.object(
+                 sched, "fetch_inbox",
+                 side_effect=lambda h, s: (fetch_calls.append(s), list(inbox))[1],
+             ), \
+             patch.object(sched, "mark_message_read"), \
+             patch.object(sched, "handle_inbox_command", side_effect=fake_handle), \
+             patch("scheduler.requests.get", side_effect=fake_get), \
+             patch("scheduler.requests.post", return_value=_FakePostResponse(202)), \
+             patch("scheduler.time.sleep", side_effect=fake_sleep):
+            try:
+                sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+            except _StopSseLoop:
+                pass
+
+        assert len(fetch_calls) == 2, (
+            "打ち切り後の残り未読が次の connection で取り直されていない "
+            f"(fetch={len(fetch_calls)})"
+        )
+        assert commands[0] == ("@alice", "/list")
+        assert len(commands) >= 2
+
+    # ----------------------------------------------------------
+    # Minor 2: _drain_ping_queue の削除
+    # ----------------------------------------------------------
+
+    def test_drain_ping_queue_removed(self) -> None:
+        """`_drain_ping_queue` は削除済み (= grace の根拠が server 実装上ない)。
+
+        `cancelPendingEviction` の非 test 呼出元は GET handler のみで、 POST
+        (= pong) では eviction はキャンセルされない。 加えて再接続時は必ず
+        `init_session` で新 sid を作るため旧 sid への GET は二度と来ず、 grace は
+        必ず満了する。 残るのは「再接続が最大 1s 遅れる」副作用だけだった。
+        """
+        assert not hasattr(sched, "_drain_ping_queue")
+        assert not hasattr(sched, "_PING_DRAIN_GRACE_SEC")
+
+    # ----------------------------------------------------------
+    # Minor 3: summary の flush
+    # ----------------------------------------------------------
+
+    def test_ping_responder_flushes_summary_on_stop(self) -> None:
+        """閾値に届かないまま stream が切れても summary を 1 行出す。
+
+        修正前は `answered % 100 == 0` のときしか出力しないため、 接続が
+        約 50 分もたない環境では `[sse-pong]` が 1 行も出なかった。
+        """
+        q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        for i in range(3):
+            q.put_nowait(i)
+
+        def fake_respond(_h, _s, request_id):
+            if request_id == 2:
+                stop.set()
+
+        with patch.object(sched, "respond_ping", side_effect=fake_respond):
+            with patch("scheduler.print") as mock_print:
+                sched._ping_responder_loop({}, "sess-1", q, stop)
+
+        pong_logs = [c for c in mock_print.call_args_list if "[sse-pong]" in c.args[0]]
+        assert len(pong_logs) == 1
+        assert "answered 3 pings" in pong_logs[0].args[0]
+
+    def test_ping_responder_no_summary_when_nothing_answered(self) -> None:
+        """1 本も pong を出していない接続では summary を出さない。"""
+        q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        stop.set()
+
+        with patch("scheduler.print") as mock_print:
+            sched._ping_responder_loop({}, "sess-1", q, stop)
+
+        assert not [c for c in mock_print.call_args_list if "[sse-pong]" in c.args[0]]
+
+    # ----------------------------------------------------------
+    # S-c: inbox 通知の coalescing
+    # ----------------------------------------------------------
+
+    def test_inbox_notifications_are_coalesced(self, tmp_path: Path) -> None:
+        """通知 2 連続で queue に積まれる `_INBOX_POLL` は 1 件だけ。
+
+        worker を stub に差し替えて reader が読み終えるまで queue を消費させないのは、 実 worker を
+        走らせると「2 件目の通知を読む前に worker が dequeue 済みか」で
+        `fetch_inbox` の回数が 1 にも 2 にも転ぶため (= どちらも正しい挙動で
+        assert できない)。 間引き判断そのものである `if inbox_queue.empty()` を
+        決定的に見るには、 queue に残したまま 2 件目を読ませる必要がある。
+        通知 1 件 = `fetch_inbox` 1 回は
+        `test_sse_loop_inbox_push_not_regressed` 側で担保済み。
+        """
+        notification = (
+            'data: {"jsonrpc":"2.0","method":"notifications/resources/updated",'
+            '"params":{"uri":"inbox://@scheduler"}}'
+        )
+        lines = ["event: message", notification, "", "event: message", notification, ""]
+        captured: list = []
+
+        def stub_worker(_h, _s, inbox_queue, *_a, **_k):
+            # reader が 2 行読み終えるまで queue を消費しない (= 間引き判断だけを
+            # 決定的に見る)。 reader 側は fake stream なので 0.3s あれば足りる。
+            threading.Event().wait(0.3)
+            while True:
+                item = inbox_queue.get()
+                captured.append(item)
+                if item is sched._STOP_WORKER:
+                    return
+
+        with patch.object(sched, "_inbox_worker_loop", side_effect=stub_worker):
+            _run_sse_loop_once(tmp_path, lines, [])
+
+        assert captured.count(sched._INBOX_POLL) == 1
+        assert captured[-1] is sched._STOP_WORKER
