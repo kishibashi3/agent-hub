@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+import requests
 
 # scheduler モジュールの globals を patch するため import は関数内で行わず
 # モジュールを参照経由で操作する。
@@ -1714,8 +1715,15 @@ class TestIssue368:
     # main loop の fire が共有 session を使う
     # ----------------------------------------------------------
 
-    def _fire_once(self, tmp_path: Path, send_dm_impl) -> list:
-        """due な one-shot entry を 1 回 fire させて、 使われた session を返す。"""
+    def _fire_once(
+        self, tmp_path: Path, send_dm_impl, *, wait_timeout: float = 15.0
+    ) -> tuple[list, list, MagicMock]:
+        """due な one-shot entry を fire させる。
+
+        戻り値は `(send_dm に使われた sid, close_session された sid, save_schedules mock)`。
+        schedule が空になった後の 60s sleep / 再送失敗後の 60s 待ちは shutdown に
+        置き換え、 test が 1 周で抜けるようにする。
+        """
         cfg = tmp_path / "schedules.json"
         past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
         cfg.write_text(
@@ -1731,38 +1739,49 @@ class TestIssue368:
         )
         sched._shutdown_event.clear()
         used: list = []
+        closed: list = []
 
         def fake_send_dm(headers, session_id, to, message, caused_by=None):
             used.append(session_id)
             return send_dm_impl(session_id)
 
+        def stop(*_args, **_kwargs):
+            sched._shutdown_event.set()
+            return True
+
         with patch.object(sched, "build_headers", return_value={}), \
              patch.object(sched, "resolve_user_id", return_value="@test-user"), \
              patch.object(sched, "init_session", return_value="sess-ephemeral"), \
              patch.object(sched, "send_dm", side_effect=fake_send_dm), \
-             patch.object(sched, "save_schedules"), \
+             patch.object(
+                 sched, "close_session",
+                 side_effect=lambda _h, sid: closed.append(sid),
+             ), \
+             patch.object(sched, "save_schedules") as mock_save, \
+             patch.object(sched, "_SESSION_WAIT_TIMEOUT_S", wait_timeout), \
+             patch.object(sched._shutdown_event, "wait", side_effect=stop), \
+             patch("scheduler.time.sleep", side_effect=stop), \
              patch("threading.Thread"), \
              patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
             sched.main()
 
-        return used
+        return used, closed, mock_save
 
     def test_main_fire_uses_shared_session(self, tmp_path: Path) -> None:
         """cron fire は SSE thread の session を使い、 自前 session を作らない。"""
         sched.publish_session("sess-sse")
 
-        def ok(_sid):
-            sched._shutdown_event.set()
-            return {}
-
-        used = self._fire_once(tmp_path, ok)
+        used, closed, mock_save = self._fire_once(tmp_path, lambda _sid: {})
 
         assert used == ["sess-sse"]
+        # 共有 session は SSE thread の所有物なので閉じない。
+        assert closed == []
+        mock_save.assert_called_once()
 
-    def test_main_fire_retries_with_fresh_session_on_failure(
+    def test_main_fire_retries_with_fresh_session_on_404(
         self, tmp_path: Path
     ) -> None:
-        """共有 session での送信が失敗しても、 その fire 分を作り直して再送する。
+        """共有 session が 404 なら、 その fire 分を作り直した session で再送する。
 
         旧実装は `init_session()` で session を差し替えるだけで **その回の DM は
         再送しなかった** (= 実測で確認された「静かに消えるリマインダ」)。
@@ -1771,10 +1790,138 @@ class TestIssue368:
 
         def dead_then_ok(sid):
             if sid == "sess-dead":
-                raise RuntimeError("HTTP 404: Session not found")
-            sched._shutdown_event.set()
+                raise sched.SendDmHttpError(404, "HTTP 404: Session not found")
             return {}
 
-        used = self._fire_once(tmp_path, dead_then_ok)
+        used, closed, mock_save = self._fire_once(tmp_path, dead_then_ok)
 
         assert used == ["sess-dead", "sess-ephemeral"]
+        # 再送用に作った session は送信後に閉じる (= PR #410 review M2)。
+        assert closed == ["sess-ephemeral"]
+        mock_save.assert_called_once()
+
+    def test_main_fire_retries_on_connection_refused(self, tmp_path: Path) -> None:
+        """接続拒否 (= request が server に届いていない) は再送する。"""
+        import urllib3
+
+        sched.publish_session("sess-sse")
+        refused = requests.exceptions.ConnectionError(
+            urllib3.exceptions.MaxRetryError(
+                None, "/mcp",
+                urllib3.exceptions.NewConnectionError(None, "refused"),
+            )
+        )
+
+        def refused_then_ok(sid):
+            if sid == "sess-sse":
+                raise refused
+            return {}
+
+        used, _closed, _save = self._fire_once(tmp_path, refused_then_ok)
+
+        assert used == ["sess-sse", "sess-ephemeral"]
+
+    def test_main_fire_does_not_resend_on_read_timeout(
+        self, tmp_path: Path
+    ) -> None:
+        """ReadTimeout は配送済みの可能性があるので再送しない (= PR #410 review M1)。
+
+        one-shot は entry を残すと次 iteration で即 due になり結局再送されるので、
+        配送済み扱いで消す。
+        """
+        sched.publish_session("sess-sse")
+
+        def read_timeout(_sid):
+            raise requests.exceptions.ReadTimeout("read timed out")
+
+        used, closed, mock_save = self._fire_once(tmp_path, read_timeout)
+
+        assert used == ["sess-sse"]
+        assert closed == []
+        mock_save.assert_called_once()
+
+    def test_main_fire_keeps_one_shot_when_retry_also_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """再送も未配送確実な失敗なら、 one-shot は次 iteration で再 fire できるよう残す。"""
+        sched.publish_session("sess-dead")
+
+        def always_404(_sid):
+            raise sched.SendDmHttpError(404, "HTTP 404: Session not found")
+
+        used, closed, mock_save = self._fire_once(tmp_path, always_404)
+
+        assert used == ["sess-dead", "sess-ephemeral"]
+        assert closed == ["sess-ephemeral"]
+        mock_save.assert_not_called()
+
+    def test_main_fire_falls_back_to_ephemeral_and_closes_it(
+        self, tmp_path: Path
+    ) -> None:
+        """共有 session が未公開なら ephemeral session で送り、 送信後に閉じる。"""
+        used, closed, mock_save = self._fire_once(
+            tmp_path, lambda _sid: {}, wait_timeout=0.1
+        )
+
+        assert used == ["sess-ephemeral"]
+        assert closed == ["sess-ephemeral"]
+        mock_save.assert_called_once()
+
+    # ----------------------------------------------------------
+    # 再送可否の判定 (= PR #410 review M1)
+    # ----------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "exc, expected",
+        [
+            (sched.SendDmHttpError(404, "not found"), True),
+            (sched.SendDmHttpError(400, "bad request"), True),
+            (sched.SendDmHttpError(500, "server error"), False),
+            (requests.exceptions.ConnectTimeout("connect timed out"), True),
+            (requests.exceptions.ReadTimeout("read timed out"), False),
+            # 送信後の切断 (= RemoteDisconnected 等) は配送済みの可能性がある
+            (requests.exceptions.ConnectionError("Connection aborted."), False),
+            (ValueError("unparseable response body"), False),
+        ],
+    )
+    def test_is_undelivered_send_failure(self, exc, expected) -> None:
+        assert sched.is_undelivered_send_failure(exc) is expected
+
+    def test_send_dm_raises_http_error_with_status(self) -> None:
+        """HTTP 200 以外は status 付きの `SendDmHttpError` になる。"""
+        with patch("scheduler.requests.post", return_value=_FakePostResponse(404)):
+            with pytest.raises(sched.SendDmHttpError) as ei:
+                sched.send_dm({}, "sess", "@x", "hi")
+        assert ei.value.status_code == 404
+
+    # ----------------------------------------------------------
+    # wait_for_session (= PR #410 review M4)
+    # ----------------------------------------------------------
+
+    def test_wait_for_session_returns_early_on_shutdown(self) -> None:
+        """shutdown 中は timeout を待たずに抜ける。"""
+        sched._shutdown_event.set()
+        try:
+            started = time.monotonic()
+            assert sched.wait_for_session(10.0) is None
+            assert time.monotonic() - started < 1.0
+        finally:
+            sched._shutdown_event.clear()
+
+    def test_wait_for_session_keeps_waiting_after_spurious_wakeup(self) -> None:
+        """publish → 即 invalidate で起こされても、 残り時間で次の publish を待つ。"""
+        def flap_then_publish() -> None:
+            threading.Event().wait(0.1)
+            # 待機側が間に割り込めないよう、 publish と invalidate を 1 つの
+            # lock 区間で行う (= Condition の既定 lock は RLock)。 待機側は
+            # notify で起きた時点で slot が None を見る。
+            with sched._session_cond:
+                sched.publish_session("sess-flap")
+                sched.invalidate_session("sess-flap")
+            threading.Event().wait(0.2)
+            sched.publish_session("sess-stable")
+
+        t = threading.Thread(target=flap_then_publish, daemon=True)
+        t.start()
+        assert sched.wait_for_session(3.0) == "sess-stable"
+        t.join(timeout=2)
