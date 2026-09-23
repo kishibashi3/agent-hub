@@ -24,6 +24,12 @@ export interface SessionView {
   githubLogin: string;
   subscribedUris: ReadonlySet<string>;
   createdAt: number; // Date.now() at session creation
+  /**
+   * Date.now() at the last POST /mcp on this session (issue #387)。
+   * orphan eviction の回収条件 3 項目のうち 3 番目 (`now - lastActivityAt > ORPHAN_IDLE_TTL_MS`)
+   * がこの値。participants.last_active_at (participant 単位) とは別物なので注意。
+   */
+  lastActivityAt: number;
 }
 
 const ADMIN_HANDLE = '@admin';
@@ -202,7 +208,9 @@ const listSessionsByParticipantInput = z.object({
 export const listSessionsByParticipantTool = {
   name: 'list_sessions_by_participant',
   description:
-    '[admin] 指定 participant の active session 一覧を返す。zombie session 蓄積の観測・issue #114 verify・incident response に使用。tenant 省略 = 全 tenant 横断。',
+    '[admin] 指定 participant の active session 一覧を返す。zombie session 蓄積の観測・issue #114 verify・incident response に使用。tenant 省略 = 全 tenant 横断。' +
+    ' last_activity_at = session 単位 (該当 session への最後の POST /mcp)、last_active_at = participant 単位 (participants テーブルの値) で意味が異なる。' +
+    ' orphan eviction の回収判定 (subscribed_uris 空 / created_at / last_activity_at がいずれも idle TTL 超え) には last_activity_at を使う。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -223,7 +231,7 @@ export const listSessionsByParticipantTool = {
 /**
  * list_sessions_by_participant ハンドラ。
  *
- * @param scope          - テナントスコープ付き DB ハンドル (last_active_at lookup に使用)
+ * @param scope          - テナントスコープ付き DB ハンドル (participant 単位 last_active_at lookup に使用)
  * @param args           - ツール引数 (name, tenant?)
  * @param userId         - 呼び出し元ユーザー ID (@ 付き canonical)
  * @param sessionEntries - sessions Map の Iterable (server.ts から渡す)。
@@ -257,6 +265,9 @@ export function handleListSessionsByParticipant(
     user: string;
     github_login: string;
     created_at: string;
+    /** session 単位 (issue #387): 該当 session への最後の POST /mcp 時刻 */
+    last_activity_at: string;
+    /** participant 単位: participants.last_active_at。session 単位の値ではない */
     last_active_at: string | null;
     subscribed_uris: string[];
     is_alive: boolean;
@@ -281,6 +292,7 @@ export function handleListSessionsByParticipant(
       user: session.userId,
       github_login: session.githubLogin,
       created_at: new Date(session.createdAt).toISOString(),
+      last_activity_at: new Date(session.lastActivityAt).toISOString(),
       last_active_at: participantRow?.last_active_at ?? null,
       subscribed_uris: Array.from(session.subscribedUris),
       // sessions Map にある = SSE alive (= dead session は ping loop が Map から削除済み)

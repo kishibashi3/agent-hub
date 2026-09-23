@@ -20,6 +20,7 @@ function makeSession(overrides: Partial<SessionView> & { userId: string }): Sess
     githubLogin: overrides.userId.replace('@', ''),
     subscribedUris: new Set(),
     createdAt: Date.now(),
+    lastActivityAt: Date.now(),
     ...overrides,
   };
 }
@@ -301,8 +302,9 @@ describe('list_sessions_by_participant', () => {
     expect(JSON.parse(withoutAt.content[0].text as string).count).toBe(1);
   });
 
-  it('出力 shape が仕様通り (session_id / tenant_id / user / github_login / created_at / last_active_at / subscribed_uris / is_alive)', async () => {
+  it('出力 shape が仕様通り (session_id / tenant_id / user / github_login / created_at / last_activity_at / last_active_at / subscribed_uris / is_alive)', async () => {
     const createdAt = Date.now() - 5000;
+    const lastActivityAt = Date.now() - 1000;
     const uris = new Set(['inbox://alice']);
     const entries = makeEntries([
       ['sid-shape', makeSession({
@@ -310,6 +312,7 @@ describe('list_sessions_by_participant', () => {
         tenantDomain: 'default',
         githubLogin: 'alice-gh',
         createdAt,
+        lastActivityAt,
         subscribedUris: uris,
       })],
     ]);
@@ -323,6 +326,8 @@ describe('list_sessions_by_participant', () => {
     expect(s.user).toBe('@alice');
     expect(s.github_login).toBe('alice-gh');
     expect(s.created_at).toBe(new Date(createdAt).toISOString());
+    // issue #387: session 単位 lastActivityAt が ISO 8601 UTC で出る
+    expect(s.last_activity_at).toBe(new Date(lastActivityAt).toISOString());
     expect(s.subscribed_uris).toEqual(['inbox://alice']);
     expect(s.is_alive).toBe(true);
     // last_active_at: register 時に updateLastActiveAt が呼ばれるため non-null
@@ -342,6 +347,42 @@ describe('list_sessions_by_participant', () => {
     );
     const s = JSON.parse(r.content[0].text as string).sessions[0];
     expect(s.last_active_at).not.toBeNull();
+  });
+
+  // ---- issue #387: last_activity_at (session 単位) ------------------------------------
+
+  it('last_activity_at は session ごとに独立した値を返す (participant 単位の last_active_at とは別)', async () => {
+    const fresh = Date.now() - 1_000;
+    const stale = Date.now() - 600_000;
+    const entries = makeEntries([
+      ['sid-fresh', makeSession({ userId: '@alice', createdAt: stale, lastActivityAt: fresh })],
+      ['sid-stale', makeSession({ userId: '@alice', createdAt: stale, lastActivityAt: stale })],
+    ]);
+    const r = await handleListSessionsByParticipant(
+      scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
+    );
+    const sessions = JSON.parse(r.content[0].text as string).sessions as Array<{
+      session_id: string;
+      last_activity_at: string;
+      last_active_at: string | null;
+    }>;
+    const bySid = Object.fromEntries(sessions.map((x) => [x.session_id, x]));
+    expect(bySid['sid-fresh'].last_activity_at).toBe(new Date(fresh).toISOString());
+    expect(bySid['sid-stale'].last_activity_at).toBe(new Date(stale).toISOString());
+    // participant 単位の値は同一 participant の全 session で共通 (= session 単位ではない)
+    expect(bySid['sid-fresh'].last_active_at).toBe(bySid['sid-stale'].last_active_at);
+  });
+
+  it('last_active_at (participant 単位) は削除もリネームもされず従来どおり残る', async () => {
+    const entries = makeEntries([
+      ['sid-a', makeSession({ userId: '@alice' })],
+    ]);
+    const r = await handleListSessionsByParticipant(
+      scopeToTenant(db, 'default'), { name: 'alice' }, '@admin', entries
+    );
+    const s = JSON.parse(r.content[0].text as string).sessions[0];
+    expect(Object.keys(s)).toContain('last_active_at');
+    expect(Object.keys(s)).toContain('last_activity_at');
   });
 
   it('name 空文字は zod でエラー', async () => {
