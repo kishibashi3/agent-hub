@@ -397,6 +397,11 @@ def send_dm(
     issue #221: `caused_by` を指定すると send_message tool arguments に含める。
     scheduler 経由の fire で causal chain が保たれる (= /run_in / /run_at / /run)。
     None の場合は arguments に含めない (= 既存 behavior と互換)。
+
+    issue #422: server はバリデーションエラー等を **HTTP 200 + `result.isError`**
+    で返す (= `src/mcp/tools/send_message.ts` の catch 節)。 HTTP status だけを
+    見ると未配送の DM が成功扱いになるので、 body の `isError` と JSON-RPC の
+    `error` も確認し、 どちらかがあれば `SendDmToolError` を送出する。
     """
     arguments: dict[str, Any] = {"to": to, "message": message}
     if caused_by is not None:
@@ -420,7 +425,35 @@ def send_dm(
             resp.status_code,
             f"send_message failed: HTTP {resp.status_code}: {resp.text[:200]}",
         )
-    return _parse_response_body(resp)
+    body = _parse_response_body(resp)
+    if isinstance(body, dict):
+        rpc_error = body.get("error")
+        if rpc_error is not None:
+            raise SendDmToolError(
+                "send_message failed: JSON-RPC error: "
+                f"{json.dumps(rpc_error, ensure_ascii=False)[:200]}"
+            )
+        result = body.get("result")
+        if isinstance(result, dict) and result.get("isError"):
+            raise SendDmToolError(
+                f"send_message failed: tool error: {_tool_result_text(result)[:200]}"
+            )
+    return body
+
+
+def _tool_result_text(result: dict[str, Any]) -> str:
+    """tools/call result の `content[].text` を 1 行に連結する (= error 表示用)。
+
+    server は error JSON を indent 付きで返すので、 空白を詰めて log 1 行に収める。
+    """
+    content = result.get("content")
+    if not isinstance(content, list):
+        return ""
+    text = " ".join(
+        c["text"] for c in content
+        if isinstance(c, dict) and isinstance(c.get("text"), str)
+    )
+    return " ".join(text.split())
 
 
 class SendDmHttpError(RuntimeError):
@@ -429,6 +462,15 @@ class SendDmHttpError(RuntimeError):
     def __init__(self, status_code: int, message: str) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class SendDmToolError(RuntimeError):
+    """`send_dm` の tools/call を server が HTTP 200 のまま拒否した (= issue #422)。
+
+    `result.isError: true` または JSON-RPC `error`。 server が処理したうえでの
+    拒否なので未配送は確実だが、 同じ入力で再送しても同じ理由で拒否される
+    見込みが高い (= 宛先の形式違反 / 権限エラー等) ので、 fire 経路は再送しない。
+    """
 
 
 # server が tools/call を処理する前に弾く status (= session 不明 / header 不備)。
@@ -447,7 +489,11 @@ def is_undelivered_send_failure(exc: BaseException) -> bool:
     - `ConnectionError` のうち urllib3 の `NewConnectionError` 起因 (= 接続拒否 /
       名前解決失敗)。 `RemoteDisconnected` 等の送信後切断は含めない
     - HTTP 400 / 404 (= `_UNDELIVERED_HTTP_STATUSES`)
+    - `SendDmToolError` (= issue #422、 server が tools/call を拒否した)。 未配送
+      確実だが再送しても通らない見込みが高いので、 fire 経路は再送せずに扱う
     """
+    if isinstance(exc, SendDmToolError):
+        return True
     if isinstance(exc, SendDmHttpError):
         return exc.status_code in _UNDELIVERED_HTTP_STATUSES
     if isinstance(exc, requests.exceptions.ConnectTimeout):
@@ -919,17 +965,20 @@ def handle_inbox_command(
     # issue #282: `/` で始まらない body はエラー応答を返す (= 旧 silently ignore から変更)。
     # scheduler は command-only peer、 自然言語 message を受領しても LLM 処理は行わない。
     # 送信者に「コマンドのみ受け付ける」旨を明示することで意図しない無反応を防ぐ。
-    if not cmd_first.startswith("/"):
-        send_dm(
-            headers,
-            session_id,
-            sender,
-            "@scheduler は自由メッセージは受け付けません。コマンドは /help で確認してください。",
-            caused_by=msg_id,
-        )
-        return
-
     try:
+        # issue #422: この返信も try の中に置く。 外で raise すると呼び出し元
+        # (= `_inbox_worker_loop`) が `mark_message_read` を飛ばし、 同じ DM が
+        # 次の inbox 通知で再処理され続ける。
+        if not cmd_first.startswith("/"):
+            send_dm(
+                headers,
+                session_id,
+                sender,
+                "@scheduler は自由メッセージは受け付けません。コマンドは /help で確認してください。",
+                caused_by=msg_id,
+            )
+            return
+
         if cmd_first == "/ping":
             with _schedules_lock:
                 count = len(schedules)
@@ -2074,6 +2123,9 @@ def main() -> None:
         # 配送済みかもしれない失敗 (= `is_undelivered_send_failure` が False)。
         # 再送せず、 one-shot は二重配送を避けて配送済み扱いで消す。
         maybe_delivered = False
+        # issue #422: server が send_message を拒否した (= `SendDmToolError`)。
+        # 未配送確実だが再送しても同じ理由で拒否されるので、 再送しない。
+        rejected = False
         first_err: Exception | None = None
         fire_label = 'one-shot' if is_one_shot else 'cyclic'
         try:
@@ -2103,12 +2155,13 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 first_err = e
+                rejected = isinstance(e, SendDmToolError)
                 maybe_delivered = not is_undelivered_send_failure(e)
             finally:
                 if ephemeral:
                     close_session(headers, session_id)
 
-        if first_err is not None and not maybe_delivered:
+        if first_err is not None and not maybe_delivered and not rejected:
             # issue #368: ここで諦めると「エラーも出ずに消えるリマインダ」 が
             # 残る。 共有 session が切断 / evict されていた場合に備え、 その 1 回
             # 限りの session を作り直して即座に再送する。 旧実装は session を
@@ -2134,8 +2187,9 @@ def main() -> None:
                 )
                 # init_session の失敗は未配送。 send_dm の失敗は再度判定する。
                 if retry_sid is not None:
+                    rejected = isinstance(e2, SendDmToolError)
                     maybe_delivered = not is_undelivered_send_failure(e2)
-                if not maybe_delivered:
+                if not maybe_delivered and not rejected:
                     # hub 自体が落ちている場合の hot loop 回避 (= one-shot は
                     # send_ok=False で entry が残り、 次 iteration で即 due になる)。
                     _shutdown_event.wait(60)
@@ -2149,6 +2203,12 @@ def main() -> None:
                 "the failure may have happened after delivery",
                 file=sys.stderr,
             )
+        if rejected:
+            print(
+                f"[ERR] name='{fire_name}' ({fire_label}) gave up this fire: "
+                "the hub rejected send_message",
+                file=sys.stderr,
+            )
 
         # state update (= one-shot 削除 or cyclic next_time advance)
         with _schedules_lock:
@@ -2160,7 +2220,9 @@ def main() -> None:
                 continue
             # maybe_delivered の one-shot も消す (= entry を残すと次 iteration で
             # 即 due になり結局再送される。 parse 失敗が恒常的だと毎周期 DM が届く)。
-            if is_one_shot and (send_ok or maybe_delivered):
+            # issue #422: rejected の one-shot も消す (= 残すと次 iteration で
+            # 即 due になり、 拒否される送信を待ちなしで繰り返す)。
+            if is_one_shot and (send_ok or maybe_delivered or rejected):
                 # one-shot fire 成功 → auto-delete + persist
                 del schedules[fire_target_idx]
                 del iters[fire_target_idx]
