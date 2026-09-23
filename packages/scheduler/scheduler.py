@@ -1506,7 +1506,9 @@ def sse_listen_loop(
        mark_message_read は `_inbox_worker_loop` が別 thread で実行)
     5. server→client の MCP `ping` request には空 result を返す (= issue #362。
        実 POST は `_ping_responder_loop` が別 thread で実行)
-    6. 切断時は worker を畳んでから 3 秒待って再接続
+    6. 切断時は worker を畳んでから待って再接続する。待ち時間は経路で違う:
+       stream が正常に閉じたときは 3 秒、 例外 (= issue #412 の read timeout を
+       含む) で抜けたときは外側 `except` で 5 秒
 
     watch.sh の SSE long-lived 接続 pattern を Python 移植 (= issue #65)。
     issue #368: GET stream が生きている区間だけ、 この connection の sid を

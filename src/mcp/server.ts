@@ -737,6 +737,12 @@ const ORPHAN_IDLE_TTL_MS = 5 * 60_000;
  * GET /mcp ストリームに本間隔で `: keepalive\n\n` を書き込み、
  * HTTP プロキシ (fly.io 等) の idle timeout をリセットする。
  * SSE comment はクライアントが無視するため MCP プロトコルへの影響なし。
+ *
+ * この値に依存する client がある (issue #426)。scheduler の `SSE_READ_TIMEOUT_SEC`
+ * (60s、issue #412) はこの値の 4 倍を前提にしており、stream から何も読めない時間が
+ * 60s を超えたら half-open とみなして再接続する。延ばすときは scheduler 側も
+ * 合わせること。合わせずに 60s 以上に延ばすと、健全な scheduler の SSE が read
+ * timeout で切れて再接続を繰り返す (エラーは出ない)。
  */
 export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
