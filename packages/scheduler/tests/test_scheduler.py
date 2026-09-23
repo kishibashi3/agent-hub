@@ -1718,8 +1718,12 @@ class TestIssue368:
     def _fire_once(
         self, tmp_path: Path, send_dm_impl, *, wait_timeout: float = 15.0,
         entry: dict | None = None, sleeps: list | None = None,
+        entries: list | None = None,
     ) -> tuple[list, list, MagicMock]:
         """due な one-shot entry (= `entry` 指定時はそれ) を fire させる。
+
+        `entries` を渡すとそれらを全て schedule に載せる (= 1 回の `main()` で
+        複数 fire させる)。
 
         戻り値は `(send_dm に使われた sid, close_session された sid, save_schedules mock)`。
         schedule が空になった後の 60s sleep / 再送失敗後の 60s 待ちは shutdown に
@@ -1737,7 +1741,9 @@ class TestIssue368:
                 "owner": "@ope",
                 "one_shot": True,
             }
-        cfg.write_text(json.dumps([entry]), encoding="utf-8")
+        if entries is None:
+            entries = [entry]
+        cfg.write_text(json.dumps(entries), encoding="utf-8")
         sched._shutdown_event.clear()
         used: list = []
         closed: list = []
@@ -1860,6 +1866,92 @@ class TestIssue368:
         assert used == ["sess-dead", "sess-ephemeral"]
         assert closed == ["sess-ephemeral"]
         mock_save.assert_not_called()
+
+    # ----------------------------------------------------------
+    # 共有 sid が 404 になったら main 側でも取り下げる (= issue #417)
+    # ----------------------------------------------------------
+
+    def test_main_fire_invalidates_shared_session_on_404(
+        self, tmp_path: Path
+    ) -> None:
+        """共有 sid が 404 なら、 SSE thread を待たずに main 側で取り下げる。"""
+        sched.publish_session("sess-dead")
+
+        def dead_then_ok(sid):
+            if sid == "sess-dead":
+                raise sched.SendDmHttpError(404, "HTTP 404: Session not found")
+            return {}
+
+        self._fire_once(tmp_path, dead_then_ok)
+
+        assert sched.current_session_id() is None
+
+    def test_main_fire_does_not_post_to_stale_sid_after_404(
+        self, tmp_path: Path
+    ) -> None:
+        """404 の後の fire は stale sid に POST せず、 ephemeral fallback に進む。
+
+        SSE thread は stream の終了にまだ気づいていない (= 再公開も取り下げも
+        しない) 想定。 旧実装は 2 回目も `sess-dead` に POST して 404 → 再送を
+        繰り返していた。
+        """
+        sched.publish_session("sess-dead")
+        past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+        entries = [
+            {
+                "name": f"fire-417-{i}",
+                "run_at": past,
+                "to": "@planner",
+                "message": "remind-me",
+                "owner": "@ope",
+                "one_shot": True,
+            }
+            for i in range(2)
+        ]
+
+        def dead_then_ok(sid):
+            if sid == "sess-dead":
+                raise sched.SendDmHttpError(404, "HTTP 404: Session not found")
+            return {}
+
+        used, closed, _save = self._fire_once(
+            tmp_path, dead_then_ok, wait_timeout=0.1, entries=entries
+        )
+
+        # 1 回目: stale sid → 404 → 再送。 2 回目: 待機後に ephemeral で送る。
+        assert used == ["sess-dead", "sess-ephemeral", "sess-ephemeral"]
+        assert used.count("sess-dead") == 1
+        assert closed == ["sess-ephemeral", "sess-ephemeral"]
+
+    def test_main_fire_404_keeps_newer_shared_session(
+        self, tmp_path: Path
+    ) -> None:
+        """404 までの間に SSE thread が新しい sid を公開していたら、 それは消さない。"""
+        sched.publish_session("sess-dead")
+
+        def dead_after_reconnect(sid):
+            if sid == "sess-dead":
+                # SSE thread が再接続して新しい sid を公開した後に 404 が返る
+                sched.publish_session("sess-new")
+                raise sched.SendDmHttpError(404, "HTTP 404: Session not found")
+            return {}
+
+        self._fire_once(tmp_path, dead_after_reconnect)
+
+        assert sched.current_session_id() == "sess-new"
+
+    def test_main_fire_keeps_shared_session_on_non_404(
+        self, tmp_path: Path
+    ) -> None:
+        """404 以外の失敗 (= 配送済みかもしれない ReadTimeout) では取り下げない。"""
+        sched.publish_session("sess-sse")
+
+        def read_timeout(_sid):
+            raise requests.exceptions.ReadTimeout("read timed out")
+
+        self._fire_once(tmp_path, read_timeout)
+
+        assert sched.current_session_id() == "sess-sse"
 
     def test_main_fire_falls_back_to_ephemeral_and_closes_it(
         self, tmp_path: Path
