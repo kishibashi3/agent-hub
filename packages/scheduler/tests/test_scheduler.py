@@ -1880,21 +1880,27 @@ class TestIssue368:
     @pytest.mark.parametrize(
         "exc, expected",
         [
-            (sched.SendDmHttpError(404, "not found"), "retryable"),
-            (sched.SendDmHttpError(400, "bad request"), "retryable"),
-            (sched.SendDmHttpError(500, "server error"), "maybe_delivered"),
-            (requests.exceptions.ConnectTimeout("connect timed out"), "retryable"),
-            (requests.exceptions.ReadTimeout("read timed out"), "maybe_delivered"),
+            (sched.SendDmHttpError(404, "not found"), sched.SendFailureClass.RETRYABLE),
+            (sched.SendDmHttpError(400, "bad request"), sched.SendFailureClass.RETRYABLE),
+            (sched.SendDmHttpError(500, "server error"), sched.SendFailureClass.MAYBE_DELIVERED),
+            (
+                requests.exceptions.ConnectTimeout("connect timed out"),
+                sched.SendFailureClass.RETRYABLE,
+            ),
+            (
+                requests.exceptions.ReadTimeout("read timed out"),
+                sched.SendFailureClass.MAYBE_DELIVERED,
+            ),
             # 送信後の切断 (= RemoteDisconnected 等) は配送済みの可能性がある
             (
                 requests.exceptions.ConnectionError("Connection aborted."),
-                "maybe_delivered",
+                sched.SendFailureClass.MAYBE_DELIVERED,
             ),
-            (ValueError("unparseable response body"), "maybe_delivered"),
+            (ValueError("unparseable response body"), sched.SendFailureClass.MAYBE_DELIVERED),
         ],
     )
     def test_classify_send_failure(self, exc, expected) -> None:
-        assert sched.classify_send_failure(exc) == expected
+        assert sched.classify_send_failure(exc) is expected
 
     def test_send_dm_raises_http_error_with_status(self) -> None:
         """HTTP 200 以外は status 付きの `SendDmHttpError` になる。"""
@@ -2157,7 +2163,8 @@ class TestIssue422:
 
     def test_tool_error_is_classified_as_rejected(self) -> None:
         """拒否は未配送確実だが再送しない (= 配送済み扱いで握りつぶさない)。"""
-        assert sched.classify_send_failure(sched.SendDmToolError("x")) == "rejected"
+        failure = sched.classify_send_failure(sched.SendDmToolError("x"))
+        assert failure is sched.SendFailureClass.REJECTED
 
     # ----------------------------------------------------------
     # main loop の fire
