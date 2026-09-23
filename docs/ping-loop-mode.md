@@ -105,5 +105,3 @@ cycle の結果を 1 行にまとめたもの。次のどれかがあった cycl
   `observedFailures` が減った理由をログから読める (#416)
 - 何も起きない cycle では summary は出ない。ping loop には orphan eviction のような heartbeat ログがないため、
   ログが出ないことだけでは「非応答 session なし」と「loop 停止」を区別できない。起動ログで mode を確認する
-
-既知の問題: ping 待ちの間に消えた session が、cycle が重なると失敗記録に戻り、prune が 2 回数えられることがある (#431)。
