@@ -898,6 +898,40 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       warn.mockRestore();
     });
 
+    it('失敗中の A が消え B が失敗し続ける cycle → observedPruned=1 / observedTransitions=0 (issue #432)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const stillDead = makeDeadSession();
+      _addSessionForTesting('mix-gone-a', makeDeadSession());
+      _addSessionForTesting('mix-stay-b', stillDead);
+      await runOneActivePingCycle('observe-only');
+
+      // A だけが eviction / close で消え、B は同じ session のまま落ち続ける。
+      _clearSessionsForTesting();
+      _addSessionForTesting('mix-stay-b', stillDead);
+      const stats = await runOneActivePingCycle('observe-only');
+      expect(stats.observedPruned).toBe(1);
+      expect(stats.observedTransitions).toBe(0);
+      expect(stats.observedFailures).toBe(1);
+      expect(_getObservedFailingSessionsForTests()).toEqual(['mix-stay-b']);
+      warn.mockRestore();
+    });
+
+    it('失敗中の A が消え C が新しく失敗する cycle → observedPruned=1 / observedTransitions=1 (issue #432)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('mix-gone-a2', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+
+      // A が消え、同じ cycle で C が初めて落ちる。
+      _clearSessionsForTesting();
+      _addSessionForTesting('mix-new-c', makeDeadSession());
+      const stats = await runOneActivePingCycle('observe-only');
+      expect(stats.observedPruned).toBe(1);
+      expect(stats.observedTransitions).toBe(1);
+      expect(stats.observedFailures).toBe(1);
+      expect(_getObservedFailingSessionsForTests()).toEqual(['mix-new-c']);
+      warn.mockRestore();
+    });
+
     it('同数の復帰 + 新規失敗でも observedTransitions が立つ (= 相殺されない、 issue #390)', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -1102,6 +1136,27 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       expect(_getObservedFailingSessionsForTests()).toEqual([]);
       // もう存在しない session に「NOT disconnecting」を出さない
       expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('失敗中の A が消え B が失敗し続ける cycle → summary が出る (= prune と失敗の継続が同じ cycle、 issue #432)', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      const stillDead = makeSession(false);
+      _addSessionForTesting('sum-mix-a', makeSession(false));
+      _addSessionForTesting('sum-mix-b', stillDead);
+      startActivePingLoop();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 新規失敗 2 件 → 出る
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 遷移なし → 出ない
+      expect(summaryLines(log)).toHaveLength(1);
+
+      // A だけが消え、B は落ち続ける (= 遷移は 0、prune だけがある cycle)
+      _clearSessionsForTesting();
+      _addSessionForTesting('sum-mix-b', stillDead);
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      const lines = summaryLines(log);
+      expect(lines).toHaveLength(2);
+      expect(lines[1]).toContain('observedFailures=1');
+      expect(lines[1]).toContain('observedPruned=1');
     });
   });
 });
