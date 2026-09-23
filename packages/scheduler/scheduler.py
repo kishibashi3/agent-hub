@@ -103,8 +103,9 @@ _shutdown_event = threading.Event()
 _session_cond = threading.Condition()
 _shared_session_id: str | None = None
 
-# fire 時に共有 session の publish を待つ上限 (= SSE thread の reconnect は 3-5s
-# 間隔なので、 その 1-2 周期分)。 超えた場合は ephemeral session に fallback する。
+# fire 時に共有 session の publish を待つ上限 (= SSE thread の 1 回目の reconnect
+# は 3-5s 後なので、 その 1-2 周期分。 連続失敗中は backoff で最大 60s 空くが、
+# その間は ephemeral session に fallback する)。
 _SESSION_WAIT_TIMEOUT_S = 15.0
 
 # 待機中に `_shutdown_event` を見る間隔。 signal handler から Condition を
@@ -670,6 +671,24 @@ def mark_message_read(
 # fire に公開されたままになっていた。
 SSE_CONNECT_TIMEOUT_SEC = 10
 SSE_READ_TIMEOUT_SEC = 60
+
+# SSE 再接続の backoff 上限 (秒) (= issue #427)。 再接続は正常 close なら 3s、
+# 失敗なら 5s を基準にし、 GET stream を確立できないまま連続で失敗するたびに
+# 2 倍にする (5s → 10s → 20s → 40s → 60s)。 hub が凍結していても TCP の accept
+# は通る状態 (SIGSTOP / GC の長時間停止) では、 試行ごとの `initialize` が hub
+# 側に溜まり、 凍結が解けたあとに subscribe されない orphan session になる。
+# 固定間隔だと orphan が凍結時間に比例して増えるため、 間隔を広げて抑える。
+# GET が 200 で確立したら健全とみなして基準に戻す (= 健全時の 1 回目の再接続は
+# 従来どおり 3s / 5s)。 凍結中は `initialize` が timeout するので GET まで進まず、
+# 戻らない。 「最初の行が届いたら」 戻すと、 確立後 keepalive (15s) より前に
+# hub が再起動したとき次の再接続が 10s に伸びる (= 実測)。 scheduler は
+# 1 プロセスなので jitter は入れない。
+SSE_RECONNECT_MAX_DELAY_SEC = 60
+
+
+def _reconnect_delay(base_sec: float, consecutive_failures: int) -> float:
+    """連続失敗回数に応じた SSE 再接続の待ち秒数を返す (= issue #427)。"""
+    return min(base_sec * 2 ** consecutive_failures, SSE_RECONNECT_MAX_DELAY_SEC)
 
 # SSE 行の fast-check hint。 `data: {"jsonrpc":"2.0","id":N,"method":"ping"}` を
 # JSON parse する前に文字列含有で絞る (= 既存の
@@ -1552,6 +1571,9 @@ def sse_listen_loop(
     # issue #368: outer except から invalidate するため、 while の外で束縛しておく
     # (= 初回 `init_session()` が raise した場合に NameError にしない)。
     sid: str | None = None
+    # issue #427: GET stream を確立できないまま再接続した回数。 GET が 200 で
+    # 確立したら 0 に戻す。 再接続の待ちは `_reconnect_delay()` でこれに応じて伸ばす。
+    consecutive_failures = 0
     while True:
         try:
             sid = init_session(headers)
@@ -1572,11 +1594,13 @@ def sse_listen_loop(
                 subscribe_inbox(headers, sid, user_id)
                 print(f"[sse-subscribed] inbox://@{user_id}")
             except Exception as e:
+                delay = _reconnect_delay(5, consecutive_failures)
+                consecutive_failures += 1
                 print(
-                    f"[ERR sse] subscribe failed: {e}, reconnect in 5s",
+                    f"[ERR sse] subscribe failed: {e}, reconnect in {delay}s",
                     file=sys.stderr,
                 )
-                time.sleep(5)
+                time.sleep(delay)
                 continue
 
             # 3. long-lived GET で SSE stream 受信
@@ -1599,13 +1623,18 @@ def sse_listen_loop(
                         f"{resp.text[:200] if hasattr(resp, 'text') else ''}",
                         file=sys.stderr,
                     )
-                    time.sleep(5)
+                    delay = _reconnect_delay(5, consecutive_failures)
+                    consecutive_failures += 1
+                    time.sleep(delay)
                     continue
 
                 # issue #368: GET stream が 200 で確立した時点で、 この sid を
                 # cron fire 用に公開する。 main thread はこれを読んで fire する
                 # (= POST-only session を持たない)。
                 publish_session(sid)
+                # issue #427: initialize / subscribe / GET が通った = hub は
+                # 応答している。 backoff を基準に戻す。
+                consecutive_failures = 0
 
                 # 4. worker thread 起動 (= issue #374 Minor 2)。
                 # reader thread は「行を読んで振り分ける」だけにし、 POST を
@@ -1730,19 +1759,24 @@ def sse_listen_loop(
                                 pending_inbox_poll = True
 
             # SSE stream closed: reconnect
+            delay = _reconnect_delay(3, consecutive_failures)
+            consecutive_failures += 1
             print(
-                f"[sse-reconnect] stream closed, reconnect in 3s", file=sys.stderr
+                f"[sse-reconnect] stream closed, reconnect in {delay}s",
+                file=sys.stderr,
             )
-            time.sleep(3)
+            time.sleep(delay)
 
         except Exception as e:
             # issue #368: 公開済みのまま例外で抜ける経路 (= GET 確立後 ~ 内側
             # try 到達前) を塞ぐ。 世代が進んでいれば no-op。
             invalidate_session(sid)
+            delay = _reconnect_delay(5, consecutive_failures)
+            consecutive_failures += 1
             print(
-                f"[ERR sse-loop] {e}, reconnect in 5s", file=sys.stderr
+                f"[ERR sse-loop] {e}, reconnect in {delay}s", file=sys.stderr
             )
-            time.sleep(5)
+            time.sleep(delay)
 
 
 # ============================================================
