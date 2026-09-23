@@ -1353,8 +1353,12 @@ export const ORPHAN_EVICTION_HEARTBEAT_MS = 30 * 60_000;
  * `AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS` に許容する最小値 (ms) (issue #386)。
  *
  * heartbeat は「journal を汚さない低頻度ログ」が前提。これを下回る値は秒/分を ms と
- * 取り違えた設定ミス (例: `30` = 30ms) の可能性が高く、cycle ごとに 1 行出る状態に
- * 縮退する。`ORPHAN_EVICTION_INTERVAL_MIN_MS` と同じく fail-fast にする (issue #384)。
+ * 取り違えた設定ミス (例: `30` = 30ms) の可能性が高いため、
+ * `ORPHAN_EVICTION_INTERVAL_MIN_MS` と同じく fail-fast にする (issue #384)。
+ *
+ * 注: 判定は cycle 完了時にしか行わないため、heartbeat が実効 interval 以下なら
+ * この下限以上でも cycle ごとに 1 行出る (例: `1800` = 1.8s → 既定 interval 30s ごと)。
+ * 1 cycle 1 行が上限なので暴走はしないが、この下限はそれを防ぐものではない。
  */
 export const ORPHAN_EVICTION_HEARTBEAT_MIN_MS = 1_000;
 
@@ -1362,8 +1366,8 @@ export const ORPHAN_EVICTION_HEARTBEAT_MIN_MS = 1_000;
  * `AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS` に許容する最大値 (ms) (issue #386)。
  *
  * heartbeat は `setInterval` の delay ではなく経過時間比較に使うため 32bit 制約は
- * かからないが、桁ミス (例: `18000000000`) が「事実上 heartbeat なし」に黙って倒れるのを
- * 避けるため、interval と同じ上限で弾く。
+ * かからない。上限は interval と揃えただけで、上限値 (≈24.8 日) 自体も事実上
+ * heartbeat なしに近い。弾けるのはそれを超える桁ミス (例: `18000000000`) のみ。
  */
 export const ORPHAN_EVICTION_HEARTBEAT_MAX_MS = 2_147_483_647;
 
