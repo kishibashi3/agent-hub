@@ -3,6 +3,7 @@ import {
   isPingLoopDisabled,
   resolvePingLoopMode,
   _resetPingLoopObserveStateForTests,
+  _getObservedFailingSessionsForTests,
   startActivePingLoop,
   stopActivePingLoop,
   runOneActivePingCycle,
@@ -840,6 +841,76 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       const stats = await runOneActivePingCycle();
       expect(stats.observedFailures).toBe(1);
       expect(session.transport.close).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('消滅した session の sid は次 cycle 冒頭で prune される (= 単調増加させない、 issue #390)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('gone-1', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      expect(_getObservedFailingSessionsForTests()).toEqual(['gone-1']);
+
+      // ping 復帰ではなく orphan eviction / GET close eviction / transport.onclose で
+      // session が消えた場合 (= sessions Map から居なくなる)。
+      _clearSessionsForTesting();
+      await runOneActivePingCycle('observe-only');
+      expect(_getObservedFailingSessionsForTests()).toEqual([]);
+      warn.mockRestore();
+    });
+
+    it('prune 後に同 sid が再び落ちれば warning が再度出る (= 記録が閉じている、 issue #390)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('gone-2', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      expect(warn).toHaveBeenCalledOnce();
+
+      _clearSessionsForTesting();
+      await runOneActivePingCycle('observe-only');
+
+      _addSessionForTesting('gone-2', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
+    });
+
+    it('生きている session の sid は prune されない (= 失敗記録を維持する)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('stay-1', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      await runOneActivePingCycle('observe-only');
+      expect(_getObservedFailingSessionsForTests()).toEqual(['stay-1']);
+      expect(warn).toHaveBeenCalledOnce();
+      warn.mockRestore();
+    });
+
+    it('同数の復帰 + 新規失敗でも observedTransitions が立つ (= 相殺されない、 issue #390)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      _addSessionForTesting('swap-old', makeDeadSession());
+      _addSessionForTesting('swap-new', makeAliveSession());
+      const first = await runOneActivePingCycle('observe-only');
+      expect(first.observedFailures).toBe(1);
+      expect(first.observedTransitions).toBe(1);
+
+      // 同一 cycle で swap-old が復帰し、 swap-new が新規に落ちる (= 件数は 1 のまま)。
+      _clearSessionsForTesting();
+      _addSessionForTesting('swap-old', makeAliveSession());
+      _addSessionForTesting('swap-new', makeDeadSession());
+      const second = await runOneActivePingCycle('observe-only');
+      expect(second.observedFailures).toBe(first.observedFailures); // 件数は変化しない
+      expect(second.observedTransitions).toBe(2); // 復帰 1 + 新規失敗 1
+      warn.mockRestore();
+      log.mockRestore();
+    });
+
+    it('状態遷移が無い cycle は observedTransitions=0 (= summary を抑制できる)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('steady-1', makeDeadSession());
+      const first = await runOneActivePingCycle('observe-only');
+      expect(first.observedTransitions).toBe(1);
+      const second = await runOneActivePingCycle('observe-only');
+      expect(second.observedFailures).toBe(1);
+      expect(second.observedTransitions).toBe(0);
       warn.mockRestore();
     });
 
