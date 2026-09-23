@@ -144,6 +144,21 @@ function byteLength(value: unknown): number {
 }
 
 /**
+ * messages 配列を「1 メッセージ = 1 行」で直列化する (PR #400、operator 判断 (A))。
+ *
+ * pretty-print は応答を大きくし、compact (1 行) は text 全体が 1 行になって
+ * Claude Code の退避ファイルが `Read` の offset/limit で読めなくなる。
+ * メッセージ間だけを改行で区切り、メッセージの中は整形しないことで、最長行を
+ * 最大の 1 件ぶんに抑えつつ parse 結果は従来と同じに保つ。
+ *
+ * 引数なし / envelope のどちらの経路もこの形を使う (形は 1 つ)。
+ */
+function stringifyMessages(items: FormattedMessage[]): string {
+  if (items.length === 0) return '[]';
+  return `[\n${items.map((m) => JSON.stringify(m)).join(',\n')}\n]`;
+}
+
+/**
  * 1 件だけで budget を超える message の body を budget まで切り詰める (issue #388)。
  *
  * 「1 件目だけで budget を超える場合は、その 1 件を必ず返す」ための処理。返さないと
@@ -198,16 +213,16 @@ function applyByteBudget(
   budget: number
 ): FormattedMessage[] {
   const included: FormattedMessage[] = [];
-  // 配列の括弧 2 文字ぶん
-  let used = 2;
+  // stringifyMessages() の外枠 `[\n` と `\n]` の 4 bytes ぶん
+  let used = 4;
 
   for (const item of items) {
-    // 2 件目以降は区切りのカンマ 1 文字ぶんを加算する
-    const cost = byteLength(item) + (included.length > 0 ? 1 : 0);
+    // 2 件目以降は区切りの `,\n` 2 bytes ぶんを加算する
+    const cost = byteLength(item) + (included.length > 0 ? 2 : 0);
     if (used + cost > budget) {
       if (included.length === 0) {
         // 1 件目だけで超過: body を切ってでも必ず 1 件返す
-        included.push(truncateMessageToBudget(item, budget - 2));
+        included.push(truncateMessageToBudget(item, budget - 4));
       }
       break;
     }
@@ -341,7 +356,7 @@ export function handleGetMessages(
     const maxBytes = getGetMessagesMaxBytes();
 
     if (!useEnvelope) {
-      const text = JSON.stringify(formattedMessages);
+      const text = stringifyMessages(formattedMessages);
       const bytes = Buffer.byteLength(text, 'utf8');
       if (bytes > maxBytes) {
         // Phase 1 では引数なし呼び出しを打ち切らない (挙動不変) 代わりに、
@@ -376,13 +391,16 @@ export function handleGetMessages(
       content: [
         {
           type: 'text',
-          text: JSON.stringify({
-            messages: page,
-            returned: page.length,
-            has_more: hasMore,
-            remaining,
-            next_cursor: hasMore && lastCursor ? encodeCursor(lastCursor) : null,
-          }),
+          // messages だけを 1 メッセージ 1 行で埋め込み、外枠のフィールドは
+          // 従来と同じ順で最終行に続ける
+          text:
+            `{"messages":${stringifyMessages(page)}` +
+            `,"returned":${page.length}` +
+            `,"has_more":${hasMore}` +
+            `,"remaining":${remaining}` +
+            `,"next_cursor":${JSON.stringify(
+              hasMore && lastCursor ? encodeCursor(lastCursor) : null
+            )}}`,
         },
       ],
     };

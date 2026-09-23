@@ -59,6 +59,11 @@ describe('get_messages paging (issue #388)', () => {
     return ids;
   }
 
+  /** 応答の messages 部分と同じ「1 メッセージ = 1 行」の直列化 (budget の計測対象) */
+  function linesOf(messages: unknown[]): string {
+    return `[\n${messages.map((m) => JSON.stringify(m)).join(',\n')}\n]`;
+  }
+
   function call(args: unknown) {
     const result = handleGetMessages(scopeToTenant(db, 'default'), args, '@bob');
     return {
@@ -101,11 +106,26 @@ describe('get_messages paging (issue #388)', () => {
       expect(warn).not.toHaveBeenCalled();
     });
 
-    it('pretty-print を廃止しても既存 client の parse 結果は変わらない', () => {
-      seed(1);
+    it('1 メッセージ = 1 行で返り、既存 client の parse 結果は変わらない', () => {
+      seed(3, (i) => `line1-${i}\nline2 "q" \\`);
       const { result, payload } = call({});
-      expect(result.content[0].text).not.toContain('\n');
+      const lines = (result.content[0].text as string).split('\n');
+
+      // `[` / メッセージ 3 行 / `]`。本文中の改行は JSON escape されて行を割らない
+      expect(lines).toHaveLength(5);
+      expect(lines[0]).toBe('[');
+      expect(lines[4]).toBe(']');
+      lines.slice(1, 4).forEach((line, i) => {
+        const item = JSON.parse(line.replace(/,$/, ''));
+        expect(item.message).toBe(`line1-${i}\nline2 "q" \\`);
+      });
       expect(payload[0].from).toBe('@alice');
+    });
+
+    it('未読 0 件は [] の 1 行', () => {
+      const { result, payload } = call({});
+      expect(result.content[0].text).toBe('[]');
+      expect(payload).toEqual([]);
     });
   });
 
@@ -209,6 +229,25 @@ describe('get_messages paging (issue #388)', () => {
       ]);
       expect(second.remaining).toBe(1);
     });
+
+    it('envelope でも messages は 1 メッセージ = 1 行で、外枠は最終行に続く', () => {
+      seed(3);
+      const { result, payload } = call({ limit: 2 });
+      const lines = (result.content[0].text as string).split('\n');
+
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe('{"messages":[');
+      expect(JSON.parse(lines[1].replace(/,$/, '')).message).toBe('msg-0');
+      expect(JSON.parse(lines[2]).message).toBe('msg-1');
+      expect(lines[3]).toMatch(/^\],"returned":2,"has_more":true,"remaining":1,"next_cursor":"/);
+      expect(Object.keys(payload)).toEqual([
+        'messages',
+        'returned',
+        'has_more',
+        'remaining',
+        'next_cursor',
+      ]);
+    });
   });
 
   describe('byte budget', () => {
@@ -224,7 +263,7 @@ describe('get_messages paging (issue #388)', () => {
       expect(payload.remaining).toBe(20 - payload.returned);
 
       const bytes = Buffer.byteLength(
-        JSON.stringify(payload.messages),
+        linesOf(payload.messages),
         'utf8'
       );
       expect(bytes).toBeLessThanOrEqual(1024);
@@ -246,7 +285,7 @@ describe('get_messages paging (issue #388)', () => {
       expect(huge.startsWith(item.message)).toBe(true);
 
       const bytes = Buffer.byteLength(
-        JSON.stringify(payload.messages),
+        linesOf(payload.messages),
         'utf8'
       );
       expect(bytes).toBeLessThanOrEqual(1024);
@@ -264,7 +303,7 @@ describe('get_messages paging (issue #388)', () => {
       expect(item.message).not.toContain('�');
       expect(huge.startsWith(item.message)).toBe(true);
       expect(
-        Buffer.byteLength(JSON.stringify(payload.messages), 'utf8')
+        Buffer.byteLength(linesOf(payload.messages), 'utf8')
       ).toBeLessThanOrEqual(1024);
     });
 
