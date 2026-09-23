@@ -82,6 +82,16 @@ services:
       # 範囲外 / 不正値を設定した場合は起動時に fail-fast で server が落ちる (issue #384)。
       # 既定値で良い場合は env 自体を設定しないこと (= 空文字は未設定扱い):
       #   AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: "30000"
+      # ---- get_messages の応答サイズ / 既定 limit (issue #388) ----
+      # 1 レスポンスの messages 配列の直列化サイズ上限 (bytes)。未設定 = 65536。
+      # limit / cursor 付きの呼び出しでのみ打ち切りに使われる (引数なし呼び出しは
+      # 打ち切らず WARN ログのみ)。許容範囲 1024..16777216、範囲外は起動時 fail-fast:
+      #   AGENT_HUB_MCP_GET_MESSAGES_MAX_BYTES: "65536"
+      # 引数なし呼び出しに適用する既定 limit。**未設定 = 上限なし = 現行挙動**。
+      # 設定すると引数なし呼び出しも envelope ({ messages, has_more, remaining,
+      # next_cursor }) で返るようになるため、全 consumer の移行が済んでから有効化すること
+      # (issue #388 Phase 3)。事故時は本 env を消すだけで即ロールバックできる:
+      #   AGENT_HUB_MCP_GET_MESSAGES_DEFAULT_LIMIT: "50"
     healthcheck:
       # compose level の health check (= image HEALTHCHECK と二重で robust)
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]

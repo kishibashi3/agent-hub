@@ -172,35 +172,65 @@ export function getMessage(
 }
 
 /**
- * 未読メッセージを取得する
- * - DM: 自分宛のメッセージ
- * - チーム: 所属チーム宛のメッセージ
- * - 自分が送信したメッセージは除外
- * - 既読済みは除外
+ * 未読取得の keyset cursor 位置 (issue #388)。
+ *
+ * `ORDER BY m.created_at ASC, m.rowid ASC` の並びにおいて、この位置より「後ろ」だけを
+ * 返す。`created_at` は ms 精度で同値衝突しうるため、tie-break が要る。
+ *
+ * tie-break に `id` (UUID) ではなく `rowid` を使う理由: UUID 順は挿入順と無関係なので、
+ * 同一 ms に届いた複数メッセージの返却順が実質ランダムになり、従来 (tie-break なし =
+ * 実際には rowid 順) の配信順を壊す。`rowid` なら挿入順が保たれ、かつ keyset として
+ * 安定する。
+ *
+ * 既知の制約: SQLite の暗黙 rowid は `VACUUM` で振り直されうる。本 repo は `VACUUM` を
+ * 実行しないため実害はないが、導入する場合は進行中の cursor が無効化される点に注意。
+ * 主動線は cursor ではなく ack-as-cursor (`mark_as_read` して再取得) であり、そちらは
+ * rowid に依存しない。
  */
-export function getUnreadMessages(
-  db: Database,
+export interface UnreadCursor {
+  createdAt: string;
+  rowId: number;
+}
+
+/**
+ * 未読メッセージ 1 件。keyset cursor 生成用に `rowid` を伴う (issue #388)。
+ */
+export type UnreadMessage = Message & { row_id: number };
+
+/**
+ * 未読取得の paging オプション (issue #388)。
+ *
+ * 両方省略時は従来どおり「未読を全件・先頭から」返す (= 既存呼び出しの挙動不変)。
+ */
+export interface UnreadPageOptions {
+  /** 返す件数の上限。省略時は上限なし */
+  limit?: number;
+  /** この位置より後ろの未読だけを返す。省略時は未読の先頭から */
+  after?: UnreadCursor;
+}
+
+/**
+ * 未読メッセージ共通の WHERE 条件。
+ *
+ * `getUnreadMessages()` (行取得) と `countUnreadMessages()` (残件カウント) で
+ * 同一の未読集合を指すことを保証するため、条件文と bind パラメータの組み立てを
+ * ここ 1 箇所に集約する。ずれると `has_more` / `remaining` が嘘をつく。
+ */
+function buildUnreadFilter(
   tenantId: string,
-  reader: string
-): Message[] {
-  const readerName = reader.startsWith('@') ? reader : `@${reader}`;
+  readerName: string,
+  after?: UnreadCursor
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [
+    readerName, // rr.reader
+    tenantId,
+    readerName, // m.recipient
+    tenantId, // team_members サブクエリ
+    readerName, // team_members.member_name
+    readerName, // m.sender !=
+  ];
 
-  const readerExists = db
-    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
-    .get(tenantId, readerName);
-  if (!readerExists) {
-    throw new Error(`${readerName} は登録されていません`);
-  }
-
-  const messages = db
-    .prepare(
-      `SELECT m.*, mc.caused_by_id AS caused_by
-       FROM messages m
-       LEFT JOIN message_causes mc
-         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
-       LEFT JOIN read_receipts rr
-         ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
-       WHERE m.tenant_id = ?
+  let sql = `WHERE m.tenant_id = ?
          AND rr.message_id IS NULL
          AND (
            m.recipient = ?
@@ -210,12 +240,111 @@ export function getUnreadMessages(
              WHERE tenant_id = ? AND member_name = ?
            )
          )
-         AND m.sender != ?
-       ORDER BY m.created_at ASC`
+         AND m.sender != ?`;
+
+  if (after) {
+    // keyset 比較: (created_at, rowid) > (after.createdAt, after.rowId)
+    sql += `
+         AND (m.created_at > ? OR (m.created_at = ? AND m.rowid > ?))`;
+    params.push(after.createdAt, after.createdAt, after.rowId);
+  }
+
+  return { sql, params };
+}
+
+/**
+ * 未読メッセージを取得する
+ * - DM: 自分宛のメッセージ
+ * - チーム: 所属チーム宛のメッセージ
+ * - 自分が送信したメッセージは除外
+ * - 既読済みは除外
+ *
+ * `options` (issue #388) で件数上限と keyset cursor を指定できる。省略時は
+ * 全件を先頭から返すため、既存の呼び出し側 (flush 系 / mark_as_read all 等) の
+ * 挙動は変わらない。
+ *
+ * 並び順は `created_at ASC, rowid ASC`。tie-break の `rowid` は issue #388 で追加した。
+ * 従来は `created_at ASC` のみで、同一 `created_at` の行の順序が SQL 上は未定義だった
+ * (実際には rowid 順) ため、cursor で「次のページ」を安定して指せなかった。明示的に
+ * rowid で tie-break することで、従来の配信順を保ったまま keyset paging を成立させる。
+ */
+export function getUnreadMessages(
+  db: Database,
+  tenantId: string,
+  reader: string,
+  options?: UnreadPageOptions
+): UnreadMessage[] {
+  const readerName = reader.startsWith('@') ? reader : `@${reader}`;
+
+  const readerExists = db
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, readerName);
+  if (!readerExists) {
+    throw new Error(`${readerName} は登録されていません`);
+  }
+
+  const filter = buildUnreadFilter(tenantId, readerName, options?.after);
+  const params = [...filter.params];
+
+  let limitClause = '';
+  if (options?.limit !== undefined) {
+    limitClause = `
+       LIMIT ?`;
+    params.push(options.limit);
+  }
+
+  const messages = db
+    .prepare(
+      `SELECT m.*, m.rowid AS row_id, mc.caused_by_id AS caused_by
+       FROM messages m
+       LEFT JOIN message_causes mc
+         ON m.tenant_id = mc.tenant_id AND m.id = mc.message_id AND mc.position = 0
+       LEFT JOIN read_receipts rr
+         ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
+       ${filter.sql}
+       ORDER BY m.created_at ASC, m.rowid ASC${limitClause}`
     )
-    .all(readerName, tenantId, readerName, tenantId, readerName, readerName) as Message[];
+    .all(...params) as UnreadMessage[];
 
   return messages;
+}
+
+/**
+ * 未読メッセージの件数を数える (issue #388)。
+ *
+ * `after` を渡すと「その位置より後ろに残っている未読の件数」になる。
+ * `get_messages` が返す `remaining` の算出に使う。「無言で打ち切らない」
+ * (= 残件を数で見せる) ための COUNT なので、`getUnreadMessages()` と
+ * 同一の未読集合を指す必要がある (`buildUnreadFilter()` を共有する理由)。
+ */
+export function countUnreadMessages(
+  db: Database,
+  tenantId: string,
+  reader: string,
+  after?: UnreadCursor
+): number {
+  const readerName = reader.startsWith('@') ? reader : `@${reader}`;
+
+  const readerExists = db
+    .prepare('SELECT name FROM participants WHERE tenant_id = ? AND name = ?')
+    .get(tenantId, readerName);
+  if (!readerExists) {
+    throw new Error(`${readerName} は登録されていません`);
+  }
+
+  const filter = buildUnreadFilter(tenantId, readerName, after);
+
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM messages m
+       LEFT JOIN read_receipts rr
+         ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
+       ${filter.sql}`
+    )
+    .get(...filter.params) as { n: number };
+
+  return row.n;
 }
 
 /**

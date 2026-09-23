@@ -3,6 +3,11 @@ import * as P from './participants.js';
 import * as M from './messages.js';
 import * as T from './teams.js';
 import type {
+  UnreadCursor,
+  UnreadMessage,
+  UnreadPageOptions,
+} from './messages.js';
+import type {
   Participant,
   PeerMode,
   RegisterInput,
@@ -42,7 +47,12 @@ export interface TenantScope {
   // messages
   sendMessage(input: SendMessageInput, sender: string, senderLogin?: string | null): Message;
   getMessage(messageId: string, requester: string): Message;
-  getUnreadMessages(reader: string): Message[];
+  getUnreadMessages(
+    reader: string,
+    options?: UnreadPageOptions
+  ): UnreadMessage[];
+  /** 未読件数を数える。after 指定でその位置より後ろの残件数 (issue #388) */
+  countUnreadMessages(reader: string, after?: UnreadCursor): number;
   /** DM + ブロードキャストのみの未読を取得（チーム宛除外、flush_messages 用 issue #336） */
   getUnreadDmBroadcastMessages(reader: string): Message[];
   getHistory(input: GetHistoryInput, requester: string): Message[];
@@ -92,7 +102,10 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
       M.sendMessage(db, tenantId, input, sender, senderLogin),
     getMessage: (messageId, requester) =>
       M.getMessage(db, tenantId, messageId, requester),
-    getUnreadMessages: (reader) => M.getUnreadMessages(db, tenantId, reader),
+    getUnreadMessages: (reader, options) =>
+      M.getUnreadMessages(db, tenantId, reader, options),
+    countUnreadMessages: (reader, after) =>
+      M.countUnreadMessages(db, tenantId, reader, after),
     getUnreadDmBroadcastMessages: (reader) =>
       M.getUnreadDmBroadcastMessages(db, tenantId, reader),
     getHistory: (input, requester) =>
