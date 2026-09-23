@@ -82,6 +82,12 @@ services:
       # 範囲外 / 不正値を設定した場合は起動時に fail-fast で server が落ちる (issue #384)。
       # 既定値で良い場合は env 自体を設定しないこと (= 空文字は未設定扱い):
       #   AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS: "30000"
+      # heartbeat ログ間隔 (ms) は既定 1800000 (= 30 分、issue #386)。回収 0 件の cycle が
+      # 続いても heartbeat 1 行が出るため、「沈黙 = 正常 0 件」と「沈黙 = loop 停止」を
+      # journal だけで区別できる。journal の行数を絞りたい / 逆に短い間隔で確認したい場合
+      # のみ以下を有効化する (未設定 = 1800000ms、許容範囲 1000..2147483647)。
+      # 範囲外 / 不正値は起動時に fail-fast で server が落ちる (issue #384):
+      #   AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS: "1800000"
     healthcheck:
       # compose level の health check (= image HEALTHCHECK と二重で robust)
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]

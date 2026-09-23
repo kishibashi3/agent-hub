@@ -1318,6 +1318,7 @@ export function validateMcpEnvConfig(): void {
   // AGENT_HUB_MCP_PING_LOOP_MODE の不正値も起動時に弾く (issue #363)。
   // startActivePingLoop() は listen より後に呼ばれるため、ここで先に評価する。
   resolvePingLoopMode();
+  getOrphanEvictionHeartbeatMs();
 
   // log を起動時 1 回に限定する理由: `getGetCloseEvictionGraceMs()` は
   // `scheduleEvictionOnDisconnect()` の default 引数として GET 切断のたびに呼ばれるため、
@@ -1331,6 +1332,56 @@ export function validateMcpEnvConfig(): void {
         `GET close eviction grace = ${graceMs}ms (default ${GET_CLOSE_EVICTION_GRACE_MS}ms)`
     );
   }
+}
+
+/**
+ * Orphan eviction の heartbeat ログ間隔の既定値 (ms) (issue #386)。
+ *
+ * cycle log は `orphansEvicted > 0` のときだけ出るため、**回収対象 0 件の正常稼働**と
+ * **loop が起動していない / 止まっている**が journal から区別できない (= 沈黙が 2 つの
+ * 状態を意味する)。実際に issue #369 / PR #372 の実機確認でこの誤診が成立しかけた。
+ *
+ * 回収 0 件でも一定間隔で 1 行出して「生きている signal」を残す。既定 30 分は
+ * 「journal を汚さず、deploy 後の確認で 1 行は必ず拾える」目安 (= 1 日 48 行)。
+ *
+ * 実効値は `getOrphanEvictionHeartbeatMs()` 経由で参照すること
+ * (`AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS` env で上書き可能)。
+ */
+export const ORPHAN_EVICTION_HEARTBEAT_MS = 30 * 60_000;
+
+/**
+ * `AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS` に許容する最小値 (ms) (issue #386)。
+ *
+ * heartbeat は「journal を汚さない低頻度ログ」が前提。これを下回る値は秒/分を ms と
+ * 取り違えた設定ミス (例: `30` = 30ms) の可能性が高く、cycle ごとに 1 行出る状態に
+ * 縮退する。`ORPHAN_EVICTION_INTERVAL_MIN_MS` と同じく fail-fast にする (issue #384)。
+ */
+export const ORPHAN_EVICTION_HEARTBEAT_MIN_MS = 1_000;
+
+/**
+ * `AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS` に許容する最大値 (ms) (issue #386)。
+ *
+ * heartbeat は `setInterval` の delay ではなく経過時間比較に使うため 32bit 制約は
+ * かからないが、桁ミス (例: `18000000000`) が「事実上 heartbeat なし」に黙って倒れるのを
+ * 避けるため、interval と同じ上限で弾く。
+ */
+export const ORPHAN_EVICTION_HEARTBEAT_MAX_MS = 2_147_483_647;
+
+/**
+ * `ORPHAN_EVICTION_HEARTBEAT_MS` の実効値を返す (issue #386)。
+ *
+ * `AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS` env が set されていればその値 (ms) で
+ * 上書きする。非数値 / 許容範囲外は `EnvConfigError` を throw する (= fail-fast、issue #384)。
+ * `getOrphanEvictionIntervalMs()` と同 pattern で、実効値は loop 起動時に 1 度だけ評価される。
+ */
+export function getOrphanEvictionHeartbeatMs(): number {
+  return resolveMsEnvOrThrow(
+    'AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS',
+    process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_HEARTBEAT_MS,
+    ORPHAN_EVICTION_HEARTBEAT_MIN_MS,
+    ORPHAN_EVICTION_HEARTBEAT_MAX_MS,
+    ORPHAN_EVICTION_HEARTBEAT_MS
+  );
 }
 
 /**
@@ -1443,10 +1494,15 @@ export function startOrphanEvictionLoop(): () => void {
     return () => {};
   }
   const intervalMs = getOrphanEvictionIntervalMs();
+  const heartbeatMs = getOrphanEvictionHeartbeatMs();
   console.log(
     `[MCP] orphan eviction loop starting (= ${intervalMs / 1000}s interval、 ` +
-      `${ORPHAN_IDLE_TTL_MS / 60_000}min idle TTL、 issue #155/#369)`
+      `${ORPHAN_IDLE_TTL_MS / 60_000}min idle TTL、 ${heartbeatMs / 60_000}min heartbeat、 ` +
+      `issue #155/#369/#386)`
   );
+  // 最後に「loop が生きている」ことを示す行を出した時刻 (issue #386)。起動 log 自体が
+  // その 1 行目なので、起動時刻で初期化する (= 起動直後に heartbeat が重ねて出ない)。
+  let lastLivenessLogAtMs = Date.now();
   orphanEvictionLoopInterval = setInterval(() => {
     // in-flight guard (issue #377): interval callback は前回 sweep の完了を待たない。
     // sweep が interval を超えると 2 本目が同じ sessions Map に対して走り、重複 close /
@@ -1462,9 +1518,24 @@ export function startOrphanEvictionLoop(): () => void {
     orphanSweepInFlight = true;
     void runOneOrphanEvictionCycle()
       .then((stats) => {
+        const nowMs = Date.now();
         if (stats.orphansEvicted > 0) {
           console.log(
             `[MCP] orphan eviction cycle: total=${stats.total} orphansEvicted=${stats.orphansEvicted}`
+          );
+          // この 1 行自体が liveness signal なので heartbeat の起点を進める
+          // (= 回収が続く間に heartbeat を重ねて出さない、issue #386)。
+          lastLivenessLogAtMs = nowMs;
+          return;
+        }
+        // heartbeat (issue #386): 回収 0 件の cycle が続いても、最後に出力してから
+        // heartbeatMs 経過していれば 1 行出す。「沈黙 = 正常 0 件」と「沈黙 = loop 停止」を
+        // journal だけで区別できるようにするための signal。
+        if (nowMs - lastLivenessLogAtMs >= heartbeatMs) {
+          lastLivenessLogAtMs = nowMs;
+          console.log(
+            `[MCP] orphan eviction heartbeat: total=${stats.total} orphansEvicted=0 ` +
+              `intervalMs=${intervalMs} at=${new Date(nowMs).toISOString()} (issue #386)`
           );
         }
       })
