@@ -2060,3 +2060,167 @@ class TestIssue412:
         assert sleeps == [5]
         # 有限時間で抜けている (= 旧実装なら release.wait(10) まで block)
         assert elapsed < 5
+
+
+# ============================================================
+# issue #422: HTTP 200 + isError を send_dm の失敗として扱う
+# ============================================================
+
+class _FakeRpcResponse:
+    """HTTP 200 で JSON-RPC body を返す `requests.post` の戻り値 stub。"""
+
+    def __init__(self, body: dict, sse: bool = False) -> None:
+        self.status_code = 200
+        raw = json.dumps(body, ensure_ascii=False)
+        if sse:
+            self.headers = {"Content-Type": "text/event-stream"}
+            self.content = f"event: message\ndata: {raw}\n\n".encode("utf-8")
+        else:
+            self.headers = {"Content-Type": "application/json"}
+            self.content = raw.encode("utf-8")
+        self.text = raw
+
+    def json(self) -> dict:
+        return json.loads(self.text)
+
+
+def _tool_error_body(message: str) -> dict:
+    """`send_message.ts` の catch 節が返す形の body。"""
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "content": [{
+                "type": "text",
+                "text": json.dumps(
+                    {"error": "send_message failed", "message": message},
+                    ensure_ascii=False,  # = server の JSON.stringify と同じ
+                ),
+            }],
+            "isError": True,
+        },
+    }
+
+
+class TestIssue422:
+    """issue #422: server が send_message を拒否したら DM を成功扱いしない。"""
+
+    @pytest.fixture(autouse=True)
+    def fresh_session_slot(self) -> None:
+        sched.invalidate_session()
+        yield
+        sched.invalidate_session()
+
+    # ----------------------------------------------------------
+    # send_dm
+    # ----------------------------------------------------------
+
+    @pytest.mark.parametrize("sse", [False, True])
+    def test_send_dm_raises_on_is_error(self, sse: bool) -> None:
+        """HTTP 200 + `isError: true` は `SendDmToolError` になり、 理由を含む。"""
+        resp = _FakeRpcResponse(_tool_error_body("宛先が不正です"), sse=sse)
+        with patch("scheduler.requests.post", return_value=resp):
+            with pytest.raises(sched.SendDmToolError) as ei:
+                sched.send_dm({}, "sess", "not-a-handle", "hi")
+        assert "宛先が不正です" in str(ei.value)
+
+    def test_send_dm_raises_on_jsonrpc_error(self) -> None:
+        """HTTP 200 + JSON-RPC `error` も失敗として扱う。"""
+        resp = _FakeRpcResponse({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32602, "message": "Invalid params"},
+        })
+        with patch("scheduler.requests.post", return_value=resp):
+            with pytest.raises(sched.SendDmToolError) as ei:
+                sched.send_dm({}, "sess", "@x", "hi")
+        assert "Invalid params" in str(ei.value)
+
+    @pytest.mark.parametrize("is_error", [None, False])
+    def test_send_dm_returns_body_on_success(self, is_error) -> None:
+        """`isError` が無い / false なら従来どおり body を返す。"""
+        result: dict = {"content": [{"type": "text", "text": "{}"}]}
+        if is_error is not None:
+            result["isError"] = is_error
+        body = {"jsonrpc": "2.0", "id": 1, "result": result}
+        with patch("scheduler.requests.post", return_value=_FakeRpcResponse(body)):
+            assert sched.send_dm({}, "sess", "@x", "hi") == body
+
+    def test_tool_error_counts_as_undelivered(self) -> None:
+        """拒否は未配送確実 (= 配送済み扱いで握りつぶさない)。"""
+        assert sched.is_undelivered_send_failure(sched.SendDmToolError("x"))
+
+    # ----------------------------------------------------------
+    # main loop の fire
+    # ----------------------------------------------------------
+
+    def test_main_fire_reports_err_and_does_not_resend(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """拒否された fire は `[FIRE]` ではなく `[ERR]` を出し、 再送しない。
+
+        one-shot は残すと次 iteration で即 due になり拒否を繰り返すので消す。
+        """
+        sched.publish_session("sess-sse")
+
+        def rejected(_sid):
+            raise sched.SendDmToolError("send_message failed: tool error: bad to")
+
+        used, closed, mock_save = TestIssue368._fire_once(self, tmp_path, rejected)
+
+        out, err = capsys.readouterr()
+        assert used == ["sess-sse"]
+        assert closed == []
+        assert "[FIRE]" not in out
+        assert "[FIRE-RETRY]" not in out
+        assert "[ERR] send_dm failed for name='fire-368'" in err
+        assert "bad to" in err
+        assert "the hub rejected send_message" in err
+        mock_save.assert_called_once()
+
+    def test_main_fire_drops_one_shot_when_retry_is_rejected(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """404 で再送し、 再送が拒否されたらそれ以上送らず one-shot を消す。"""
+        sched.publish_session("sess-dead")
+
+        def dead_then_rejected(sid):
+            if sid == "sess-dead":
+                raise sched.SendDmHttpError(404, "HTTP 404: Session not found")
+            raise sched.SendDmToolError("send_message failed: tool error: bad to")
+
+        used, closed, mock_save = TestIssue368._fire_once(
+            self, tmp_path, dead_then_rejected
+        )
+
+        out, err = capsys.readouterr()
+        assert used == ["sess-dead", "sess-ephemeral"]
+        assert closed == ["sess-ephemeral"]
+        assert "[FIRE" not in out
+        assert "[ERR] send_dm retry failed for name='fire-368'" in err
+        # 配送済みかもしれない、 という誤った WARN は出さない
+        assert "may have happened after delivery" not in err
+        mock_save.assert_called_once()
+
+    # ----------------------------------------------------------
+    # handle_inbox_command
+    # ----------------------------------------------------------
+
+    def test_non_command_reply_failure_does_not_propagate(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """非 `/` body への返信が拒否されても例外を外に出さない。
+
+        外に出ると `_inbox_worker_loop` が `mark_message_read` を飛ばし、 同じ
+        DM を次の inbox 通知で再処理し続ける。
+        """
+        with patch.object(
+            sched, "send_dm", side_effect=sched.SendDmToolError("rejected")
+        ):
+            sched.handle_inbox_command(
+                {}, "sess", "@someone", "hello",
+                [], [], [], tmp_path / "schedules.json",
+                msg_id="msg-1",
+            )
+        _out, err = capsys.readouterr()
+        assert "[ERR] handle_inbox_command failed (sender=@someone)" in err
