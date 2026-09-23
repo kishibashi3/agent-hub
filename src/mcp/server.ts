@@ -1105,6 +1105,11 @@ export function _getObservedFailingSessionsForTests(): string[] {
  * 返り値の `observedTransitions` (issue #390) は **その cycle で起きた observe-only の状態遷移数**
  * (= 新規失敗 + 復帰)。件数 (`observedFailures`) は「1 件復帰 + 1 件新規失敗」の cycle で変化しない
  * ため、summary の抑制条件には遷移数を使う (= 相殺による見落としを防ぐ)。
+ *
+ * 返り値の `observedPruned` (issue #416) は **cycle 冒頭の prune で失敗記録から消えた sid の数**
+ * (= 失敗中の session が ping 復帰ではなく eviction / close で消えた件数)。遷移数には入れず別に返し、
+ * summary の出力条件に含める: 含めないと「失敗中の session が消えただけ」の cycle で
+ * `observedFailures` が減っても summary が出ず、減った理由がログから読めなくなるため。
  */
 export async function runOneActivePingCycle(
   mode: PingCycleMode = resolvePingLoopMode() === 'enforce' ? 'enforce' : 'observe-only'
@@ -1114,6 +1119,7 @@ export async function runOneActivePingCycle(
   disconnected: number;
   observedFailures: number;
   observedTransitions: number;
+  observedPruned: number;
 }> {
   // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
   const snapshot: Array<[string, Session]> = Array.from(sessions.entries());
@@ -1122,8 +1128,12 @@ export async function runOneActivePingCycle(
   // eviction / transport.onclose で消えた session の sid が残り続ける (= プロセス生存期間中の
   // 単調増加、 issue #390)。 cycle 冒頭で「もう存在しない session」を落とす。
   // sid は uuid なので別 session と衝突しない (= 誤判定ではなくメモリだけの問題)。
+  let observedPruned = 0;
   for (const sid of observedFailingSessions) {
-    if (!sessions.has(sid)) observedFailingSessions.delete(sid);
+    if (!sessions.has(sid)) {
+      observedFailingSessions.delete(sid);
+      observedPruned++;
+    }
   }
   const results = await Promise.allSettled(
     snapshot.map(async ([sid, session]) => {
@@ -1191,6 +1201,7 @@ export async function runOneActivePingCycle(
     disconnected: disconnectedCount,
     observedFailures,
     observedTransitions,
+    observedPruned,
   };
 }
 
@@ -1217,12 +1228,14 @@ export function startActivePingLoop(): () => void {
   // observe-only の cycle summary は「状態遷移があった cycle」だけ出す (= 毎 cycle 出さない)。
   // 件数比較にすると「1 件復帰 + 1 件新規失敗」が相殺して summary が落ちるため、
   // 遷移数 (= 新規失敗 + 復帰) を抑制条件にする (issue #390)。
+  // 失敗中の session が eviction で消えた (= prune された) cycle も出す (issue #416)。
   activePingLoopInterval = setInterval(() => {
     void runOneActivePingCycle(mode).then((stats) => {
-      if (stats.disconnected > 0 || stats.observedTransitions > 0) {
+      if (stats.disconnected > 0 || stats.observedTransitions > 0 || stats.observedPruned > 0) {
         console.log(
           `[MCP] ping cycle: mode=${mode} total=${stats.total} alive=${stats.alive} ` +
-            `disconnected=${stats.disconnected} observedFailures=${stats.observedFailures}`
+            `disconnected=${stats.disconnected} observedFailures=${stats.observedFailures} ` +
+            `observedPruned=${stats.observedPruned}`
         );
       }
     });

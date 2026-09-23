@@ -857,8 +857,19 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       // ping 復帰ではなく orphan eviction / GET close eviction / transport.onclose で
       // session が消えた場合 (= sessions Map から居なくなる)。
       _clearSessionsForTesting();
-      await runOneActivePingCycle('observe-only');
+      const stats = await runOneActivePingCycle('observe-only');
       expect(_getObservedFailingSessionsForTests()).toEqual([]);
+      expect(stats.observedPruned).toBe(1); // issue #416: prune 件数を返す
+      expect(stats.observedTransitions).toBe(0); // 遷移数には入れない
+      warn.mockRestore();
+    });
+
+    it('prune が無い cycle は observedPruned=0 (= 失敗中の session が残っている、 issue #416)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _addSessionForTesting('stay-2', makeDeadSession());
+      await runOneActivePingCycle('observe-only');
+      const second = await runOneActivePingCycle('observe-only');
+      expect(second.observedPruned).toBe(0);
       warn.mockRestore();
     });
 
@@ -948,6 +959,111 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining('mode=observe-only'));
       stopActivePingLoop();
       log.mockRestore();
+    });
+  });
+
+  /**
+   * issue #416 (PR #402 review Minor 2): cycle summary の抑制条件を `startActivePingLoop` 経由で
+   * 確かめる。返り値だけでなく「summary 行が出る / 出ない」を console spy で見る。
+   */
+  describe('startActivePingLoop() の cycle summary 抑制条件 (issue #416)', () => {
+    const PING_INTERVAL_MS = 30_000;
+
+    function makeSession(alive: boolean) {
+      return {
+        transport: { close: vi.fn().mockResolvedValue(undefined) },
+        server: {
+          ping: alive
+            ? vi.fn().mockResolvedValue(undefined)
+            : vi.fn().mockRejectedValue(new Error('no pong')),
+        },
+        userId: '@summary-peer',
+        githubLogin: 'summary-peer',
+        tenantDomain: 'default',
+        subscribedUris: new Set(['inbox://@summary-peer']),
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+      };
+    }
+
+    function summaryLines(log: { mock: { calls: unknown[][] } }): string[] {
+      return log.mock.calls
+        .map((c) => c[0])
+        .filter((m): m is string => typeof m === 'string' && m.includes('[MCP] ping cycle:'));
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      stopActivePingLoop();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+
+    it('遷移あり (= 新規失敗) の cycle → summary が出る', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      _addSessionForTesting('sum-dead-1', makeSession(false));
+      startActivePingLoop();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      const lines = summaryLines(log);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('mode=observe-only');
+      expect(lines[0]).toContain('observedFailures=1');
+    });
+
+    it('遷移なし (= 同じ session が落ち続ける) の cycle → summary が出ない', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      _addSessionForTesting('sum-dead-2', makeSession(false));
+      startActivePingLoop();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 1 cycle 目: 新規失敗 → 出る
+      expect(summaryLines(log)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 2 cycle 目: 遷移なし → 出ない
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 3 cycle 目: 同上
+      expect(summaryLines(log)).toHaveLength(1);
+    });
+
+    it('全 session 応答 (= 遷移なし) の cycle → summary が出ない', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      _addSessionForTesting('sum-alive-1', makeSession(true));
+      startActivePingLoop();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      expect(summaryLines(log)).toHaveLength(0);
+    });
+
+    it('disconnected>0 (= enforce で evict) の cycle → summary が出る', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'enforce';
+      _addSessionForTesting('sum-dead-3', makeSession(false));
+      startActivePingLoop();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      const lines = summaryLines(log);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('mode=enforce');
+      expect(lines[0]).toContain('disconnected=1');
+    });
+
+    it('失敗中の session が eviction で消えただけの cycle → summary が出る (= prune を含める)', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.AGENT_HUB_MCP_PING_LOOP_MODE = 'observe-only';
+      _addSessionForTesting('sum-gone-1', makeSession(false));
+      startActivePingLoop();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 新規失敗 → 出る
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS); // 遷移なし → 出ない
+      expect(summaryLines(log)).toHaveLength(1);
+
+      // ping 復帰ではなく orphan eviction / transport.onclose で session が消えた場合
+      _clearSessionsForTesting();
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      const lines = summaryLines(log);
+      expect(lines).toHaveLength(2);
+      expect(lines[1]).toContain('observedFailures=0');
+      expect(lines[1]).toContain('observedPruned=1');
     });
   });
 });
