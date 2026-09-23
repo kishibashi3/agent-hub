@@ -87,6 +87,7 @@ observe-only は同じ warning を毎 cycle 出さない。session ごとに「�
 | あり | ping 失敗 | あり | なし (失敗件数 `observedFailures` には毎 cycle 数える) |
 | あり | ping 成功 | なし | `ping recovered for session <sid> (…) — observe-only mode` |
 | あり | session が消えた (orphan eviction / GET close eviction / `transport.onclose`) | なし (次の cycle の冒頭で prune) | 個別ログなし。cycle summary の `observedPruned` に数える |
+| なし / あり | ping を待つ間に session が消えた (ping は失敗) | 変わらない (新たには記録しない) | なし。`observedFailures` にも数えない (#431) |
 
 ### cycle summary
 
