@@ -298,7 +298,7 @@ requester 応答待ちで進捗 pause。over 2x 閾値は経験則の初期値�
 
 #### §3.9.3 §9.2 との連動: CLAUDE.md Conventions entry
 
-確定版 landing 後、`/home/kishibashi3/app/CLAUDE.md` の Conventions section に **「co-design 開始時 §3.9 役割表明 protocol 適用」** 1 行 entry を追加 (= §9.2 と同 timing で)。これにより agent-hub ecosystem 全 peer が co-design 開始時に default template 適用 expected の文化規範が成立。
+確定版 landing 後、`ecosystem root CLAUDE.md` (private; 公開 repo 外) の Conventions section に **「co-design 開始時 §3.9 役割表明 protocol 適用」** 1 行 entry を追加 (= §9.2 と同 timing で)。これにより agent-hub ecosystem 全 peer が co-design 開始時に default template 適用 expected の文化規範が成立。
 
 ## §4. Exception handling
 
@@ -596,7 +596,7 @@ planner-author 間で 2026-05-17/18 P1-P4 全 element を実用:
 ### §9.2 CLAUDE.md / collaboration-model.md への参照
 
 確定版 landing 後、以下 doc から本 protocol を参照:
-- `/home/kishibashi3/app/CLAUDE.md` の Conventions section に 2 行 entry:
+- `ecosystem root CLAUDE.md` (private; 公開 repo 外) の Conventions section に 2 行 entry:
   - 「estimate-first protocol 適用 (= task delegation 時)」 (= §3 全体)
   - 「co-design 開始時 §3.9 役割表明 protocol 適用」 (= §3.9.3 で連動明示)
 - `agent-hub/docs/collaboration-model.md` の Merge protocol 周辺で task estimate 規約として cross-link (= Future Work section に snapshot 哲学 + mixed ecosystem を明示)
@@ -648,4 +648,4 @@ bridge-gemini-impl v2.4 push 後の sequence:
 - [ecosystem-mutual-review.md §3.4](./ecosystem-mutual-review.md) (= §3.1 「complexity hint task header」起源)
 - [ecosystem-mutual-review.md §6](./ecosystem-mutual-review.md) (= §3.7 silent OK norm の起源「ack-restraint norm」+ §5.1.2 cross-reference 3 connections の 2 例目)
 - [collaboration-model.md](./collaboration-model.md) (= Merge protocol、本 protocol が future cross-link、§9.2 参照)
-- [/home/kishibashi3/app/CLAUDE.md Conventions](https://github.com/kishibashi3/agent-hub/blob/main/CLAUDE.md) (= 確定版 landing 後に 2 行 entry 追加想定、§9.2 参照)
+- `ecosystem root CLAUDE.md` § Conventions (private; 公開 repo 外) (= 確定版 landing 後に 2 行 entry 追加想定、§9.2 参照)

@@ -12,7 +12,7 @@ LLM は決定論的 RPC service ではない。確率的で、ambiguous で、�
 
 ### 2. 人間が peer になれる
 
-[AI リテラシー 10 段階](../../../publications/docs/ai/literacy/) の 7-9（共鳴相）に進むには、人と AI が **同じ primitive を使う**ことが必須条件。
+[AI リテラシー 10 段階](https://pubs.u-biosis.com/ai/literacy/) の 7-9（共鳴相）に進むには、人と AI が **同じ primitive を使う**ことが必須条件。
 
 - 「人は API call しない」が決定的
 - A2A の世界には人間が構造的に入れない（peer になれない）
