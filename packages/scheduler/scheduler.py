@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+import urllib3
 from croniter import croniter
 
 # v4 redesign (= issue #65 sender-based + one-shot): schedules list と
@@ -83,6 +84,103 @@ _schedules_lock = threading.Lock()
 # daemon=True なので main 終了に連動して自動 cleanup。 進行中の HTTP timeout
 # (= max 10s) を超えない範囲で graceful shutdown 完了。
 _shutdown_event = threading.Event()
+
+# issue #368: cron fire 用の session を SSE thread の session に一本化する。
+# 旧実装は main thread が専用の session を `init_session()` で作り、 GET /mcp を
+# 張らない **POST-only session** として保持していた。 POST-only session は
+# server→client の ping request を受け取る standalone SSE stream を持たないため
+# ping loop を `enforce` にすると 30-90s で evict され、 その後の cron fire は
+# HTTP 404 で落ちる (= 実測: issue #368 コメント 2026-09-19T21:16Z)。 落ちるのは
+# 1 回きりのリマインダで、 エラーも出ず誰も気付かない。
+#
+# 本スロットは SSE thread が `init_session()` + `subscribe_inbox()` に成功した
+# 区間だけ sid を publish し、 stream 終了 / 例外時に invalidate する
+# (= 「GET stream が生きている session だけを共有する」 が不変条件)。 main thread
+# は fire 時にこれを読む。 scheduler の session は thread 固有オブジェクトではなく
+# POST ヘッダに載せる `mcp-session-id` 文字列でしかないため、 共有はこのスロット
+# だけで成立する (= transport を跨いだ共有ではない)。
+_session_cond = threading.Condition()
+_shared_session_id: str | None = None
+
+# fire 時に共有 session の publish を待つ上限 (= SSE thread の reconnect は 3-5s
+# 間隔なので、 その 1-2 周期分)。 超えた場合は ephemeral session に fallback する。
+_SESSION_WAIT_TIMEOUT_S = 15.0
+
+# 待機中に `_shutdown_event` を見る間隔。 signal handler から Condition を
+# notify すると main thread が lock を持っている瞬間に deadlock しうるため、
+# handler 側からは起こさず待つ側が短い周期で shutdown を確認する。
+_SESSION_WAIT_POLL_S = 0.5
+
+
+def publish_session(session_id: str) -> None:
+    """SSE thread が確立した session を main thread に公開する (= issue #368)。"""
+    global _shared_session_id
+    with _session_cond:
+        _shared_session_id = session_id
+        _session_cond.notify_all()
+
+
+def invalidate_session(session_id: str | None = None) -> None:
+    """公開中の session を取り下げる (= issue #368)。
+
+    `session_id` を渡した場合は **それが現在公開中の session のときだけ** 取り下げる
+    (= 古い connection の後始末が、 別の sid を消さないための防御)。
+    """
+    global _shared_session_id
+    with _session_cond:
+        if session_id is not None and _shared_session_id != session_id:
+            return
+        _shared_session_id = None
+
+
+def current_session_id() -> str | None:
+    """公開中の session を返す (= 未公開なら None)。"""
+    with _session_cond:
+        return _shared_session_id
+
+
+def wait_for_session(timeout: float) -> str | None:
+    """共有 session が公開されるまで最大 `timeout` 秒待ち、 その sid を返す。
+
+    期限切れ、 または `_shutdown_event` が set された場合は None を返す。
+    slot の確認と待機を同じ Condition の下で行うので、 「起こされた直後に
+    slot が None だった」 ときも残り時間を使って待ち続ける (= PR #410 review M4)。
+    """
+    deadline = time.monotonic() + timeout
+    with _session_cond:
+        while _shared_session_id is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or _shutdown_event.is_set():
+                return None
+            _session_cond.wait(min(remaining, _SESSION_WAIT_POLL_S))
+        return _shared_session_id
+
+
+def acquire_session(
+    headers: dict[str, str], timeout: float | None = None
+) -> tuple[str, bool]:
+    """fire 用の session を取得する。 戻り値は `(session_id, is_ephemeral)`。
+
+    SSE thread の session が公開されていればそれを使う (= is_ephemeral False)。
+    `timeout` 秒 (= 省略時は `_SESSION_WAIT_TIMEOUT_S`) 待っても公開されない場合のみ、
+    **その 1 回の送信限りの** session を `init_session()` で作る (= is_ephemeral True)。
+    ephemeral session は呼出側が送信後に `close_session()` で閉じる。
+
+    ephemeral に倒すのは「SSE 側が落ちている瞬間の fire を捨てない」ため。 作成
+    直後の session は ping loop の 1 周期が回る前に送信できることを実測済み
+    (= issue #368 コメント 2026-09-19T21:16Z の測定 #1)。 長命に保持はしない。
+    """
+    if timeout is None:
+        timeout = _SESSION_WAIT_TIMEOUT_S
+    sid = wait_for_session(timeout)
+    if sid:
+        return sid, False
+    print(
+        "[WARN] shared SSE session unavailable "
+        f"({timeout:.0f}s wait), using ephemeral session for this fire",
+        file=sys.stderr,
+    )
+    return init_session(headers), True
 
 
 def _on_signal(signum: int, _frame: Any) -> None:
@@ -318,8 +416,65 @@ def send_dm(
         timeout=10,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"send_message failed: HTTP {resp.status_code}: {resp.text[:200]}")
+        raise SendDmHttpError(
+            resp.status_code,
+            f"send_message failed: HTTP {resp.status_code}: {resp.text[:200]}",
+        )
     return _parse_response_body(resp)
+
+
+class SendDmHttpError(RuntimeError):
+    """`send_dm` が HTTP 200 以外を受けた (= 再送可否の判定に status を使う)。"""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# server が tools/call を処理する前に弾く status (= session 不明 / header 不備)。
+# これらは配送されていないことが確実なので、 fresh session で再送してよい。
+_UNDELIVERED_HTTP_STATUSES = frozenset({400, 404})
+
+
+def is_undelivered_send_failure(exc: BaseException) -> bool:
+    """`send_dm` の失敗が **未配送確実** なら True (= PR #410 review M1)。
+
+    再送してよいのは server に request が届いていない / 届いても tools/call の
+    前で弾かれた場合だけ。 `ReadTimeout`、 接続確立後の切断、 5xx、 response の
+    parse 失敗は server 側で配送済みの可能性があり、 再送すると DM が二重に届く。
+
+    - `ConnectTimeout`: 接続確立前に timeout
+    - `ConnectionError` のうち urllib3 の `NewConnectionError` 起因 (= 接続拒否 /
+      名前解決失敗)。 `RemoteDisconnected` 等の送信後切断は含めない
+    - HTTP 400 / 404 (= `_UNDELIVERED_HTTP_STATUSES`)
+    """
+    if isinstance(exc, SendDmHttpError):
+        return exc.status_code in _UNDELIVERED_HTTP_STATUSES
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return True
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        reason = exc.args[0] if exc.args else None
+        if isinstance(reason, urllib3.exceptions.MaxRetryError):
+            reason = reason.reason
+        return isinstance(reason, urllib3.exceptions.NewConnectionError)
+    return False
+
+
+def close_session(headers: dict[str, str], session_id: str) -> None:
+    """session を `DELETE /mcp` で明示的に閉じる。 失敗は無視する (= best-effort)。
+
+    PR #410 review M2: ephemeral / retry 用に作った session を放置すると、
+    orphan eviction 無効 (= #407 案 A) かつ ping loop 非 enforce の区間では
+    server に無期限に残る。 共有 session (= SSE thread 所有) には呼ばない。
+    """
+    try:
+        requests.delete(
+            HUB_URL,
+            headers={**headers, "mcp-session-id": session_id},
+            timeout=5,
+        )
+    except Exception as e:
+        print(f"[WARN] close_session failed (ignored): {e}", file=sys.stderr)
 
 
 def register_self(
@@ -1294,8 +1449,11 @@ def sse_listen_loop(
     6. 切断時は worker を畳んでから 3 秒待って再接続
 
     watch.sh の SSE long-lived 接続 pattern を Python 移植 (= issue #65)。
-    main thread の cron loop とは独立した session を持つ (= 同一 user の 2 session、
-    server 側は別 transport として扱う)。
+    issue #368: GET stream が生きている区間だけ、 この connection の sid を
+    `publish_session()` で main thread の cron fire に公開し、 stream 終了 / 例外時に
+    `invalidate_session()` で取り下げる。 main thread は自前の session を持たない
+    (= 同一 user の session はこの 1 本。 SSE が落ちている瞬間の fire だけ、 送信
+    限りの ephemeral session を作って送信後に閉じる)。
 
     issue #374 Minor 2: この関数が回す reader loop は **行を読んで振り分ける
     だけ** で、 HTTP POST を一切行わない。 以前は ping response と inbox
@@ -1310,6 +1468,9 @@ def sse_listen_loop(
     # 捨てて抜けるため、 次の connection で 1 回だけ catch-up poll を積む
     # (= 積まないと次の DM が来るまで未読が処理されない窓ができる)。
     pending_inbox_poll = False
+    # issue #368: outer except から invalidate するため、 while の外で束縛しておく
+    # (= 初回 `init_session()` が raise した場合に NameError にしない)。
+    sid: str | None = None
     while True:
         try:
             sid = init_session(headers)
@@ -1356,6 +1517,11 @@ def sse_listen_loop(
                     )
                     time.sleep(5)
                     continue
+
+                # issue #368: GET stream が 200 で確立した時点で、 この sid を
+                # cron fire 用に公開する。 main thread はこれを読んで fire する
+                # (= POST-only session を持たない)。
+                publish_session(sid)
 
                 # 4. worker thread 起動 (= issue #374 Minor 2)。
                 # reader thread は「行を読んで振り分ける」だけにし、 POST を
@@ -1433,6 +1599,10 @@ def sse_listen_loop(
                         if inbox_queue.empty():
                             inbox_queue.put(_INBOX_POLL)
                 finally:
+                    # issue #368: GET stream が切れた sid は ping に応答できない
+                    # (= server 側で evict 対象)。 main thread が掴み続けないよう
+                    # 真っ先に取り下げる。
+                    invalidate_session(sid)
                     # stream 終了: 切断後の pong は一律抑止する (= stale sid への
                     # POST は server の auto-reissue path に拾われて捨て session を
                     # 生むだけ。 POST では eviction cancel が走らないため grace を
@@ -1482,6 +1652,9 @@ def sse_listen_loop(
             time.sleep(3)
 
         except Exception as e:
+            # issue #368: 公開済みのまま例外で抜ける経路 (= GET 確立後 ~ 内側
+            # try 到達前) を塞ぐ。 世代が進んでいれば no-op。
+            invalidate_session(sid)
             print(
                 f"[ERR sse-loop] {e}, reconnect in 5s", file=sys.stderr
             )
@@ -1767,17 +1940,14 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    # MCP session init
-    try:
-        session_id = init_session(headers)
-    except Exception as e:
-        print(f"[ERR] MCP session init failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
+    # issue #368: main thread は自前の session を作らない。 cron fire は SSE thread
+    # が確立した session (= GET /mcp を張っており ping に応答できる) を共有して使う。
+    # 旧実装の POST-only session は ping loop `enforce` 下で evict され、 その後の
+    # fire が HTTP 404 で静かに落ちていた。
     print(
         f"[boot] mode=pat user={user_id} "
         f"tenant={TENANT or 'default'} hub={HUB_URL} "
-        f"schedules={len(schedules)} session={session_id[:8]}..."
+        f"schedules={len(schedules)} session=<shared with sse thread>"
     )
 
     # croniter iterator + next_times を schedule ごとに用意 (= v4: cyclic / one-shot 切り分け)
@@ -1806,6 +1976,19 @@ def main() -> None:
     )
     sse_thread.start()
     print(f"[sse-thread] started (target=inbox://@{user_id})")
+
+    # issue #368: 最初の fire までに session が公開されるのを待つ (= 起動直後に
+    # due な entry があると、 待たない場合は ephemeral fallback に倒れるため)。
+    # 待てなくても致命的ではない (= fire 時に再度待ち、 それでも駄目なら
+    # ephemeral session で送る) ので、 ここでは警告に留めて先に進む。
+    if wait_for_session(_SESSION_WAIT_TIMEOUT_S):
+        print(f"[sse-thread] session published for cron fire")
+    else:
+        print(
+            "[WARN] shared session not published within "
+            f"{_SESSION_WAIT_TIMEOUT_S:.0f}s of startup",
+            file=sys.stderr,
+        )
 
     if schedules:
         print(
@@ -1874,25 +2057,84 @@ def main() -> None:
             )
 
         send_ok = False
+        # 配送済みかもしれない失敗 (= `is_undelivered_send_failure` が False)。
+        # 再送せず、 one-shot は二重配送を避けて配送済み扱いで消す。
+        maybe_delivered = False
+        first_err: Exception | None = None
+        fire_label = 'one-shot' if is_one_shot else 'cyclic'
         try:
-            send_dm(headers, session_id, fire_to, fire_msg, caused_by=fire_caused_by)
-            send_ok = True
-            print(
-                f"[FIRE] {next_due.isoformat()} name='{fire_name}' "
-                f"({'one-shot' if is_one_shot else 'cyclic'}) → {fire_to}: "
-                f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
-            )
+            # issue #368: SSE thread が公開している session を使う。 未公開なら
+            # 短時間待ち、 それでも取れなければこの fire 限りの session を作る。
+            session_id, ephemeral = acquire_session(headers)
         except Exception as e:
+            # ephemeral session の initialize 失敗 = まだ送っていない。
             print(
-                f"[ERR] send_dm failed for name='{fire_name}': {e}",
+                f"[ERR] session acquire failed for name='{fire_name}': {e}",
                 file=sys.stderr,
             )
+            first_err = e
+        else:
             try:
-                session_id = init_session(headers)
-                print(f"[reinit] session={session_id[:8]}...")
+                send_dm(headers, session_id, fire_to, fire_msg, caused_by=fire_caused_by)
+                send_ok = True
+                print(
+                    f"[FIRE] {next_due.isoformat()} name='{fire_name}' "
+                    f"({fire_label}) → {fire_to}: "
+                    f"{fire_msg[:50]}{'...' if len(fire_msg) > 50 else ''}"
+                    f"{' [ephemeral session]' if ephemeral else ''}"
+                )
+            except Exception as e:
+                print(
+                    f"[ERR] send_dm failed for name='{fire_name}': {e}",
+                    file=sys.stderr,
+                )
+                first_err = e
+                maybe_delivered = not is_undelivered_send_failure(e)
+            finally:
+                if ephemeral:
+                    close_session(headers, session_id)
+
+        if first_err is not None and not maybe_delivered:
+            # issue #368: ここで諦めると「エラーも出ずに消えるリマインダ」 が
+            # 残る。 共有 session が切断 / evict されていた場合に備え、 その 1 回
+            # 限りの session を作り直して即座に再送する。 旧実装は session を
+            # 作り直すだけで **その fire 分は再送していなかった**。
+            # PR #410 review M1: 再送は未配送が確実な失敗に限る。
+            retry_sid: str | None = None
+            try:
+                retry_sid = init_session(headers)
+                send_dm(
+                    headers, retry_sid, fire_to, fire_msg,
+                    caused_by=fire_caused_by,
+                )
+                send_ok = True
+                print(
+                    f"[FIRE-RETRY] {next_due.isoformat()} name='{fire_name}' "
+                    f"({fire_label}) → {fire_to} "
+                    f"(retried with a fresh session)"
+                )
             except Exception as e2:
-                print(f"[ERR] session reinit failed: {e2}", file=sys.stderr)
-                time.sleep(60)
+                print(
+                    f"[ERR] send_dm retry failed for name='{fire_name}': {e2}",
+                    file=sys.stderr,
+                )
+                # init_session の失敗は未配送。 send_dm の失敗は再度判定する。
+                if retry_sid is not None:
+                    maybe_delivered = not is_undelivered_send_failure(e2)
+                if not maybe_delivered:
+                    # hub 自体が落ちている場合の hot loop 回避 (= one-shot は
+                    # send_ok=False で entry が残り、 次 iteration で即 due になる)。
+                    _shutdown_event.wait(60)
+            finally:
+                if retry_sid is not None:
+                    close_session(headers, retry_sid)
+
+        if maybe_delivered:
+            print(
+                f"[WARN] name='{fire_name}' ({fire_label}) not resent: "
+                "the failure may have happened after delivery",
+                file=sys.stderr,
+            )
 
         # state update (= one-shot 削除 or cyclic next_time advance)
         with _schedules_lock:
@@ -1902,7 +2144,9 @@ def main() -> None:
             # 念のため fire_name と一致確認 (= snapshot 中に delete + insert で別 entry に置換 case)
             if schedules[fire_target_idx].get("name") != fire_name:
                 continue
-            if is_one_shot and send_ok:
+            # maybe_delivered の one-shot も消す (= entry を残すと次 iteration で
+            # 即 due になり結局再送される。 parse 失敗が恒常的だと毎周期 DM が届く)。
+            if is_one_shot and (send_ok or maybe_delivered):
                 # one-shot fire 成功 → auto-delete + persist
                 del schedules[fire_target_idx]
                 del iters[fire_target_idx]
