@@ -595,6 +595,17 @@ def mark_message_read(
 # MCP ping responder (= issue #362)
 # ============================================================
 
+# SSE GET の connect / read timeout (秒) (= issue #412)。
+# server は ping loop の mode (disabled / observe-only / enforce) に関係なく、
+# GET stream に 15s 周期で `: keepalive` comment を書く (= server
+# `SSE_KEEPALIVE_INTERVAL_MS`、 issue #240)。 stream が健全なら 15s 以内に必ず
+# 行が届くので、 read timeout を keepalive 4 周期分にしておけば「行が来ない」 は
+# half-open (= hub の再起動 / NAT timeout で FIN/RST が届かない) と判断できる。
+# 以前の `timeout=None` では `iter_lines` が永久に block し、 死んだ sid が cron
+# fire に公開されたままになっていた。
+SSE_CONNECT_TIMEOUT_SEC = 10
+SSE_READ_TIMEOUT_SEC = 60
+
 # SSE 行の fast-check hint。 `data: {"jsonrpc":"2.0","id":N,"method":"ping"}` を
 # JSON parse する前に文字列含有で絞る (= 既存の
 # `notifications/resources/updated` fast-check と同じ pattern、 毎行 json.loads
@@ -1507,7 +1518,10 @@ def sse_listen_loop(
                     "Accept": "text/event-stream",
                 },
                 stream=True,
-                timeout=None,
+                # issue #412: read timeout で half-open を検知する。 発火すると
+                # `iter_lines` から例外が上がり、 内側 `finally` で sid を取り
+                # 下げてから外側 `except` 経由で再接続する。
+                timeout=(SSE_CONNECT_TIMEOUT_SEC, SSE_READ_TIMEOUT_SEC),
             ) as resp:
                 if resp.status_code != 200:
                     print(
