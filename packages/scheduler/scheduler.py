@@ -2179,6 +2179,14 @@ def main() -> None:
                 failure = classify_send_failure(e)
                 rejected = failure is SendFailureClass.REJECTED
                 maybe_delivered = failure is SendFailureClass.MAYBE_DELIVERED
+                # issue #417: 404 = server がこの sid を知らない。 SSE thread が
+                # stream の終了に気づくまで共有 sid が公開されたままだと、 次の
+                # fire も stale sid に POST して 404 → 再送を繰り返す。 main 側でも
+                # 取り下げる。 公開中の sid と一致するときだけ効くので、 SSE thread
+                # が再接続して新しい sid を公開済みなら消さない (= ephemeral の
+                # sid も公開中の sid と一致しないので no-op)。
+                if isinstance(e, SendDmHttpError) and e.status_code == 404:
+                    invalidate_session(session_id)
             finally:
                 if ephemeral:
                     close_session(headers, session_id)
