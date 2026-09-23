@@ -822,8 +822,12 @@ function resolveMsEnvOrThrow(
  * 設定ミスを黙って既定値に縮退させない (= fail-fast)。起動 path では `validateMcpEnvConfig()`
  * が listen 前に本関数を呼ぶため、不正値のデプロイは server が上がらない形で顕在化する。
  *
- * `getPingTimeoutMs()` (= issue #240) と同 pattern。呼び出しのたびに env を読むため、
- * テストから env を差し替えて検証できる (module reload 不要)。
+ * pattern の出典は 2 つに分かれる (issue #381: 旧 JSDoc は両方を `getPingTimeoutMs()` に
+ * 帰していたが、同関数は `return PING_TIMEOUT_MS;` のみで env を読まない):
+ * - **定数を getter 経由で露出する**点は `getPingTimeoutMs()` (= issue #240) と同 pattern
+ * - **呼び出しのたびに env を読む**点は `isPingLoopDisabled()` (= issue #91 / #363) と同 pattern
+ *
+ * 後者により、テストから env を差し替えて検証できる (module reload 不要)。
  */
 export function getGetCloseEvictionGraceMs(): number {
   return resolveMsEnvOrThrow(
@@ -1280,13 +1284,32 @@ export function getOrphanEvictionIntervalMs(): number {
  * ここで先に全部叩いておかないと「起動は成功し、切断が起きて初めて壊れる」ことになる。
  *
  * env 未設定 (= 既定値採用) の場合は何も起きない (= 正常系)。
+ *
+ * 併せて、`AGENT_HUB_MCP_GET_CLOSE_GRACE_MS` による上書きが効いている場合のみ実効値を
+ * 1 度だけ info log へ出す (issue #381)。従来は不正値のときしか log が出ず、
+ * 「env が正しく解釈されて既定の 60s 以外で動いている」状態が無言だったため、
+ * 稼働中の hub の実効 grace を起動ログから確認できなかった (= committed compose に
+ * 記述の無い env が実機側に drift として居ても判別できない)。
  */
 export function validateMcpEnvConfig(): void {
-  getGetCloseEvictionGraceMs();
+  const graceMs = getGetCloseEvictionGraceMs();
   getOrphanEvictionIntervalMs();
   // AGENT_HUB_MCP_PING_LOOP_MODE の不正値も起動時に弾く (issue #363)。
   // startActivePingLoop() は listen より後に呼ばれるため、ここで先に評価する。
   resolvePingLoopMode();
+
+  // log を起動時 1 回に限定する理由: `getGetCloseEvictionGraceMs()` は
+  // `scheduleEvictionOnDisconnect()` の default 引数として GET 切断のたびに呼ばれるため、
+  // getter 側に log を置くと切断回数ぶん log が膨らむ。呼び出し元が起動 path の
+  // 1 箇所である本関数に置くことで出力頻度を 1 回に固定する。
+  // env 未設定時は何も出さない (= 既定値で動いていることは log の不在で判る)。
+  const rawGraceMs = process.env.AGENT_HUB_MCP_GET_CLOSE_GRACE_MS;
+  if (rawGraceMs !== undefined && rawGraceMs !== '') {
+    console.log(
+      `[MCP] AGENT_HUB_MCP_GET_CLOSE_GRACE_MS override active: ` +
+        `GET close eviction grace = ${graceMs}ms (default ${GET_CLOSE_EVICTION_GRACE_MS}ms)`
+    );
+  }
 }
 
 /**
