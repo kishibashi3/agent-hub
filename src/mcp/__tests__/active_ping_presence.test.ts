@@ -19,6 +19,8 @@ import {
   MCPServer,
   _addSessionForTesting,
   _clearSessionsForTesting,
+  _isEvictingSessionForTesting,
+  ORPHAN_EVICT_LOG_LIMIT,
 } from '../server.js';
 
 /**
@@ -871,6 +873,212 @@ describe('ping loop mode 3 値化 (issue #363)', () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining('mode=observe-only'));
       stopActivePingLoop();
       log.mockRestore();
+    });
+  });
+});
+
+/**
+ * issue #377 (PR #372 follow-up): orphan eviction sweep の in-flight guard と
+ * 初回 sweep のログ量圧縮。
+ *
+ * 動機は初回本番 sweep (~8700 件)。sweep が interval (既定 30s) を超えると 2 本目が
+ * 同じ状態で走り、1 件 2 行のログは ~17,400 行になる。どちらも「operator がこの
+ * ログで動作確認する」場面を壊す。
+ */
+describe('orphan eviction sweep: in-flight guard / log 圧縮 (issue #377)', () => {
+  const SIX_MIN_MS = 6 * 60 * 1000;
+
+  function makeOrphan(closeImpl?: () => Promise<void>) {
+    return {
+      transport: { close: closeImpl ?? vi.fn().mockResolvedValue(undefined) },
+      server: { ping: vi.fn().mockResolvedValue(undefined) },
+      userId: '@test-user',
+      githubLogin: 'test-user',
+      tenantDomain: 'default',
+      subscribedUris: new Set<string>(),
+      createdAt: Date.now() - SIX_MIN_MS,
+      lastActivityAt: Date.now() - SIX_MIN_MS,
+    };
+  }
+
+  beforeEach(() => {
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_DISABLED;
+    delete process.env.AGENT_HUB_MCP_ORPHAN_EVICTION_INTERVAL_MS;
+  });
+
+  afterEach(() => {
+    stopOrphanEvictionLoop();
+    _clearSessionsForTesting();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  describe('in-flight guard', () => {
+    it('sweep が interval を超えても 2 本目は走らず、skip を WARN に残す', async () => {
+      vi.useFakeTimers();
+
+      // close() を解決させないことで sweep を interval を跨いで滞留させる
+      let release: (() => void) | undefined;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const slowClose = vi.fn().mockReturnValue(blocked);
+      _addSessionForTesting('slow-orphan', makeOrphan(slowClose));
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+
+      // 1 本目の sweep が close() で滞留したまま、interval を 2 回跨ぐ
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(slowClose).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // 2 本目・3 本目は guard で弾かれるので close() は増えない
+      expect(slowClose).toHaveBeenCalledTimes(1);
+      const skips = warn.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan eviction cycle skipped')
+      );
+      expect(skips.length).toBe(2);
+
+      release?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('sweep 完了後は guard が降り、次の cycle が走る', async () => {
+      vi.useFakeTimers();
+      _addSessionForTesting('orphan-1', makeOrphan());
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // 1 本目は完了済み。次の cycle は skip されない
+      _addSessionForTesting('orphan-2', makeOrphan());
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const skips = warn.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan eviction cycle skipped')
+      );
+      expect(skips).toHaveLength(0);
+      const stats = await runOneOrphanEvictionCycle();
+      expect(stats.total).toBe(0); // 2 件とも回収済み
+    });
+
+    it('sweep が throw しても guard は降りる (= GC が永久停止しない)', async () => {
+      vi.useFakeTimers();
+      const boom = vi.fn().mockRejectedValue(new Error('boom'));
+      // transport.close() の throw は cycle 内で catch されるため、cycle 自体を
+      // 失敗させるには sessions Map の iteration を壊す必要がある。ここでは
+      // getter で throw する session を差し込む。
+      _addSessionForTesting('exploding', {
+        get subscribedUris(): Set<string> {
+          throw new Error('boom');
+        },
+        transport: { close: boom },
+        server: { ping: vi.fn() },
+        userId: '@x',
+        githubLogin: 'x',
+        tenantDomain: 'default',
+        createdAt: Date.now() - SIX_MIN_MS,
+        lastActivityAt: Date.now() - SIX_MIN_MS,
+      });
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      startOrphanEvictionLoop();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        err.mock.calls.some(
+          (c) => typeof c[0] === 'string' && c[0].includes('orphan eviction cycle failed')
+        )
+      ).toBe(true);
+
+      // guard が降りていれば次の cycle は skip されない
+      await vi.advanceTimersByTimeAsync(30_000);
+      const skips = warn.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan eviction cycle skipped')
+      );
+      expect(skips).toHaveLength(0);
+    });
+  });
+
+  describe('ログ量の圧縮', () => {
+    it('閾値以下なら全件が個別行で出る (= 通常運用では従来どおり)', async () => {
+      for (let i = 0; i < ORPHAN_EVICT_LOG_LIMIT; i++) {
+        _addSessionForTesting(`orphan-${i}`, makeOrphan());
+      }
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const stats = await runOneOrphanEvictionCycle();
+
+      expect(stats.orphansEvicted).toBe(ORPHAN_EVICT_LOG_LIMIT);
+      const lines = log.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('orphan session evicted')
+      );
+      expect(lines).toHaveLength(ORPHAN_EVICT_LOG_LIMIT);
+      expect(
+        lines.some((c) => String(c[0]).includes('more suppressed'))
+      ).toBe(false);
+    });
+
+    it('閾値を超えた分はサマリ 1 行に畳まれる', async () => {
+      const n = ORPHAN_EVICT_LOG_LIMIT + 30;
+      for (let i = 0; i < n; i++) {
+        _addSessionForTesting(`orphan-${i}`, makeOrphan());
+      }
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const stats = await runOneOrphanEvictionCycle();
+
+      expect(stats.orphansEvicted).toBe(n);
+      const all = log.mock.calls
+        .map((c) => String(c[0]))
+        .filter((line) => line.includes('orphan session evicted'));
+      const individual = all.filter((line) => !line.includes('more suppressed'));
+      const summary = all.filter((line) => line.includes('more suppressed'));
+
+      expect(individual).toHaveLength(ORPHAN_EVICT_LOG_LIMIT);
+      expect(summary).toHaveLength(1);
+      // 抑制した事実と件数は必ず残す (無言で減らさない)
+      expect(summary[0]).toContain(`${n - ORPHAN_EVICT_LOG_LIMIT} more suppressed`);
+      // 8700 件規模でも個別行 + サマリで 21 行に収まる
+      expect(all).toHaveLength(ORPHAN_EVICT_LOG_LIMIT + 1);
+    });
+
+    it('evict 中は session closed log が抑止される (= 1 件 2 行 → 1 行)', async () => {
+      let seenDuringClose: boolean | undefined;
+      _addSessionForTesting(
+        'orphan-close-probe',
+        makeOrphan(async () => {
+          // transport.onclose が走るのと同じタイミングで抑止条件を観測する
+          seenDuringClose = _isEvictingSessionForTesting('orphan-close-probe');
+        })
+      );
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runOneOrphanEvictionCycle();
+
+      expect(seenDuringClose).toBe(true);
+      // sweep を抜けたら抑止は解除されている (= 通常の切断は従来どおり log が出る)
+      expect(_isEvictingSessionForTesting('orphan-close-probe')).toBe(false);
+    });
+
+    it('close() が throw しても抑止フラグは残らない', async () => {
+      _addSessionForTesting(
+        'orphan-close-throws',
+        makeOrphan(() => Promise.reject(new Error('close failed')))
+      );
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await runOneOrphanEvictionCycle();
+
+      expect(_isEvictingSessionForTesting('orphan-close-throws')).toBe(false);
     });
   });
 });
