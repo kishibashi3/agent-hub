@@ -1716,27 +1716,28 @@ class TestIssue368:
     # ----------------------------------------------------------
 
     def _fire_once(
-        self, tmp_path: Path, send_dm_impl, *, wait_timeout: float = 15.0
+        self, tmp_path: Path, send_dm_impl, *, wait_timeout: float = 15.0,
+        entry: dict | None = None, sleeps: list | None = None,
     ) -> tuple[list, list, MagicMock]:
-        """due な one-shot entry を fire させる。
+        """due な one-shot entry (= `entry` 指定時はそれ) を fire させる。
 
         戻り値は `(send_dm に使われた sid, close_session された sid, save_schedules mock)`。
         schedule が空になった後の 60s sleep / 再送失敗後の 60s 待ちは shutdown に
-        置き換え、 test が 1 周で抜けるようにする。
+        置き換え、 test が 1 周で抜けるようにする。 `sleeps` を渡すと
+        `time.sleep` の引数をそこに記録する。
         """
         cfg = tmp_path / "schedules.json"
-        past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
-        cfg.write_text(
-            json.dumps([{
+        if entry is None:
+            past = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+            entry = {
                 "name": "fire-368",
                 "run_at": past,
                 "to": "@planner",
                 "message": "remind-me",
                 "owner": "@ope",
                 "one_shot": True,
-            }]),
-            encoding="utf-8",
-        )
+            }
+        cfg.write_text(json.dumps([entry]), encoding="utf-8")
         sched._shutdown_event.clear()
         used: list = []
         closed: list = []
@@ -1749,6 +1750,11 @@ class TestIssue368:
             sched._shutdown_event.set()
             return True
 
+        def stop_sleep(seconds):
+            if sleeps is not None:
+                sleeps.append(seconds)
+            return stop()
+
         with patch.object(sched, "build_headers", return_value={}), \
              patch.object(sched, "resolve_user_id", return_value="@test-user"), \
              patch.object(sched, "init_session", return_value="sess-ephemeral"), \
@@ -1760,7 +1766,7 @@ class TestIssue368:
              patch.object(sched, "save_schedules") as mock_save, \
              patch.object(sched, "_SESSION_WAIT_TIMEOUT_S", wait_timeout), \
              patch.object(sched._shutdown_event, "wait", side_effect=stop), \
-             patch("scheduler.time.sleep", side_effect=stop), \
+             patch("scheduler.time.sleep", side_effect=stop_sleep), \
              patch("threading.Thread"), \
              patch.dict(os.environ, {"SCHEDULER_CONFIG": str(cfg)}):
             sched.main()
@@ -2201,6 +2207,59 @@ class TestIssue422:
         # 配送済みかもしれない、 という誤った WARN は出さない
         assert "may have happened after delivery" not in err
         mock_save.assert_called_once()
+
+    def test_main_fire_keeps_cyclic_and_advances_when_rejected(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """拒否された cyclic entry は消さず、 次回 fire 時刻へ進める。
+
+        one-shot と違い、 次回は別の時刻なので待ちなしで拒否を繰り返すことはない。
+        """
+        sched.publish_session("sess-sse")
+        now = datetime.now().astimezone()
+        # 起動時の get_next は due (= 過去)、 fire 後の get_next は 30s 先。
+        # 30s は空 schedule の sleep(60) と区別するための値。
+        fake_iter = MagicMock()
+        fake_iter.get_next.side_effect = [
+            now - timedelta(minutes=1),
+            now + timedelta(seconds=30),
+        ]
+        entry = {
+            "name": "cyclic-422",
+            "cron": "0 * * * *",
+            "to": "@planner",
+            "message": "hourly",
+            "owner": "@ope",
+        }
+
+        fires: list = []
+
+        def rejected(_sid):
+            fires.append(_sid)
+            if len(fires) > 1:
+                # 進んでいないと即 due で再 fire し続けるので、 ここで抜ける。
+                sched._shutdown_event.set()
+            raise sched.SendDmToolError("send_message failed: tool error: bad to")
+
+        sleeps: list = []
+        with patch.object(sched, "croniter", return_value=fake_iter):
+            used, closed, mock_save = TestIssue368._fire_once(
+                self, tmp_path, rejected, entry=entry, sleeps=sleeps
+            )
+
+        out, err = capsys.readouterr()
+        # 再送しない
+        assert used == ["sess-sse"]
+        assert closed == []
+        assert "[FIRE" not in out
+        assert "[ERR] name='cyclic-422' (cyclic) gave up this fire" in err
+        # 消さない (= 永続化されず、 次 iteration も entry が残っている)
+        mock_save.assert_not_called()
+        assert "[ONESHOT-DELETE]" not in out
+        # 次回 fire 時刻へ進んでいる (= 空なら sleep(60)、 進んでいなければ再 fire)
+        assert fake_iter.get_next.call_count == 2
+        assert len(sleeps) == 1
+        assert 0 < sleeps[0] <= 30
 
     # ----------------------------------------------------------
     # handle_inbox_command
