@@ -19,7 +19,7 @@ ADR (`decisions/`) は決定時点の記録なので `snapshot` とする。末�
 - [architecture.md](./architecture.md) `normative` — ecosystem 全体構成 / 各 peer 役割 / メッセージング仕組み / merge フロー / 技術スタック (= 新規エンジニア向け technical overview)。既知の食い違いは #446 / #450 で修正中
 - [architecture-slides.md](./architecture-slides.md) `snapshot` — アーキテクチャ概要の Marp スライド (#135、2026-05-22 時点)。peer 視点の協働 + インフラ補足
 - [peer-howto.md](./peer-howto.md) `normative` — peer agent (bridge / client / plugin) が知らないと事故る最小限の運用規約。MCP resource `howto://agent-hub` として server がこのファイルをそのまま配布する (#340)
-- [language-strategy.md](./language-strategy.md) `snapshot` — コア / SDK layer の言語方針 (2026-06-06 時点、on-demand bridge spawn #110 の議論から整理)
+- [language-strategy.md](./language-strategy.md) `snapshot` — コア / SDK layer の言語方針 (2026-06-06 時点、on-demand bridge spawn kishibashi3/agent-hub-bridges#110 の議論から整理)
 
 ## 思想 / 理念
 
