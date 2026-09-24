@@ -23,6 +23,7 @@ import {
   _isEvictingSessionForTesting,
   ORPHAN_EVICT_LOG_LIMIT,
   getOrphanEvictionHeartbeatMs,
+  evictSessionOnDisconnect,
   ORPHAN_EVICTION_HEARTBEAT_MS,
   ORPHAN_EVICTION_HEARTBEAT_MIN_MS,
   ORPHAN_EVICTION_HEARTBEAT_MAX_MS,
@@ -1556,5 +1557,130 @@ describe('orphan eviction heartbeat log (issue #386)', () => {
       startOrphanEvictionLoop();
       expect(log).toHaveBeenCalledWith(expect.stringContaining('1min heartbeat'));
     });
+  });
+});
+
+/**
+ * issue #451: 明示 evict の経路 (`evictSessionOnDisconnect()` / enforce の ping cycle / orphan evict) は
+ * `await transport.close()` の後で `sessions.delete()` する。close の間も session は `sessions` に残るので、
+ * ほかの経路が同じ transport にもう一度 close を呼ばないことを確かめる。
+ *
+ * 今の SDK の `close()` は onclose まで同期で進むため、本番では窓が開かない (issue #452 の実測)。
+ * ここでは close が解決しない fake transport で「close が onclose より前に await を挟む」場合を再現する。
+ */
+describe('close 中の session に 2 回目の close を呼ばない (issue #451)', () => {
+  const SIX_MIN_MS = 6 * 60 * 1000;
+
+  /**
+   * 1 回目の close() が release() を呼ぶまで解決しない transport を持つ session。
+   * 2 回目以降の close() はすぐ解決する (= guard がないときに hang ではなく回数の assert で落ちるように)。
+   */
+  function makeSessionWithBlockedClose(opts: { pingAlive: boolean; orphan: boolean }) {
+    let release: () => void = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const createdAt = opts.orphan ? Date.now() - SIX_MIN_MS : Date.now();
+    const session = {
+      transport: { close: vi.fn().mockReturnValueOnce(blocked).mockResolvedValue(undefined) },
+      server: {
+        ping: opts.pingAlive
+          ? vi.fn().mockResolvedValue(undefined)
+          : vi.fn().mockRejectedValue(new Error('no pong')),
+      },
+      userId: '@closing-peer',
+      githubLogin: 'closing-peer',
+      tenantDomain: 'default',
+      subscribedUris: opts.orphan ? new Set<string>() : new Set(['inbox://@closing-peer']),
+      createdAt,
+      lastActivityAt: createdAt,
+    };
+    return { session, release: () => release() };
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    _clearSessionsForTesting();
+    _resetPingLoopObserveStateForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('evictSessionOnDisconnect の close 中に enforce の cycle が来ても close も count もしない', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: false, orphan: false });
+    _addSessionForTesting('closing-1', session);
+
+    const evicting = evictSessionOnDisconnect('closing-1');
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    const stats = await runOneActivePingCycle('enforce');
+    expect(session.transport.close).toHaveBeenCalledOnce();
+    expect(stats.disconnected).toBe(0);
+
+    release();
+    await expect(evicting).resolves.toBe(true);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+  });
+
+  it('enforce の close 中に evictSessionOnDisconnect が来ても close しない (= false を返す)', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: false, orphan: false });
+    _addSessionForTesting('closing-2', session);
+
+    const cycle = runOneActivePingCycle('enforce');
+    await vi.waitFor(() => expect(session.transport.close).toHaveBeenCalledOnce());
+
+    await expect(evictSessionOnDisconnect('closing-2')).resolves.toBe(false);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    release();
+    const stats = await cycle;
+    expect(stats.disconnected).toBe(1);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+  });
+
+  it('orphan evict の close 中に evictSessionOnDisconnect / enforce が来ても close しない', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: false, orphan: true });
+    _addSessionForTesting('closing-3', session);
+
+    const sweep = runOneOrphanEvictionCycle();
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    await expect(evictSessionOnDisconnect('closing-3')).resolves.toBe(false);
+    const stats = await runOneActivePingCycle('enforce');
+    expect(stats.disconnected).toBe(0);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    release();
+    await expect(sweep).resolves.toMatchObject({ orphansEvicted: 1 });
+    expect(session.transport.close).toHaveBeenCalledOnce();
+  });
+
+  it('evictSessionOnDisconnect の close 中に orphan evict の sweep が来ても close も count もしない', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: true, orphan: true });
+    _addSessionForTesting('closing-4', session);
+
+    const evicting = evictSessionOnDisconnect('closing-4');
+    await expect(runOneOrphanEvictionCycle()).resolves.toMatchObject({ orphansEvicted: 0 });
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    release();
+    await expect(evicting).resolves.toBe(true);
+  });
+
+  it('close が終わった session は sessions から消え、印も残らない (= 次の session を塞がない)', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: false, orphan: false });
+    _addSessionForTesting('closing-5', session);
+    const evicting = evictSessionOnDisconnect('closing-5');
+    release();
+    await evicting;
+
+    // 同じ sid で入り直した session (テスト上の仮定) は、印が残っていなければ通常どおり evict される
+    const next = makeSessionWithBlockedClose({ pingAlive: false, orphan: false });
+    _addSessionForTesting('closing-5', next.session);
+    next.release();
+    await expect(evictSessionOnDisconnect('closing-5')).resolves.toBe(true);
+    expect(next.session.transport.close).toHaveBeenCalledOnce();
   });
 });
