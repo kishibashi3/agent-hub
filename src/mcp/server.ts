@@ -964,16 +964,23 @@ export function getPingTimeoutMs(): number {
 }
 
 /**
- * GET /mcp の `handleRequest` が throw したときに session を除去する (issue #157)。
+ * 明示 evict の共通部分: `transport.close()` → `sessions.delete()` の順で session を除去する。
  *
- * eviction パターン (active ping loop と同様): transport.close() → sessions.delete()。
  * transport.onclose も sessions.delete を呼ぶが race 回避で明示削除する。
- * ほかの経路が close している最中なら、close と delete はその経路に任せる (issue #459)。
+ * ほかの経路が close している最中なら、close と delete はその経路に任せる (issue #451, #459)。
+ * `clearPendingEvictionTimer` が true のときだけ、猶予付き eviction の timer を止める。
  */
-export async function evictSessionAfterTransportError(sessionId: string): Promise<boolean> {
+async function evictSession(
+  sessionId: string,
+  logLabel: string,
+  clearPendingEvictionTimer: boolean,
+): Promise<boolean> {
   const session = sessions.get(sessionId);
   if (!session) return false;
   if (closingSessionIds.has(sessionId)) return false;
+  if (clearPendingEvictionTimer && session.pendingEvictionTimer) {
+    clearTimeout(session.pendingEvictionTimer);
+  }
   closingSessionIds.add(sessionId);
   // close() は既にエラー状態の transport に対して throw する可能性があるため try/catch。
   try {
@@ -986,8 +993,18 @@ export async function evictSessionAfterTransportError(sessionId: string): Promis
   if (sessions.has(sessionId)) {
     sessions.delete(sessionId);
   }
-  console.log(`[MCP] session evicted after transport error: ${sessionId}`);
+  console.log(`[MCP] ${logLabel}: ${sessionId}`);
   return true;
+}
+
+/**
+ * GET /mcp の `handleRequest` が throw したときに session を除去する (issue #157)。
+ *
+ * eviction パターン (active ping loop と同様): transport.close() → sessions.delete()。
+ * ほかの経路が close している最中なら、close と delete はその経路に任せる (issue #459)。
+ */
+export async function evictSessionAfterTransportError(sessionId: string): Promise<boolean> {
+  return evictSession(sessionId, 'session evicted after transport error', false);
 }
 
 /**
@@ -998,30 +1015,12 @@ export async function evictSessionAfterTransportError(sessionId: string): Promis
  * (`req.on('close')`) がこの eviction を起動できる唯一の経路になる。ただし GET 切断は
  * 「bridge プロセス死亡」だけでなく「公式 SDK client の正常な reconnect」でも発生するため、
  * 呼び出し側は原則 `scheduleEvictionOnDisconnect()` 経由の猶予付き eviction を使うこと。
- * 即時 evict が必要な場面 (= active ping loop の retry 全滅、GET handleRequest 自体の
- * エラー等、bridge 生存確認が別途取れている場合) でのみ本関数を直接呼ぶ。
+ * 即時 evict が必要な場面 (= active ping loop の retry 全滅等、bridge 生存確認が別途
+ * 取れている場合) でのみ本関数を直接呼ぶ。GET handleRequest 自体のエラーは
+ * `evictSessionAfterTransportError()` が扱う。
  */
 export async function evictSessionOnDisconnect(sessionId: string): Promise<boolean> {
-  const session = sessions.get(sessionId);
-  if (!session) return false;
-  // ほかの経路が close している最中なら、その経路が delete まで済ませる (issue #451)
-  if (closingSessionIds.has(sessionId)) return false;
-  if (session.pendingEvictionTimer) {
-    clearTimeout(session.pendingEvictionTimer);
-  }
-  closingSessionIds.add(sessionId);
-  try {
-    await session.transport.close();
-  } catch (_closeErr) {
-    // transport は既にエラー状態 or 切断済み — 無視して delete に進む
-  } finally {
-    closingSessionIds.delete(sessionId);
-  }
-  if (sessions.has(sessionId)) {
-    sessions.delete(sessionId);
-  }
-  console.log(`[MCP] session evicted on connection close: ${sessionId}`);
-  return true;
+  return evictSession(sessionId, 'session evicted on connection close', true);
 }
 
 /**
