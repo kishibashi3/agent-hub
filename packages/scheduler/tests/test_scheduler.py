@@ -2170,6 +2170,102 @@ class TestIssue412:
 
 
 # ============================================================
+# issue #427: SSE 再接続の指数 backoff
+# ============================================================
+
+class TestIssue427:
+    """issue #427: GET stream を確立できないまま再接続が続いたら待ちを 2 倍ずつ伸ばす。"""
+
+    def test_reconnect_delay_doubles_up_to_cap(self) -> None:
+        delays = [sched._reconnect_delay(5, n) for n in range(7)]
+        assert delays == [5, 10, 20, 40, 60, 60, 60]
+        # 正常 close の基準 3s も初回は変わらない
+        assert sched._reconnect_delay(3, 0) == 3
+
+    @staticmethod
+    def _run(tmp_path: Path, steps: list, max_sleeps: int) -> list:
+        """`steps` の順に 1 周ずつ動かし、 `time.sleep` の引数を返す。
+
+        step は `"init-error"` (= `init_session` が raise)、 `"get-500"`
+        (= GET が 200 以外)、 または GET stream の行 list (= 200 で流して close)。
+        `max_sleeps` 回目の sleep で loop を抜ける。
+        """
+        cfg = tmp_path / "schedules.json"
+        cfg.write_text("[]", encoding="utf-8")
+        it = iter(steps)
+        current: list = []
+        sleeps: list = []
+
+        def fake_init(_headers):
+            step = next(it)
+            current[:] = [step]
+            if step == "init-error":
+                raise RuntimeError("hub frozen")
+            return "sess-427"
+
+        def fake_get(url, headers=None, stream=None, timeout=None):
+            step = current[0]
+            if step == "get-500":
+                return _FakeSseResponse([], status_code=500)
+            return _FakeSseResponse(step)
+
+        def fake_sleep(secs):
+            sleeps.append(secs)
+            if len(sleeps) >= max_sleeps:
+                raise _StopSseLoop()
+
+        with patch.object(sched, "init_session", side_effect=fake_init), \
+             patch.object(sched, "register_self"), \
+             patch.object(sched, "subscribe_inbox"), \
+             patch("scheduler.requests.get", side_effect=fake_get), \
+             patch("scheduler.time.sleep", side_effect=fake_sleep):
+            with pytest.raises(_StopSseLoop):
+                sched.sse_listen_loop({}, "scheduler", [], [], [], cfg)
+        return sleeps
+
+    def test_consecutive_failures_back_off_to_cap(self, tmp_path: Path) -> None:
+        """hub 凍結中 (= initialize が毎回失敗) は 5s → 10s → … → 60s で頭打ち。"""
+        sleeps = self._run(tmp_path, ["init-error"] * 7, max_sleeps=7)
+        assert sleeps == [5, 10, 20, 40, 60, 60, 60]
+
+    def test_non_200_get_counts_as_failure(self, tmp_path: Path) -> None:
+        """GET 非 200 も連続失敗に数える。"""
+        sleeps = self._run(tmp_path, ["get-500", "init-error"], max_sleeps=2)
+        assert sleeps == [5, 10]
+
+    def test_established_stream_without_lines_resets_backoff(
+        self, tmp_path: Path
+    ) -> None:
+        """GET が 200 なら、 行が届く前に閉じても基準に戻す。
+
+        keepalive (15s) より前に hub が再起動しても、 次の再接続を伸ばさない
+        (= 行で判定すると 10s になっていた実測ケース)。
+        """
+        sleeps = self._run(
+            tmp_path, ["init-error", "init-error", [], "init-error"], max_sleeps=4
+        )
+        assert sleeps == [5, 10, 3, 10]
+
+    def test_healthy_stream_keeps_base_delay(self, tmp_path: Path) -> None:
+        """確立してから閉じた stream は毎回 3s のまま (= 健全時は遅くならない)。"""
+        sleeps = self._run(tmp_path, [[": keepalive"]] * 3, max_sleeps=3)
+        assert sleeps == [3, 3, 3]
+
+    def test_established_stream_resets_backoff_after_failures(self, tmp_path: Path) -> None:
+        """失敗が続いたあとでも、 GET が確立すれば基準から数え直す。
+
+        確立した stream が閉じたあとの再接続は 3s (= 数え直した 1 回目)。
+        その再接続が失敗すると 2 回目として 10s になる (= 20s → 40s には進まない)。
+        """
+        sleeps = self._run(
+            tmp_path,
+            ["init-error", "init-error", "init-error", [": keepalive"], "init-error"],
+            max_sleeps=5,
+        )
+        assert sleeps == [5, 10, 20, 3, 10]
+
+
+# ============================================================
 # issue #422: HTTP 200 + isError を send_dm の失敗として扱う
 # ============================================================
 
