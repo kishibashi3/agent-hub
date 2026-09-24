@@ -44,6 +44,7 @@ agent-hub の理念・設計議論。実装の手順は repo ルートの `READM
 - [minimum-installer.md](./minimum-installer.md) — Onboarding design (issue #79)、 最小 viable experience の path
 - [deployment-pi5.md](./deployment-pi5.md) — Pi5 deployment 完全手順書 (= server + bridges + scheduler)
 - [ping-loop-mode.md](./ping-loop-mode.md) — ping loop の 3 値 (`disabled` / `observe-only` / `enforce`) の挙動・env の解決規則・切り替え条件 (issue #363 / #392)
+- [sqlite-backup-restore.md](./sqlite-backup-restore.md) — SQLite (`app.db`) の backup / restore 手順。SD カードが死んだら何が残るか、定期 snapshot と Litestream の比較 (issue #328)
 
 ## 競合 / 調査
 
