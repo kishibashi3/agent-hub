@@ -1,22 +1,27 @@
 # Docker bundle + dashboard (= issue #95 + 2026-05-20 dashboard sidecar)
 
-agent-hub の **hub server + scheduler + dashboard** を Docker で起動するための image 群です。 `docker run` 1 コマンド (bundle のみ) または `docker-compose up -d` (bundle + dashboard) で minimal-installer flow の step 3 が完結します。
+agent-hub の **hub server + scheduler + dashboard** を Docker で起動するための image 群です。 `docker run` 1 コマンド (bundle のみ) または `docker-compose up -d` (hub server・scheduler・dashboard2 を別 service で起動、 issue #300) で minimal-installer flow の step 3 が完結します。
 
 ## image source
 
-agent-hub の 公開 Docker image は **2 種類**:
+agent-hub の 公開 Docker image は **3 種類** (`.github/workflows/docker-publish.yml` の matrix):
 
 | image | 内容 | port |
 |---|---|---|
 | `ghcr.io/kishibashi3/agent-hub:latest` | **bundle** (= MCP server + Python scheduler、 supervisord で並走) | 3000 (/mcp, /health) |
 | `ghcr.io/kishibashi3/agent-hub-dashboard:latest` | **dashboard sidecar** (= message traffic visualizer、 SQLite DB を read-only mount) | 8080 (/) |
+| `ghcr.io/kishibashi3/agent-hub-scheduler:latest` | **scheduler 単体** (= Python scheduler のみ、 `Dockerfile.scheduler`。 compose の `agent-hub-scheduler` service が使う) | なし |
 
-両 image とも:
+3 image とも:
 - default tag: `:latest` (= main branch push 時に自動更新)
 - version tag: `:v1.2.3` (= semver tag push 時に併設、 rollback 用)
 - commit tag: `:main-<sha7>` (= main 各 commit 用 rollback tag)
 
 ## 構成
+
+起動方法によって process の構成が異なります。
+
+### `docker run` (bundle image 1 つ)
 
 | process | runtime | role |
 |---|---|---|
@@ -25,6 +30,20 @@ agent-hub の 公開 Docker image は **2 種類**:
 | `supervisord` | PID 1 | 上記 2 process の lifecycle / restart 管理 |
 
 server と scheduler は **同 storage volume** (= `/app/data`) を共有し、 SQLite DB + `schedules.json` を保持。
+
+### `docker-compose` (service ごとに別 container、 issue #300)
+
+compose は supervisord を通しません。 hub server と scheduler は別 image・別 service です (`docker-compose.yml`)。
+
+| service | image | 起動 command | role |
+|---|---|---|---|
+| `agent-hub` | `ghcr.io/kishibashi3/agent-hub:latest` | entrypoint を `npm run mcp:start` に上書き (= MCP server のみ) | MCP HTTP endpoint (= `127.0.0.1:3000`) |
+| `agent-hub-scheduler` | `ghcr.io/kishibashi3/agent-hub-scheduler:latest` | `python scheduler.py` | cron-based DM scheduler。 `agent-hub` が healthy になってから起動 |
+| `dashboard2` | `ghcr.io/kishibashi3/agent-hub-dashboard2:latest` | image default | dashboard (= `127.0.0.1:8082`、 DB を read-only mount) |
+
+3 service とも host の `./data` を `/app/data` に mount して共有します (dashboard2 は `:ro`)。 scheduler だけを再起動する場合は `docker compose restart agent-hub-scheduler` (hub は止まりません)。
+
+`livekit` / `pipecat` は `profiles: ["voice"]` の service なので、 `docker compose --profile voice up -d` のときだけ起動します。
 
 ## 起動方法
 
@@ -44,12 +63,12 @@ docker run -d \
 repo に同梱の `docker-compose.yml` を使用:
 
 ```bash
-# .env ファイルに認証情報を記載
+# .env ファイルに認証情報を記載 (= docker-compose.yml が参照する変数名)
 cat > .env <<EOF
-GITHUB_PAT=ghp_xxx
+AGENT_HUB_GITHUB_PAT=ghp_xxx
 AGENT_HUB_TENANT=mytenant
 AGENT_HUB_EDITION=community
-AUTH_MODE=pat
+AGENT_HUB_AUTH_MODE=pat
 EOF
 
 # 起動
@@ -69,7 +88,7 @@ docker-compose down
 | `GITHUB_PAT` | (unset) | scheduler 認証 | GitHub PAT (read:user) — pat mode 推奨 |
 | `AGENT_HUB_USER` | (unset) | scheduler 認証 | handle override (trust mode は localhost only) |
 | `AGENT_HUB_TENANT` | (unset → default) | scheduler + client | CE multi-tenant の tenant 識別子 |
-| `AGENT_HUB_URL` | `http://localhost:3000/mcp` | scheduler client | server endpoint (= bundle 内 default、 通常不変) |
+| `AGENT_HUB_URL` | bundle: `http://localhost:3000/mcp` / compose: `http://agent-hub:3000/mcp` | scheduler client | server endpoint。 bundle では同 container の server を指す default、 compose では `docker-compose.yml` が `agent-hub` service 名で設定済み (= どちらも通常不変) |
 | `AGENT_HUB_EDITION` | `community` | server | `community` / `private` / `enterprise` |
 | `AUTH_MODE` | `pat` (= edition 依存) | server | `pat` / `trust` (= trust は localhost only) |
 | `AGENT_HUB_GITHUB_ORG` | (unset) | server | pat mode で GitHub Org membership 検証 |
@@ -121,12 +140,7 @@ container 再作成しても data が消えないように、 **必ず volume mo
 
 ### 起動方法
 
-`docker-compose.yml` に dashboard service が同梱されているので、 bundle と一緒に起動できます:
-
-```bash
-docker-compose up -d
-# → agent-hub (port 3000) + agent-hub-dashboard (port 8080) 両方起動
-```
+`docker-compose.yml` に同梱されている dashboard service は `agent-hub-dashboard` ではなく `dashboard2` (= `ghcr.io/kishibashi3/agent-hub-dashboard2:latest`、 `127.0.0.1:8082`) です。 以下で説明する `agent-hub-dashboard` は、 下の「dashboard 単独起動」の `docker run` で起動します。
 
 ブラウザで `http://localhost:8080` を開くと、 上部の **nav bar が 2 group に分割** されて 5 view を提供 (= 2026-05-20 Mesh/Matrix 分離後):
 
@@ -186,6 +200,7 @@ docker run -d \
 
 - `Dockerfile` (= repo root) = **fly.io 向け server-only image**、 既存 deployment 用、 変更なし
 - `Dockerfile.bundle` = **all-in-one bundle** (= server + scheduler)、 ghcr.io publish 用
+- `Dockerfile.scheduler` = **scheduler 単体**、 ghcr.io `agent-hub-scheduler` として publish (= compose の `agent-hub-scheduler` service 用、 issue #300)
 - `packages/dashboard/Dockerfile` = **dashboard sidecar**、 ghcr.io 別 image として publish
 
 backward compat 完全保持、 fly.io deployment は引き続き `flyctl deploy` で動作します。
