@@ -19,6 +19,8 @@ import path from 'path';
  *   「未対応サーバー (= key 自体なし)」 と 「対応サーバーだが env 未設定 (= null)」 を区別できる。
  *
  * `started_at` は module load の瞬間に固定する constant (= 例外なし、 process 寿命 = 値固定)。
+ *
+ * MCP initialize の serverInfo.version に返す `SERVER_VERSION` (issue #322) もこの module から出す。
  */
 
 /**
@@ -37,14 +39,30 @@ const PACKAGE_JSON_PATH = path.join(
 );
 
 /**
+ * package.json を読み、 `version` を返す (issue #471)。
+ *
+ * `version` が無い / 空でない string でない場合は throw する。 `undefined` のまま
+ * serverInfo に入るサイレント縮退を起動時に止めるため。
+ */
+export function readServerVersion(packageJsonPath: string): string {
+  const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { version?: unknown };
+  const version = pkg.version;
+  if (typeof version !== 'string' || version.trim().length === 0) {
+    throw new Error(
+      `package.json の version が空でない string ではありません: ${packageJsonPath} (version=${JSON.stringify(version)})`
+    );
+  }
+  return version;
+}
+
+/**
  * MCP initialize の serverInfo.version に返す server の version (issue #322)。
  *
  * 正本は package.json の `version`。 server.ts に literal を書かず、 ここで 1 度だけ読む。
  * package.json は Dockerfile / Dockerfile.bundle とも image に COPY 済み。
+ * 不正な値なら module load 時に throw する (issue #471)。
  */
-export const SERVER_VERSION: string = (
-  JSON.parse(readFileSync(PACKAGE_JSON_PATH, 'utf-8')) as { version: string }
-).version;
+export const SERVER_VERSION: string = readServerVersion(PACKAGE_JSON_PATH);
 
 /**
  * version info をまとめた immutable な型。
