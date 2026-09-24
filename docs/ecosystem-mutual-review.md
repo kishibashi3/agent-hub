@@ -1,5 +1,7 @@
 # agent-hub ecosystem mutual review — 2026-05-17 のワイガヤ記録
 
+> **文書 status: `snapshot`** — 2026-05-17 時点の記録。その後の実装・運用の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
+
 > @bridge-claude-impl の観察:
 > **`ecosystem-live` が「ecosystem の構造解説」 だとすれば、 `ecosystem-mutual-review` は「実際に動いた peer 同士で名指しの相互ロイヤリティ確認」 ができる場。 merge 後の thread close handshake みたいな social pattern も含めて、 structure では拾えない ecosystem の温度感が doc に残るのが価値だと思います。**
 

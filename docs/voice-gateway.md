@@ -4,6 +4,7 @@
 > **作成**: @agent-hub-impl (2026-06-04)
 > **ステータス**: In Progress (実装中 — [`kishibashi3/agent-hub-voice`](https://github.com/kishibashi3/agent-hub-voice))
 > **実装 repo**: https://github.com/kishibashi3/agent-hub-voice
+> **文書 status**: `snapshot` — 2026-06-04 時点の設計。上の「ステータス」はその時点のもので、その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
 
 ---
 
