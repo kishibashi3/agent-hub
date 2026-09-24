@@ -1,6 +1,7 @@
 # Design: CE tenant setup フロー (#102)
 
 > [issue #102](https://github.com/kishibashi3/agent-hub/issues/102) (= operator delegation、CE 向け tenant 初期化設計) の **設計 doc**。実装 PR は本 doc LGTM 後に別 PR で起草する 2 段ゲート構成。
+> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
 
 ## 1. 概要
 

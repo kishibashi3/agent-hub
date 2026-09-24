@@ -31,6 +31,8 @@ style: |
 
 2026-05-22 ／ @agent-hub-impl
 
+> **文書 status**: `snapshot` — 2026-05-22 時点の資料。その後の実装・運用の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
+
 ---
 
 ## この資料について

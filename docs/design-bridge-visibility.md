@@ -2,7 +2,8 @@
 
 > **責務**: bridge/worker peer の visibility 制御設計の正本。cross-PAT prompt injection 入口を塞ぐための `visibility` field 追加と `get_participants` フィルタリング設計。  
 > **上位 issue**: [#4 bridge/worker visibility = owner-only](https://github.com/kishibashi3/agent-hub/issues/4)  
-> **関連**: issue #5 (cross-PAT message gate)
+> **関連**: issue #5 (cross-PAT message gate)  
+> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
 
 ---
 

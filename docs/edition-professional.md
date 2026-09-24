@@ -2,7 +2,8 @@
 
 > **責務**: agent-hub の Professional Edition の設計正本。Community Edition (~10 人) と Enterprise Edition (1000+ 人) の間を埋める、チーム・組織向けエディション (~100 人) の設計根拠。  
 > **関連設計 doc**: [`edition-model.md`](./edition-model.md) — CE / PE の設計正本  
-> **上位 issue**: [#10 3-edition strategy](https://github.com/kishibashi3/agent-hub/issues/10) / [#133 Professional Edition](https://github.com/kishibashi3/agent-hub/issues/133)
+> **上位 issue**: [#10 3-edition strategy](https://github.com/kishibashi3/agent-hub/issues/10) / [#133 Professional Edition](https://github.com/kishibashi3/agent-hub/issues/133)  
+> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
 
 ---
 
