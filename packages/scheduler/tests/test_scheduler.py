@@ -825,6 +825,14 @@ class _FakeSseResponse:
         yield from self._lines
 
 
+class _BrokenSseResponse(_FakeSseResponse):
+    """GET は 200 で確立し、 行を流した後に `iter_lines` が raise する stub。"""
+
+    def iter_lines(self, decode_unicode: bool = False):
+        yield from self._lines
+        raise RuntimeError("read timed out")
+
+
 class _FakePostResponse:
     def __init__(self, status_code: int = 202) -> None:
         self.status_code = status_code
@@ -2182,12 +2190,23 @@ class TestIssue427:
         # 正常 close の基準 3s も初回は変わらない
         assert sched._reconnect_delay(3, 0) == 3
 
+    def test_reconnect_delay_does_not_overflow_with_float_base(self) -> None:
+        """issue #456: float の base で失敗回数が大きくても例外にせず上限を返す。
+
+        `base * 2 ** n` のままだと n > 1023 で `OverflowError` になっていた。
+        """
+        assert sched._reconnect_delay(5.0, 5000) == 60
+        assert sched._reconnect_delay(3.0, 5000) == 60
+        assert sched._reconnect_delay(5, 5000) == 60
+
     @staticmethod
     def _run(tmp_path: Path, steps: list, max_sleeps: int) -> list:
         """`steps` の順に 1 周ずつ動かし、 `time.sleep` の引数を返す。
 
-        step は `"init-error"` (= `init_session` が raise)、 `"get-500"`
-        (= GET が 200 以外)、 または GET stream の行 list (= 200 で流して close)。
+        step は `"init-error"` (= `init_session` が raise)、 `"subscribe-error"`
+        (= `subscribe_inbox` が raise)、 `"get-500"` (= GET が 200 以外)、
+        `"stream-error"` (= GET は 200、 `iter_lines` の途中で raise)、 または
+        GET stream の行 list (= 200 で流して close)。
         `max_sleeps` 回目の sleep で loop を抜ける。
         """
         cfg = tmp_path / "schedules.json"
@@ -2203,10 +2222,16 @@ class TestIssue427:
                 raise RuntimeError("hub frozen")
             return "sess-427"
 
+        def fake_subscribe(_headers, _sid, _user_id):
+            if current[0] == "subscribe-error":
+                raise RuntimeError("subscribe rejected")
+
         def fake_get(url, headers=None, stream=None, timeout=None):
             step = current[0]
             if step == "get-500":
                 return _FakeSseResponse([], status_code=500)
+            if step == "stream-error":
+                return _BrokenSseResponse([": keepalive"])
             return _FakeSseResponse(step)
 
         def fake_sleep(secs):
@@ -2216,7 +2241,7 @@ class TestIssue427:
 
         with patch.object(sched, "init_session", side_effect=fake_init), \
              patch.object(sched, "register_self"), \
-             patch.object(sched, "subscribe_inbox"), \
+             patch.object(sched, "subscribe_inbox", side_effect=fake_subscribe), \
              patch("scheduler.requests.get", side_effect=fake_get), \
              patch("scheduler.time.sleep", side_effect=fake_sleep):
             with pytest.raises(_StopSseLoop):
@@ -2263,6 +2288,28 @@ class TestIssue427:
             max_sleeps=5,
         )
         assert sleeps == [5, 10, 20, 3, 10]
+
+    def test_subscribe_failure_counts_as_failure(self, tmp_path: Path) -> None:
+        """issue #456: subscribe の失敗も連続失敗に数える (= GET まで進まない)。"""
+        sleeps = self._run(
+            tmp_path, ["subscribe-error", "subscribe-error", "init-error"], max_sleeps=3
+        )
+        assert sleeps == [5, 10, 20]
+
+    def test_stream_error_after_established_waits_base_then_doubles(
+        self, tmp_path: Path
+    ) -> None:
+        """issue #456: GET 200 の後に `iter_lines` の途中で例外が出る場合。
+
+        確立した時点で数え直しているので、 例外経路の待ちは基準の 5s
+        (= カウンタは 1)。 続けて失敗すると 2 回目として 10s になる。
+        """
+        sleeps = self._run(
+            tmp_path,
+            ["init-error", "init-error", "init-error", "stream-error", "init-error"],
+            max_sleeps=5,
+        )
+        assert sleeps == [5, 10, 20, 5, 10]
 
 
 # ============================================================
