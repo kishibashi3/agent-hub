@@ -1562,7 +1562,8 @@ describe('orphan eviction heartbeat log (issue #386)', () => {
 });
 
 /**
- * issue #451: 明示 evict の経路 (`evictSessionOnDisconnect()` / enforce の ping cycle / orphan evict) は
+ * issue #451, #459: 明示 evict の経路 (`evictSessionOnDisconnect()` / enforce の ping cycle / orphan evict /
+ * GET の transport error 経路) は
  * `await transport.close()` の後で `sessions.delete()` する。close の間も session は `sessions` に残るので、
  * ほかの経路が同じ transport にもう一度 close を呼ばないことを確かめる。
  *
