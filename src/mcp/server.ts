@@ -26,7 +26,7 @@ import {
 } from '../db/participants.js';
 import { BoundedInMemoryEventStore } from './event-store.js';
 import { resolveEdition, type EditionConfig } from '../edition.js';
-import { getVersionInfo } from './version-info.js';
+import { getVersionInfo, SERVER_VERSION } from './version-info.js';
 import {
   fetchUserInfo,
   fetchUserOrgs,
@@ -192,6 +192,14 @@ export function _resetGhostWarnCacheForTests(): void {
  */
 export function _addSessionForTesting(sid: string, session: unknown): void {
   sessions.set(sid, session as Session);
+}
+
+/**
+ * Test-only: createMcpServer() を外から呼ぶ (issue #322 serverInfo.version の test 用)。
+ * production コードでは呼ばない。
+ */
+export function _createMcpServerForTesting(): Server {
+  return createMcpServer();
 }
 
 /**
@@ -2130,7 +2138,7 @@ function createMcpServer(): Server {
   const server = new Server(
     {
       name: 'agent-hub',
-      version: '0.1.0',
+      version: SERVER_VERSION,
     },
     {
       capabilities: {

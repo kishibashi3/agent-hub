@@ -1,3 +1,7 @@
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
 /**
  * /health endpoint version info (= issue #47 / operator @ope-ultp1635 delegation).
  *
@@ -24,6 +28,23 @@
  * になる契約。 `/health` での 「いつから起動中か」 query にそのまま使う。
  */
 export const STARTED_AT: string = new Date().toISOString();
+
+const PACKAGE_JSON_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'package.json'
+);
+
+/**
+ * MCP initialize の serverInfo.version に返す server の version (issue #322)。
+ *
+ * 正本は package.json の `version`。 server.ts に literal を書かず、 ここで 1 度だけ読む。
+ * package.json は Dockerfile / Dockerfile.bundle とも image に COPY 済み。
+ */
+export const SERVER_VERSION: string = (
+  JSON.parse(readFileSync(PACKAGE_JSON_PATH, 'utf-8')) as { version: string }
+).version;
 
 /**
  * version info をまとめた immutable な型。
