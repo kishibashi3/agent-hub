@@ -2,6 +2,7 @@
 
 > **作成**: 2026-06-06 / @ope-ultp1635
 > **背景**: on-demand bridge spawn (issue #110) 設計議論から整理
+> **文書 status**: `snapshot` — 2026-06-06 時点の方針整理。その後の実装・運用の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
 
 ---
 

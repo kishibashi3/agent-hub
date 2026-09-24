@@ -3,7 +3,8 @@
 > **対象 issue**: [#6](https://github.com/kishibashi3/agent-hub/issues/6)  
 > **ステータス**: 設計 draft  
 > **分類**: L1 (impl は DB schema 変更 / 新規 tool / tenant resolution 改修を伴う → operator L1 GO 必要)  
-> **起案**: 2026-05-23
+> **起案**: 2026-05-23  
+> **文書 status**: `snapshot` — 2026-05-23 時点の設計。上の「ステータス」はその時点のもので、その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
 
 ---
 
