@@ -107,7 +107,7 @@ SD の外にある host (以下「backup host」) で、次の script を実行�
 set -euo pipefail
 cd ~/agent-hub-backups            # cron の作業ディレクトリは $HOME なので、保存先に移ってから書く
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-trap 'rm -f -- *.partial' EXIT    # 途中で失敗したら書きかけのファイルを消す
+trap 'rm -f -- "app.db.$TS.gz.partial" "schedules.$TS.json.partial"' EXIT    # 途中で失敗したら、この回の書きかけのファイルだけを消す
 
 ssh -o BatchMode=yes admin@192.168.3.45 '
   set -e
@@ -124,7 +124,16 @@ ssh -o BatchMode=yes admin@192.168.3.45 'cat /home/admin/agent-hub/data/schedule
 mv "schedules.$TS.json.partial" "schedules.$TS.json"
 ```
 
+最初に 1 回だけ、保存先を作り、script に実行権限を付ける:
+
+```bash
+mkdir -p ~/bin ~/agent-hub-backups
+chmod +x ~/bin/agent-hub-snapshot.sh
+```
+
 - 出力はいったん `.partial` に書き、ssh が exit 0 で終わり、かつ `gzip -t` が通ったときだけ `app.db.<TS>.gz` に名前を変える。`> file` のリダイレクトは backup host 側で行われるので、ssh が途中で失敗しても空か途中までのファイルが残る。それを完成品の名前で残さないためである (`set -e` で途中終了し、trap が `.partial` を消す)。
+- `-o BatchMode=yes` なので、ssh はパスワードやパスフレーズを聞かずに失敗する。cron から動かすには、パスフレーズの無い鍵を使うか、cron から使える ssh-agent に鍵を入れておく必要がある。
+- trap で消すのは、この回の `$TS` が付いたファイルだけである。`*.partial` で消すと、実行が重なったときに別の回の書きかけまで消してしまう。
 - `-readonly` で開くので、本番 DB に書き込まない。hub は止めない。WAL mode なので、snapshot 中も hub の書き込みは続けられる。
 - `.backup` は SQLite の online backup API を使う。できあがるのは、backup を始めた時点の一貫した snapshot で、`app.db-wal` にしか無い commit 済みのデータも含む。途中で hub が書き込むと backup は最初からやり直しになるが、今の大きさ (64 MB) なら 0.1 秒で終わる (§4.3)。
 - ファイル名の時刻は UTC (Z 付き)。Pi5 の timezone は Europe/London なので、`ls` の時刻とは 1 時間ずれることがある。
@@ -184,7 +193,7 @@ ls data/app.db* 2>/dev/null                       # 何も出ないこと
 # 3. snapshot を置く (backup host から送る)
 #    例: backup host で  scp app.db.<TS>.gz admin@192.168.3.45:/tmp/
 gunzip -c /tmp/app.db.<TS>.gz > data/app.db
-sqlite3 data/app.db "pragma integrity_check" | grep -qx ok || exit 1   # ok でなければここで止める (4 に進まない)
+sqlite3 data/app.db "pragma integrity_check"     # ok の 1 行だけが出ること。ok 以外なら 4 に進まない
 
 # 4. hub を起動し、healthy になってから scheduler と dashboard2 を起動する
 docker compose up -d agent-hub
