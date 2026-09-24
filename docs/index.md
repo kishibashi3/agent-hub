@@ -53,7 +53,7 @@ ADR (`decisions/`) は決定時点の記録なので `snapshot` とする。末�
 
 ## デプロイ / インフラ
 
-- [docker.md](./docker.md) `normative` — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)
+- [docker.md](./docker.md) `normative` — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)。既知の食い違い (#300 の hub / scheduler 分離後の compose 構成、`DB_PATH`) は #476 / #470 で修正中
 - [minimum-installer.md](./minimum-installer.md) `snapshot` — Onboarding design (issue #79)、 最小 viable experience の path
 - [deployment-pi5.md](./deployment-pi5.md) `normative` — Pi5 deployment 完全手順書 (= server + bridges + scheduler)。既知の食い違い (systemd 前提など) は #446 / #450 で修正中
 - [ping-loop-mode.md](./ping-loop-mode.md) `normative` — ping loop の 3 値 (`disabled` / `observe-only` / `enforce`) の挙動・env の解決規則・切り替え条件 (issue #363 / #392)

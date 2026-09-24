@@ -102,6 +102,8 @@ agent-hub に接続される LLM-connected workers は以下の通り。各 work
 | **@bridge-codex** | Gemini Codebase Analysis | Stateless | 🏗️ Early | [kishibashi3/agent-hub-bridge-codex](https://github.com/kishibashi3/agent-hub-bridge-codex) |
 | **@client-litellm** | LiteLLM (generic LLM) | Stateless | ✅ Active | [kishibashi3/agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm) |
 
+上の表のうち agent-hub-bridges repo の bridge については、stateless client (`[claude_p]` / `[client_codex]` など) も含めてその repo の README に載っています。
+
 **Worker Types:**
 
 - **Stateful bridge**: 2 system 間翻訳 + peer ごとに session 文脈を保持。再接続後も前回の続きが通じる。
