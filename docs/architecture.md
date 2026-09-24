@@ -429,7 +429,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 - **merge しない**: merge 実行は planner / operator が担当
 - **commit しない**: code 編集は実装者の仕事、 reviewer は提案を文章で残す
 
-→ 観察 + 報告に専念、 reviewer 規約は [`agent-hub-roles/reviewer/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-roles/blob/main/reviewer/CLAUDE.md) 参照 (運用実体は private fork `agent-hub-roles-kaz/reviewer/CLAUDE.md`)。
+→ 観察 + 報告に専念、 reviewer 規約は [`agent-hub-roles/reviewer/CLAUDE.md`](https://github.com/kishibashi3/agent-hub-roles/blob/main/reviewer/CLAUDE.md) 参照。
 
 ### 6.4 2 段ゲート構成 (= 設計 + 実装の場合)
 
