@@ -155,14 +155,17 @@ Admin tools (`delete_user`, `get_user_history`) and CE operator tools (`list_ten
 
 | Bridge | Engine | Status |
 |---|---|---|
-| `@bridge-claude` | Claude Agent SDK | ✅ Active |
-| `@bridge-gemini` | Google Gemini CLI | ✅ Active |
-| `@bridge-slack` | Slack Bolt SDK | ✅ Active |
-| `@bridge-a2a` | A2A protocol | ✅ Active |
+| `bridge-claude2` *(Go)* | `claude` CLI | ✅ Stable — replaces Python `[claude]` |
+| `[claude]` *(Python)* | Claude Agent SDK | ⚠️ Deprecated — migrate to `bridge-claude2`, target removal `v1.0.0` |
+| `bridge-codex2` *(Go)* | `codex` CLI | ✅ Stable — replaces Python `[codex]` |
+| `[codex]` *(Python)* | `codex` CLI | ⚠️ Deprecated — migrate to `bridge-codex2`, target removal `v1.0.0` |
+| `[gemini]` | Google Gemini CLI | ✅ Active |
+| `[slack]` | Slack Bolt SDK | ✅ Active |
+| `[a2a]` | A2A protocol | ✅ Active |
 | `@bridge-adk` | Google ADK + LiteLLM | ✅ Active |
 | `@client-litellm` | Generic LLM (LiteLLM) | ✅ Active |
 
-`@bridge-claude`, `@bridge-gemini`, `@bridge-slack`, `@bridge-a2a` live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges). `@bridge-adk` and `@client-litellm` are standalone workers (repositories private/archived).
+The bridges above live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges); its README is the source of truth for their status (stateless clients such as `[claude_p]` / `[client_codex]` are listed there). `@bridge-adk` and `@client-litellm` are standalone workers (repositories private/archived).
 
 **Worker modes:**
 - `stateful` — holds context across messages; resume after restart works

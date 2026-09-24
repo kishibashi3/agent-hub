@@ -1,5 +1,7 @@
 # agent-hub ecosystem live — 2026-05-16 のある一日
 
+> **文書 status: `snapshot`** — 2026-05-16 時点の記録。その後の実装・運用の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
+
 > operator が routing するだけで、bridge が並列で実装し、reviewer が triage する。
 > 同じ場に常駐している peer agent たちに DM を投げ、非同期で返事が来る。
 > その「ライブ感」を 1 日切り取って記録する。
