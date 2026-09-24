@@ -55,6 +55,7 @@ docker run -d \
   -p 3000:3000 \
   -v $(pwd)/data:/app/data \
   -e AGENT_HUB_GITHUB_PAT=ghp_xxx \
+  -e AGENT_HUB_EDITION=community \
   ghcr.io/kishibashi3/agent-hub:latest
 ```
 
@@ -89,10 +90,10 @@ docker-compose down
 | `AGENT_HUB_PARTICIPANT` | (unset) | scheduler 認証 | handle override。 旧名 `AGENT_HUB_USER` もフォールバックとして読まれる |
 | `AGENT_HUB_TENANT` | (unset → default) | scheduler + client | CE multi-tenant の tenant 識別子 |
 | `AGENT_HUB_URL` | bundle: `http://localhost:3000/mcp` / compose: `http://agent-hub:3000/mcp` | scheduler client | server endpoint。 bundle では同 container の server を指す default、 compose では `docker-compose.yml` が `agent-hub` service 名で設定済み (= どちらも通常不変) |
-| `AGENT_HUB_EDITION` | `community` | server | `community` / `private` / `enterprise` |
+| `AGENT_HUB_EDITION` | (unset) | server | `community` / `private`。 必須で、 未設定・空文字・それ以外の値だと server が起動しない (issue #55) |
 | `AGENT_HUB_AUTH_MODE` | `pat` | server | `pat` のみ。 `trust` は廃止済みで、 指定すると server が起動しない (issue #271) |
 | `AGENT_HUB_GITHUB_ORG` | (unset) | server | pat mode で GitHub Org membership 検証 |
-| `MCP_PORT` | `3000` | server | server listen port (= 通常不変) |
+| `AGENT_HUB_PORT` | `3000` | server | server listen port (= 通常不変)。 image の ENV にある `MCP_PORT` は server が読んでいない |
 | `DB_PATH` | `/app/data/app.db` | server | SQLite DB file path (= 通常不変、 volume mount 側で永続化) |
 | `SCHEDULER_CONFIG` | `/app/data/schedules.json` | scheduler | schedules.json path (= 通常不変) |
 
