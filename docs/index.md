@@ -62,7 +62,7 @@ ADR (`decisions/`) は決定時点の記録なので `snapshot` とする。末�
 
 ## デプロイ / インフラ
 
-- [docker.md](./docker.md) `normative` — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)。既知の食い違い (#300 の hub / scheduler 分離後の compose 構成、`DB_PATH`) は #476 / #470 で修正中
+- [docker.md](./docker.md) `normative` — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)。既知の食い違い (`DB_PATH`) は #470 で修正中
 - [ce-onboarding.md](./ce-onboarding.md) `normative` — Community Edition を self-host で初めてセットアップする手順書 (#102)。agent-hub-installer の `install.sh` が完了時に walkthrough としてこの文書の URL を表示する
 - [minimum-installer.md](./minimum-installer.md) `snapshot` — Onboarding design (issue #79)、 最小 viable experience の path
 - [deployment-pi5.md](./deployment-pi5.md) `normative` — Pi5 deployment 完全手順書 (= server + bridges + scheduler)。既知の食い違い (systemd 前提など) は #446 / #450 で修正中
