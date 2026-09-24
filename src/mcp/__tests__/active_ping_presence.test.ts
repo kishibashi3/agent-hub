@@ -24,6 +24,7 @@ import {
   ORPHAN_EVICT_LOG_LIMIT,
   getOrphanEvictionHeartbeatMs,
   evictSessionOnDisconnect,
+  evictSessionAfterTransportError,
   ORPHAN_EVICTION_HEARTBEAT_MS,
   ORPHAN_EVICTION_HEARTBEAT_MIN_MS,
   ORPHAN_EVICTION_HEARTBEAT_MAX_MS,
@@ -1667,6 +1668,58 @@ describe('close 中の session に 2 回目の close を呼ばない (issue #451
 
     release();
     await expect(evicting).resolves.toBe(true);
+  });
+
+  it('evictSessionOnDisconnect の close 中に GET の transport error 経路が来ても close しない (issue #459)', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: false, orphan: false });
+    _addSessionForTesting('closing-6', session);
+
+    const evicting = evictSessionOnDisconnect('closing-6');
+    await expect(evictSessionAfterTransportError('closing-6')).resolves.toBe(false);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    release();
+    await expect(evicting).resolves.toBe(true);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+  });
+
+  it('GET の transport error 経路の close 中に、ほかの経路が来ても close も count もしない (issue #459)', async () => {
+    const { session, release } = makeSessionWithBlockedClose({ pingAlive: false, orphan: true });
+    _addSessionForTesting('closing-7', session);
+
+    const evicting = evictSessionAfterTransportError('closing-7');
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    await expect(evictSessionOnDisconnect('closing-7')).resolves.toBe(false);
+    await expect(runOneOrphanEvictionCycle()).resolves.toMatchObject({ orphansEvicted: 0 });
+    const stats = await runOneActivePingCycle('enforce');
+    expect(stats.disconnected).toBe(0);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+
+    release();
+    await expect(evicting).resolves.toBe(true);
+    expect(session.transport.close).toHaveBeenCalledOnce();
+    await expect(evictSessionAfterTransportError('closing-7')).resolves.toBe(false);
+  });
+
+  it('orphan sweep が前の session の close を待つ間に、別経路が後ろの session を close し終えたら、その session は close も count もしない (issue #460)', async () => {
+    const first = makeSessionWithBlockedClose({ pingAlive: true, orphan: true });
+    _addSessionForTesting('closing-8a', first.session);
+    const second = makeSessionWithBlockedClose({ pingAlive: true, orphan: true });
+    _addSessionForTesting('closing-8b', second.session);
+
+    const sweep = runOneOrphanEvictionCycle();
+    expect(first.session.transport.close).toHaveBeenCalledOnce();
+
+    // sweep が closing-8a の close を待っている間に、明示 evict が closing-8b を最後まで閉じる
+    const evicting = evictSessionOnDisconnect('closing-8b');
+    second.release();
+    await expect(evicting).resolves.toBe(true);
+    expect(second.session.transport.close).toHaveBeenCalledOnce();
+
+    first.release();
+    await expect(sweep).resolves.toMatchObject({ orphansEvicted: 1 });
+    expect(second.session.transport.close).toHaveBeenCalledOnce();
   });
 
   it('close が終わった session は sessions から消え、印も残らない (= 次の session を塞がない)', async () => {
