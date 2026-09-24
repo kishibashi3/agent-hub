@@ -227,8 +227,8 @@ export const ORPHAN_EVICT_LOG_LIMIT = 20;
 const evictingSessionIds = new Set<string>();
 
 /**
- * 明示 evict の経路 (`evictSessionOnDisconnect()` / enforce の ping cycle / orphan evict) が
- * `transport.close()` を呼んでいる最中の session id (issue #451)。
+ * 明示 evict の経路 (`evictSessionOnDisconnect()` / enforce の ping cycle / orphan evict /
+ * GET の transport error 経路) が `transport.close()` を呼んでいる最中の session id (issue #451, #459)。
  *
  * これらの経路は `await transport.close()` の後で `sessions.delete()` するため、close の間は
  * session が `sessions` に残る。ここに入っている sid は、ほかの経路が close も count もしない
@@ -964,6 +964,33 @@ export function getPingTimeoutMs(): number {
 }
 
 /**
+ * GET /mcp の `handleRequest` が throw したときに session を除去する (issue #157)。
+ *
+ * eviction パターン (active ping loop と同様): transport.close() → sessions.delete()。
+ * transport.onclose も sessions.delete を呼ぶが race 回避で明示削除する。
+ * ほかの経路が close している最中なら、close と delete はその経路に任せる (issue #459)。
+ */
+export async function evictSessionAfterTransportError(sessionId: string): Promise<boolean> {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  if (closingSessionIds.has(sessionId)) return false;
+  closingSessionIds.add(sessionId);
+  // close() は既にエラー状態の transport に対して throw する可能性があるため try/catch。
+  try {
+    await session.transport.close();
+  } catch (_closeErr) {
+    // transport は既にエラー状態 or 切断済み — 無視して delete に進む
+  } finally {
+    closingSessionIds.delete(sessionId);
+  }
+  if (sessions.has(sessionId)) {
+    sessions.delete(sessionId);
+  }
+  console.log(`[MCP] session evicted after transport error: ${sessionId}`);
+  return true;
+}
+
+/**
  * 指定 sessionId の session を `transport.close()` → `sessions.delete()` の順で明示的に除去する。
  *
  * issue #342/#337: GET /mcp の SSE stream が下層 socket 切断で終了しても、SDK の
@@ -1489,6 +1516,9 @@ export async function runOneOrphanEvictionCycle(): Promise<{
   // sessions Map の iteration 中の mutation は dangerous (= delete in loop)、 snapshot に take。
   for (const [sid, session] of Array.from(sessions.entries())) {
     if (
+      // 前の iteration の close を待つ間に、別の経路が close し終えて消した session は
+      // 触らない (= close と count の二重実行を避ける、enforce 側の #447 と同じ guard、issue #460)
+      sessions.has(sid) &&
       session.subscribedUris.size === 0 &&
       nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS &&
       nowMs - session.lastActivityAt > ORPHAN_IDLE_TTL_MS &&
@@ -2524,21 +2554,7 @@ export class MCPServer {
         // セッションをクリーンアップして 404 を返し、Claude Code に再 initialize を促す。
         // 500 を返すと client が "server error" と誤解し、不必要なアラートが出る。
         console.error('[MCP] GET handleRequest error (SSE reconnect race):', error);
-        if (sessionId && sessions.has(sessionId)) {
-          const session = sessions.get(sessionId)!;
-          // eviction パターン (active ping loop と同様): transport.close() → sessions.delete()。
-          // transport.onclose も sessions.delete を呼ぶが race 回避で明示削除する。
-          // close() は既にエラー状態の transport に対して throw する可能性があるため try/catch。
-          try {
-            await session.transport.close();
-          } catch (_closeErr) {
-            // transport は既にエラー状態 or 切断済み — 無視して delete に進む
-          }
-          if (sessions.has(sessionId)) {
-            sessions.delete(sessionId);
-          }
-          console.log(`[MCP] session evicted after transport error: ${sessionId}`);
-        }
+        await evictSessionAfterTransportError(sessionId);
         if (!res.headersSent) {
           res.status(404).json({
             jsonrpc: '2.0',
