@@ -4,6 +4,8 @@ agent-hub ecosystem を **Raspberry Pi 5 (8GB)** に常駐 deploy する**完全
 
 > **想定 user**: SSH 直接アクセスを最小化し、 git pull + systemd reload で deployment cycle を完結したい admin (= `@admin` Pi5 ops persona)。 各 service が **独立した process として 常駐**、 1 つが落ちても他は続く 「**プロセスを育てるモデル**」 (= [discussion §11 / §12](./discussions/2026-05-18-peer-mesh-industry-discussion.md))。
 
+> **注意 (2026-09-24 時点)**: 本 doc は systemd で常駐させ、 `pi` user の `/home/pi` 配下に置く**旧構成**で書かれている。 今の Pi5 はこれと違う: user は `admin` で `/home/pi` は無い。 systemd unit は使っておらず (= 0 件)、 repo 直下の [`docker-compose.yml`](../docker-compose.yml) で hub / scheduler / dashboard 等を ghcr の image から起動している。 bridge-slack は動いていない。 本 doc の systemd / `/home/pi` / `systemctl` を含む手順・図・表は、 今の Pi5 では検証していない。
+
 > **本 doc の scope**:
 > - **全体俯瞰** (= server + bridge群 + scheduler の deployment 統合) を 1 file で navigable に
 > - 各 component の **詳細 deployment 手順** は package 別 README を参照
@@ -13,7 +15,9 @@ agent-hub ecosystem を **Raspberry Pi 5 (8GB)** に常駐 deploy する**完全
 
 ## 1. System topology
 
-Pi5 8GB RAM に **常駐する process 群** (= 2026-05 現在の確定構成):
+Pi5 8GB RAM に **常駐する process 群** (= 2026-05 時点の構成):
+
+> **注意**: 下の図は 2026-05 時点の systemd 構成で、 今の Pi5 (= compose 運用) とは違う (冒頭の注意参照)。
 
 ```
 ┌─────────────────── Raspberry Pi 5 (8GB) ───────────────────┐
@@ -80,6 +84,8 @@ Pi5 8GB RAM に **常駐する process 群** (= 2026-05 現在の確定構成):
 | GitHub PAT | repo + read:org scope (= bridge 認証用) |
 
 ### 2.1 user / directory layout
+
+> **注意**: 以下は旧構成。 今の Pi5 の user は `admin` で、 `/home/pi` は無い (冒頭の注意参照)。
 
 想定構成:
 ```
@@ -320,6 +326,8 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 
 各 service の env 配置 + 重要 var:
 
+> **注意**: 下の表の path と `*.service` は旧構成 (= systemd + `/home/pi`) のもの。 今の Pi5 では env を compose の設定から渡している (冒頭の注意参照)。
+
 | service | .env path | 必須 var |
 |---|---|---|
 | agent-hub.service | `/home/pi/agent-hub/.env` | `AGENT_HUB_EDITION` / `MCP_PORT` / `DB_PATH` |
@@ -338,6 +346,8 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 ### 6.1 healthcheck.sh (= 提案実装)
 
 各 service の **systemd active 状態 + HTTP health** を check するスクリプト:
+
+> **注意**: systemd の unit を前提にした提案で、 今の Pi5 (= systemd unit 0 件の compose 運用) では使えない (冒頭の注意参照)。
 
 ```bash
 #!/bin/bash
@@ -393,6 +403,8 @@ crontab で 5 分毎 (= 監視 granularity vs Pi5 RAM impact のバランス):
 ---
 
 ## 7. Troubleshooting
+
+> **注意**: 本節の `systemctl` を使う手順は旧構成 (= systemd) のもの。 今の Pi5 は compose 運用 (冒頭の注意参照)。
 
 ### 7.1 watch.sh ghost bug (= seed #3、 [discussion §11/12](./discussions/2026-05-18-peer-mesh-industry-discussion.md))
 

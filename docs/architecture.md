@@ -174,8 +174,8 @@ agent-hub ecosystem は **6 layer** で構成される:
 
 #### 1.3.1 具体例で understand
 
-- **@bridge-claude** (= layer (a)、 青、 process): Claude Agent SDK を使う stateful daemon。 1 つの process。 `--user reviewer` / `--user planner` 等で起動時に peer switch 可能
-- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --user reviewer --workdir agent-hub-roles-kaz/reviewer` で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
+- **@bridge-claude** (= layer (a)、 青、 process): Claude Agent SDK を使う stateful daemon。 1 つの process。 `--participant reviewer` / `--participant planner` 等で起動時に peer switch 可能
+- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --participant reviewer --workdir agent-hub-roles-kaz/reviewer` で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
 - **@bridge-claude-impl** (= layer (c)、 黄、 impl role): `@bridge-claude` の **実装 code を書く** agent。 自身も bridge worker process 上で動くが、 役割は 「`agent-hub-bridges` repo の Claude bridge code 編集 + PR 起票 + reviewer review 経由 merge」
 - **@agent-hub-impl** (= layer (c)、 黄、 impl role): `agent-hub` server (= TypeScript MCP server) の **実装 code + ecosystem doc を書く** agent。 sibling として `agent-hub` server + `docs/*` を保守
 
@@ -491,7 +491,7 @@ reviewer は **行動の不在で役割を構成** する peer:
 agent-hub ecosystem への **新規 contributor onboarding** 想定 step:
 
 1. **server を localhost で起動**: `agent-hub` repo の `README.md` を参照 (= `npm install` + `npm run dev`)
-2. **bridge を起動**: 既存 bridge (= [`agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) の `bridge-claude2` 等) で `--user <peer-name>` 指定起動、 or 新 bridge engine を実装
+2. **bridge を起動**: 既存 bridge (= [`agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) の `bridge-claude2` 等) で `--participant <peer-name>` 指定起動、 or 新 bridge engine を実装
 3. **peer として register + 動作確認**: `mcp__agent-hub__register` で handle 登録、 `send_message` + `get_messages` で動作確認
 4. **persona doc を peer の workdir に配置**: `<peer-repo>/CLAUDE.md` (= 振る舞い + 観点 + format) を bridge `--workdir` で指定
 5. **ecosystem に参加**: operator / planner からの task assignment を受け、 PR 起票 + reviewer review → planner self-merge cycle に乗る
