@@ -1737,4 +1737,61 @@ describe('close 中の session に 2 回目の close を呼ばない (issue #451
     await expect(evictSessionOnDisconnect('closing-5')).resolves.toBe(true);
     expect(next.session.transport.close).toHaveBeenCalledOnce();
   });
+
+  describe('close のあとに印が外れる (4 経路 × close の resolve / reject、issue #464)', () => {
+    /** 印を付けて close する経路。どれも close が終われば session を sessions から消す */
+    const paths = {
+      evictSessionOnDisconnect: async (sid: string) => {
+        await expect(evictSessionOnDisconnect(sid)).resolves.toBe(true);
+      },
+      evictSessionAfterTransportError: async (sid: string) => {
+        await expect(evictSessionAfterTransportError(sid)).resolves.toBe(true);
+      },
+      enforce: async () => {
+        await expect(runOneActivePingCycle('enforce')).resolves.toMatchObject({ disconnected: 1 });
+      },
+      orphan: async () => {
+        await expect(runOneOrphanEvictionCycle()).resolves.toMatchObject({ orphansEvicted: 1 });
+      },
+    };
+    type PathName = keyof typeof paths;
+
+    /** 印が残っていれば false / 0 件になる、別の経路での 2 回目の evict */
+    const nextPathOf: Record<PathName, PathName> = {
+      evictSessionOnDisconnect: 'evictSessionAfterTransportError',
+      evictSessionAfterTransportError: 'evictSessionOnDisconnect',
+      enforce: 'orphan',
+      orphan: 'enforce',
+    };
+
+    const cases = (Object.keys(paths) as PathName[]).flatMap((path) =>
+      (['resolve', 'reject'] as const).map((outcome) => ({ path, outcome }))
+    );
+
+    beforeEach(() => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    it.each(cases)('$path で close が $outcome したあと、同じ sid の session を別経路から evict できる', async ({ path, outcome }) => {
+      const sid = `mark-${path}-${outcome}`;
+      const first = makeSessionWithBlockedClose({ pingAlive: false, orphan: true });
+      if (outcome === 'reject') {
+        first.session.transport.close = vi.fn().mockRejectedValue(new Error('transport already closed'));
+      } else {
+        first.release();
+      }
+      _addSessionForTesting(sid, first.session);
+
+      await paths[path](sid);
+      expect(first.session.transport.close).toHaveBeenCalledOnce();
+
+      // 同じ sid で入り直した session (テスト上の仮定) は、印が残っていなければ別経路から evict される
+      const next = makeSessionWithBlockedClose({ pingAlive: false, orphan: true });
+      next.release();
+      _addSessionForTesting(sid, next.session);
+
+      await paths[nextPathOf[path]](sid);
+      expect(next.session.transport.close).toHaveBeenCalledOnce();
+    });
+  });
 });
