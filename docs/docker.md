@@ -54,7 +54,7 @@ docker run -d \
   --name agent-hub \
   -p 3000:3000 \
   -v $(pwd)/data:/app/data \
-  -e GITHUB_PAT=ghp_xxx \
+  -e AGENT_HUB_GITHUB_PAT=ghp_xxx \
   ghcr.io/kishibashi3/agent-hub:latest
 ```
 
@@ -85,12 +85,12 @@ docker-compose down
 
 | 変数 | default | scope | 用途 |
 |---|---|---|---|
-| `GITHUB_PAT` | (unset) | scheduler 認証 | GitHub PAT (read:user) — pat mode 推奨 |
-| `AGENT_HUB_USER` | (unset) | scheduler 認証 | handle override (trust mode は localhost only) |
+| `AGENT_HUB_GITHUB_PAT` | (unset) | scheduler 認証 | GitHub PAT (read:user)。 未設定だと scheduler は起動しない |
+| `AGENT_HUB_PARTICIPANT` | (unset) | scheduler 認証 | handle override。 旧名 `AGENT_HUB_USER` もフォールバックとして読まれる |
 | `AGENT_HUB_TENANT` | (unset → default) | scheduler + client | CE multi-tenant の tenant 識別子 |
 | `AGENT_HUB_URL` | bundle: `http://localhost:3000/mcp` / compose: `http://agent-hub:3000/mcp` | scheduler client | server endpoint。 bundle では同 container の server を指す default、 compose では `docker-compose.yml` が `agent-hub` service 名で設定済み (= どちらも通常不変) |
 | `AGENT_HUB_EDITION` | `community` | server | `community` / `private` / `enterprise` |
-| `AUTH_MODE` | `pat` (= edition 依存) | server | `pat` / `trust` (= trust は localhost only) |
+| `AGENT_HUB_AUTH_MODE` | `pat` | server | `pat` のみ。 `trust` は廃止済みで、 指定すると server が起動しない (issue #271) |
 | `AGENT_HUB_GITHUB_ORG` | (unset) | server | pat mode で GitHub Org membership 検証 |
 | `MCP_PORT` | `3000` | server | server listen port (= 通常不変) |
 | `DB_PATH` | `/app/data/app.db` | server | SQLite DB file path (= 通常不変、 volume mount 側で永続化) |
@@ -113,17 +113,18 @@ bundle 内 scheduler は agent-hub server に自身を peer として `register`
 
 ```
 # DM via Claude Code MCP client or curl:
-ping        → pong (scheduler alive, N schedules total)
-list        → sender's entries 一覧
-list all    → 全 entries (= cross-owner、 issue #85)
-add ...     → cyclic schedule 追加
-run_at ...  → one-shot schedule 追加
-run_in ...  → one-shot (= 相対時間)
-delete <name>  → 自身の entry 削除
-run now <name> → 即時 fire
+/ping          → pong (scheduler alive, N schedules total)
+/list          → sender's entries 一覧
+/list all      → 全 entries (= cross-owner、 issue #85)
+/add ...       → cyclic schedule 追加
+/run_at ...    → one-shot schedule 追加
+/run_in ...    → one-shot (= 相対時間)
+/delete <name> → 自身の entry 削除
+/run <name>    → 即時 fire
+/help          → command 一覧
 ```
 
-詳細は `packages/scheduler/README.md` 参照。
+v2.0 以降は全 command に `/` prefix が必要で、 prefix なしの body は無視されます。 詳細は `packages/scheduler/README.md` 参照。
 
 ## persistent data
 
