@@ -9,6 +9,7 @@
 # Publish 対象 (= matrix で並列 build):
 # - `ghcr.io/kishibashi3/agent-hub:latest` (= bundle: Node server + Python scheduler + supervisord)
 # - `ghcr.io/kishibashi3/agent-hub-dashboard:latest` (= dashboard sidecar: Python stdlib only)
+# - `ghcr.io/kishibashi3/agent-hub-scheduler:latest` (= scheduler 単体: Python scheduler only、 compose 用、 issue #300)
 #
 # 認証:
 # - `GITHUB_TOKEN` (= GitHub Actions が自動付与) で ghcr.io login
