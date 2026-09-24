@@ -99,32 +99,39 @@ Litestream を入れるのは、次のどれかになったときでよい: (a) 
 
 ### 4.1 1 回分の snapshot を取る
 
-SD の外にある host (以下「backup host」) から、次のコマンドを実行する。Pi5 の `/tmp` (tmpfs) に snapshot を作り、`integrity_check` が `ok` のときだけ gzip して標準出力に流す。Pi5 側の一時ファイルは終了時に消える。
+SD の外にある host (以下「backup host」) で、次の script を実行する。Pi5 の `/tmp` (tmpfs) に snapshot を作り、`integrity_check` が `ok` のときだけ gzip して標準出力に流す。Pi5 側の一時ファイルは終了時に消える。
 
 ```bash
+#!/bin/bash
+# ~/bin/agent-hub-snapshot.sh
+set -euo pipefail
+cd ~/agent-hub-backups            # cron の作業ディレクトリは $HOME なので、保存先に移ってから書く
 TS=$(date -u +%Y%m%dT%H%M%SZ)
+trap 'rm -f -- *.partial' EXIT    # 途中で失敗したら書きかけのファイルを消す
+
 ssh -o BatchMode=yes admin@192.168.3.45 '
   set -e
   T=$(mktemp /tmp/app.db.XXXXXX); trap "rm -f $T" EXIT
   sqlite3 -readonly /home/admin/agent-hub/data/app.db ".timeout 5000" ".backup $T"
   sqlite3 "$T" "pragma integrity_check" | grep -qx ok
   gzip -c "$T"
-' > "app.db.$TS.gz"
+' > "app.db.$TS.gz.partial"
+gzip -t "app.db.$TS.gz.partial"
+mv "app.db.$TS.gz.partial" "app.db.$TS.gz"
+
+# schedules.json も同じ data/ にあって SD にしか無いので、一緒に取る
+ssh -o BatchMode=yes admin@192.168.3.45 'cat /home/admin/agent-hub/data/schedules.json' > "schedules.$TS.json.partial"
+mv "schedules.$TS.json.partial" "schedules.$TS.json"
 ```
 
+- 出力はいったん `.partial` に書き、ssh が exit 0 で終わり、かつ `gzip -t` が通ったときだけ `app.db.<TS>.gz` に名前を変える。`> file` のリダイレクトは backup host 側で行われるので、ssh が途中で失敗しても空か途中までのファイルが残る。それを完成品の名前で残さないためである (`set -e` で途中終了し、trap が `.partial` を消す)。
 - `-readonly` で開くので、本番 DB に書き込まない。hub は止めない。WAL mode なので、snapshot 中も hub の書き込みは続けられる。
 - `.backup` は SQLite の online backup API を使う。できあがるのは、backup を始めた時点の一貫した snapshot で、`app.db-wal` にしか無い commit 済みのデータも含む。途中で hub が書き込むと backup は最初からやり直しになるが、今の大きさ (64 MB) なら 0.1 秒で終わる (§4.3)。
 - ファイル名の時刻は UTC (Z 付き)。Pi5 の timezone は Europe/London なので、`ls` の時刻とは 1 時間ずれることがある。
 
-`schedules.json` も同じ `data/` にあって SD にしか無いので、一緒に取る:
-
-```bash
-ssh -o BatchMode=yes admin@192.168.3.45 'cat /home/admin/agent-hub/data/schedules.json' > "schedules.$TS.json"
-```
-
 ### 4.2 定期実行 (提案)
 
-backup host の crontab に §4.1 を script にして登録する例 (1 時間ごと、保存先は `~/agent-hub-backups/`):
+backup host の crontab に §4.1 の script を登録する例 (1 時間ごと、保存先は `~/agent-hub-backups/`):
 
 ```cron
 # m h dom mon dow  command
@@ -132,7 +139,7 @@ backup host の crontab に §4.1 を script にして登録する例 (1 時間�
 ```
 
 - 保持の目安: 1 時間ごとのものを 48 本 + 1 日 1 本を 30 本。1 本が gzip で約 20 MB なので、合計で約 1.6 GB。
-- 失敗に気づけるように、script の最後で「最新の `.gz` が 2 時間以上前なら exit 1」などの確認を入れる。
+- 失敗に気づけるように、別の確認で「最新の `app.db.*.gz` が 2 時間以上前なら exit 1」などを見る。失敗した回は `.partial` のまま消えて `.gz` が増えないので、この確認で気づける。
 - どの host を backup host にするか (常時稼働しているか) は未確認。§6 参照。
 
 ### 4.3 今日の実測 (2026-09-24)
@@ -177,7 +184,7 @@ ls data/app.db* 2>/dev/null                       # 何も出ないこと
 # 3. snapshot を置く (backup host から送る)
 #    例: backup host で  scp app.db.<TS>.gz admin@192.168.3.45:/tmp/
 gunzip -c /tmp/app.db.<TS>.gz > data/app.db
-sqlite3 data/app.db "pragma integrity_check"      # ok であること
+sqlite3 data/app.db "pragma integrity_check" | grep -qx ok || exit 1   # ok でなければここで止める (4 に進まない)
 
 # 4. hub を起動し、healthy になってから scheduler と dashboard2 を起動する
 docker compose up -d agent-hub
