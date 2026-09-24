@@ -201,6 +201,7 @@ export function _addSessionForTesting(sid: string, session: unknown): void {
 export function _clearSessionsForTesting(): void {
   sessions.clear();
   evictingSessionIds.clear();
+  closingSessionIds.clear();
   orphanSweepInFlight = false;
 }
 
@@ -224,6 +225,18 @@ export const ORPHAN_EVICT_LOG_LIMIT = 20;
  * 抑止する。evict 以外の経路 (= 通常の切断) では従来どおり出る。
  */
 const evictingSessionIds = new Set<string>();
+
+/**
+ * 明示 evict の経路 (`evictSessionOnDisconnect()` / enforce の ping cycle / orphan evict) が
+ * `transport.close()` を呼んでいる最中の session id (issue #451)。
+ *
+ * これらの経路は `await transport.close()` の後で `sessions.delete()` するため、close の間は
+ * session が `sessions` に残る。ここに入っている sid は、ほかの経路が close も count もしない
+ * (= 同じ transport への 2 回目の close を防ぐ)。今の SDK の `close()` は onclose まで同期で
+ * 進むので窓は開かないが、`close()` が onclose より前に await を挟むようになっても壊れないようにする。
+ * `evictingSessionIds` は log 抑止用で orphan evict だけが使うため、別の集合にしている。
+ */
+const closingSessionIds = new Set<string>();
 
 /**
  * Test-only: ある session id が evict 進行中 (= `session closed` log 抑止中) かを返す
@@ -964,13 +977,18 @@ export function getPingTimeoutMs(): number {
 export async function evictSessionOnDisconnect(sessionId: string): Promise<boolean> {
   const session = sessions.get(sessionId);
   if (!session) return false;
+  // ほかの経路が close している最中なら、その経路が delete まで済ませる (issue #451)
+  if (closingSessionIds.has(sessionId)) return false;
   if (session.pendingEvictionTimer) {
     clearTimeout(session.pendingEvictionTimer);
   }
+  closingSessionIds.add(sessionId);
   try {
     await session.transport.close();
   } catch (_closeErr) {
     // transport は既にエラー状態 or 切断済み — 無視して delete に進む
+  } finally {
+    closingSessionIds.delete(sessionId);
   }
   if (sessions.has(sessionId)) {
     sessions.delete(sessionId);
@@ -1191,16 +1209,21 @@ export async function runOneActivePingCycle(
     // 済みなので、 ここでは close も count もしない (= close の二重呼び出しと disconnected の
     // 過大計上を避ける、 observe-only 側の #431 と同じ guard、 issue #447)。
     if (!sessions.has(sid)) continue;
+    // 明示 evict / orphan evict が close している最中の session も同じ理由で触らない (issue #451)
+    if (closingSessionIds.has(sid)) continue;
     // Disconnect: session が `sessions` から消えれば is_online は自動 false に。
     // transport.close() で SSE GET 側の long-lived connection も切断 (= bridge の reconnect loop が trigger される)。
     console.log(
       `[MCP] ping failed for session ${sid} (= ${session.userId}@${session.tenantDomain}) ` +
         `after ${PING_MAX_RETRIES + 1} attempts, disconnecting`
     );
+    closingSessionIds.add(sid);
     try {
       await session.transport.close();
     } catch (err) {
       console.error(`[MCP] transport.close failed for sid=${sid} (non-fatal):`, err);
+    } finally {
+      closingSessionIds.delete(sid);
     }
     // transport.onclose も sessions.delete を呼ぶが、 race 回避で明示削除
     if (sessions.has(sid)) {
@@ -1468,7 +1491,9 @@ export async function runOneOrphanEvictionCycle(): Promise<{
     if (
       session.subscribedUris.size === 0 &&
       nowMs - session.createdAt > ORPHAN_IDLE_TTL_MS &&
-      nowMs - session.lastActivityAt > ORPHAN_IDLE_TTL_MS
+      nowMs - session.lastActivityAt > ORPHAN_IDLE_TTL_MS &&
+      // ほかの経路が close している最中の session は、その経路に任せる (issue #451)
+      !closingSessionIds.has(sid)
     ) {
       if (orphansEvicted < ORPHAN_EVICT_LOG_LIMIT) {
         console.log(
@@ -1481,12 +1506,14 @@ export async function runOneOrphanEvictionCycle(): Promise<{
       // 出す。evict 経路では上の 1 行に情報が含まれており重複なので抑止する
       // (初回本番 sweep で 1 件 2 行 → 1 行に半減する、issue #377)。
       evictingSessionIds.add(sid);
+      closingSessionIds.add(sid);
       try {
         await session.transport.close();
       } catch (err) {
         console.error(`[MCP] orphan evict transport.close failed for sid=${sid} (non-fatal):`, err);
       } finally {
         evictingSessionIds.delete(sid);
+        closingSessionIds.delete(sid);
       }
       // transport.onclose も sessions.delete を呼ぶが、 race 回避で明示削除
       if (sessions.has(sid)) {
