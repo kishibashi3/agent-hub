@@ -175,7 +175,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 #### 1.3.1 具体例で understand
 
 - **@bridge-claude** (= layer (a)、 青、 process): Claude Agent SDK を使う stateful daemon。 1 つの process。 `--participant reviewer` / `--participant planner` 等で起動時に peer switch 可能
-- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --participant reviewer --workdir agent-hub-roles-kaz/reviewer` で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
+- **@reviewer** (= layer (b)、 緑、 persona role): `@bridge-claude --participant reviewer --workdir agent-hub-roles-kaz/reviewer` (private fork; public template: [agent-hub-roles/reviewer/CLAUDE.md](https://github.com/kishibashi3/agent-hub-roles/blob/main/reviewer/CLAUDE.md)) で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
 - **@bridge-claude-impl** (= layer (c)、 黄、 impl role): `@bridge-claude` の **実装 code を書く** agent。 自身も bridge worker process 上で動くが、 役割は 「`agent-hub-bridges` repo の Claude bridge code 編集 + PR 起票 + reviewer review 経由 merge」
 - **@agent-hub-impl** (= layer (c)、 黄、 impl role): `agent-hub` server (= TypeScript MCP server) の **実装 code + ecosystem doc を書く** agent。 sibling として `agent-hub` server + `docs/*` を保守
 
