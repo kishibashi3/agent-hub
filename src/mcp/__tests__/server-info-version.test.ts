@@ -61,7 +61,7 @@ describe('readServerVersion (issue #471)', () => {
     ['version が空白のみ', { version: '  ' }],
   ])('%s なら throw する', (_label, pkg) => {
     withPackageJson(JSON.stringify(pkg), (pkgPath) => {
-      expect(() => readServerVersion(pkgPath)).toThrow(/version/);
+      expect(() => readServerVersion(pkgPath)).toThrow(/package.json の version が空でない string ではありません/);
     });
   });
 });
