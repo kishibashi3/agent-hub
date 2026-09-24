@@ -679,7 +679,8 @@ SSE_READ_TIMEOUT_SEC = 60
 # 側に溜まり、 凍結が解けたあとに subscribe されない orphan session になる。
 # 固定間隔だと orphan が凍結時間に比例して増えるため、 間隔を広げて抑える。
 # GET が 200 で確立したら健全とみなして基準に戻す (= 健全時の 1 回目の再接続は
-# 従来どおり 3s / 5s)。 凍結中は `initialize` が timeout するので GET まで進まず、
+# 従来どおり 3s / 5s。 ただし正常 close のあとも次の失敗では 10s になる)。
+# 凍結中は `initialize` が timeout するので GET まで進まず、
 # 戻らない。 「最初の行が届いたら」 戻すと、 確立後 keepalive (15s) より前に
 # hub が再起動したとき次の再接続が 10s に伸びる (= 実測)。 scheduler は
 # 1 プロセスなので jitter は入れない。
@@ -687,8 +688,18 @@ SSE_RECONNECT_MAX_DELAY_SEC = 60
 
 
 def _reconnect_delay(base_sec: float, consecutive_failures: int) -> float:
-    """連続失敗回数に応じた SSE 再接続の待ち秒数を返す (= issue #427)。"""
-    return min(base_sec * 2 ** consecutive_failures, SSE_RECONNECT_MAX_DELAY_SEC)
+    """連続失敗回数に応じた SSE 再接続の待ち秒数を返す (= issue #427)。
+
+    上限に達したら倍にするのをやめる (= issue #456)。 `base * 2 ** n` をそのまま
+    計算すると、 base が float のとき n > 1023 で `OverflowError` になり、 except
+    節の中でも同じ関数を呼ぶので SSE thread が止まる。
+    """
+    delay = base_sec
+    for _ in range(consecutive_failures):
+        if delay >= SSE_RECONNECT_MAX_DELAY_SEC:
+            break
+        delay *= 2
+    return min(delay, SSE_RECONNECT_MAX_DELAY_SEC)
 
 # SSE 行の fast-check hint。 `data: {"jsonrpc":"2.0","id":N,"method":"ping"}` を
 # JSON parse する前に文字列含有で絞る (= 既存の
