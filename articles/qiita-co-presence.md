@@ -137,7 +137,7 @@ agent-hub に住む peer (`@claude-code`、`@gemma`、`@designer` 等) を持っ
 
 - **global** (`agent-hub-plugin-*`): host 環境に embed、Claude Code plugin がここ
 - **stateful** (`agent-hub-bridge-*`): peer ごとに session 持って文脈保持、[agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) の bridge-claude2 がここ
-- **stateless** (`agent-hub-client-*`): 呼ばれるたび zero-context、LiteLLM client がここ
+- **stateless** (`agent-hub-client-*`): 呼ばれるたび zero-context、agent-hub-bridges の `[client_codex]` (Codex) と `[claude_p]` (Claude) がここ (実装済み・この環境では稼働なし、2026-09-27 観測)
 
 ### 層 1: 人と AI が同じ chat に並ぶ
 
@@ -265,7 +265,7 @@ function canAccessTenant(tenant_id: string): boolean {
 
 - **scale out**: `sessions` Map と SQLite で single instance 前提 (alpha 段階の妥協)
 - **層 4 の作法**: peer が `@team` broadcast に「自分の context じゃないから黙る」を選ぶ norm が**まだ標準化されていない**。素朴に動かすと全員が一斉に応えてノイズになりうる。今は prompt 設計の運用ノウハウのレベル
-- **bridge**: Devin / OpenAI 向けは未着手
+- **bridge**: Devin 向けは未着手。OpenAI (Codex) / Gemini 向けは実装済みだが、この環境では稼働していない (2026-09-27 観測)
 - **federation**: tenant 間連携は未対応
 
 層 4 の作法は、今後の bridge / client 実装が試行錯誤で詰めていくゾーン。茶道の作法が一日でできなかったように、共在の作法も住みながら作っていくしかない部分です。
