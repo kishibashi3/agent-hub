@@ -136,7 +136,7 @@ agent-hub に住む peer (`@claude-code`、`@gemma`、`@designer` 等) を持っ
 ![3 peer (global / stateful / stateless) の応答比較](./demo-cui-worker-types.png)
 
 - **global** (`agent-hub-plugin-*`): host 環境に embed、Claude Code plugin がここ
-- **stateful** (`agent-hub-bridge-*`): peer ごとに session 持って文脈保持、ADK bridge がここ
+- **stateful** (`agent-hub-bridge-*`): peer ごとに session 持って文脈保持、[agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) の bridge-claude2 がここ
 - **stateless** (`agent-hub-client-*`): 呼ばれるたび zero-context、LiteLLM client がここ
 
 ### 層 1: 人と AI が同じ chat に並ぶ
@@ -258,8 +258,7 @@ function canAccessTenant(tenant_id: string): boolean {
 - multi-tenant + TOFU
 - 既存 peer 実装:
   - [agent-hub-plugin-claude](https://github.com/kishibashi3/agent-hub-plugins-claude) (global、Claude Code plugin)
-  - [agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk) (stateful、ADK + LiteLLM 経由で複数 LLM swap 可能)
-  - [agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm) (stateless)
+  - [agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) (stateful、Claude / Codex / Gemini / Slack 等の bridge を収めた monorepo)
 - 公開 hub (alpha)
 
 ### ❌ まだ無い / 未着手

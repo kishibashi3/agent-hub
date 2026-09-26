@@ -86,21 +86,21 @@ local dev で動かす場合は「起動」セクション参照。
 
 agent-hub に接続される LLM-connected workers は以下の通り。各 worker は LLM API を hub に翻訳します。agent-hub-bridges repo に入っている bridge の status は、その repo の README を正とします。
 
-| Bridge | Engine | Type | Status | Repository |
-|--------|--------|------|--------|------------|
-| **bridge-claude2** *(Go)* | `claude` CLI | Stateful | ✅ Stable — Python `[claude]` の置き換え | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **`[claude]`** *(Python)* | Claude Agent SDK | Stateful | ⚠️ Deprecated — `bridge-claude2` へ移行、`v1.0.0` で削除予定 | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **bridge-codex2** *(Go)* | `codex` CLI | Stateful | ✅ Stable — Python `[codex]` の置き換え | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **`[codex]`** *(Python)* | `codex` CLI | Stateful | ⚠️ Deprecated — `bridge-codex2` へ移行、`v1.0.0` で削除予定 | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **`[gemini]`** | Google Gemini CLI | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **`[slack]`** | Slack Bolt SDK | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **`[a2a]`** | A2A protocol translator | Stateful | ✅ Active | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
-| **@bridge-adk** | Google ADK + LiteLLM | Stateful | ✅ Active | [kishibashi3/agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk) |
-| **@bridge-vscode** | VS Code Language Model API | Stateful | 🏗️ Scaffolding | [kishibashi3/agent-hub-bridge-vscode](https://github.com/kishibashi3/agent-hub-bridge-vscode) |
-| **@bridge-teams** | Microsoft Teams SDK | Stateful | 🏗️ Scaffolding | [kishibashi3/agent-hub-bridge-teams](https://github.com/kishibashi3/agent-hub-bridge-teams) |
-| **@browser** | Playwright MCP | Stateless | ✅ Active | [kishibashi3/agent-hub-bridge-browser](https://github.com/kishibashi3/agent-hub-bridge-browser) |
-| **@bridge-codex** | Gemini Codebase Analysis | Stateless | 🏗️ Early | [kishibashi3/agent-hub-bridge-codex](https://github.com/kishibashi3/agent-hub-bridge-codex) |
-| **@client-litellm** | LiteLLM (generic LLM) | Stateless | ✅ Active | [kishibashi3/agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm) |
+状態は 2 列に分けています。「使えるか」はコードが保守されていて使えるか、「稼働」はこの環境でいま動いているかです。稼働の列は 2026-09-27 に `agenthubctl bridge status` で観測した結果で、このとき動いていた 26 体はすべて `bridge-claude2` でした。
+
+| Bridge | Engine | Type | 使えるか | 稼働 (2026-09-27 観測) | Repository |
+|--------|--------|------|----------|------------------------|------------|
+| **bridge-claude2** *(Go)* | `claude` CLI | Stateful | ✅ Stable — Python `[claude]` の置き換え | ✅ 26 体 (`@browser` を含む) | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **`[claude]`** *(Python)* | Claude Agent SDK | Stateful | ⚠️ Deprecated — `bridge-claude2` へ移行、`v1.0.0` で削除予定 | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **bridge-codex2** *(Go)* | `codex` CLI | Stateful | ✅ Stable — Python `[codex]` の置き換え | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **`[codex]`** *(Python)* | `codex` CLI | Stateful | ⚠️ Deprecated — `bridge-codex2` へ移行、`v1.0.0` で削除予定 | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **`[gemini]`** | Google Gemini CLI | Stateful | ✅ 使える | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **`[slack]`** | Slack Bolt SDK | Stateful | ✅ 使える | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **`[a2a]`** | A2A protocol translator | Stateful | ✅ 使える | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| **@browser** | Playwright (`bridge-claude2` で動く role) | Stateful | ✅ 使える | ✅ (`bridge-claude2` の 26 体に含まれる) | `kishibashi3/agent-hub-roles-kaz` の `browser/` (repository private) |
+| **agent-hub-plugin-vscode** | VS Code Language Model API | Stateful | 🏗️ Scaffolding | 観測対象外 (VS Code 拡張。`agenthubctl bridge status` には出ない) | [kishibashi3/agent-hub-plugin-vscode](https://github.com/kishibashi3/agent-hub-plugin-vscode) |
+
+「—」はその日に動いていなかったことを表します。使えないという意味ではありません。
 
 上の表のうち agent-hub-bridges repo の bridge については、stateless client (`[claude_p]` / `[client_codex]` など) も含めてその repo の README に載っています。
 

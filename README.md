@@ -153,19 +153,23 @@ Admin tools (`delete_user`, `get_user_history`) and CE operator tools (`list_ten
 
 ### Bridges (LLM engine connections)
 
-| Bridge | Engine | Status |
-|---|---|---|
-| `bridge-claude2` *(Go)* | `claude` CLI | ✅ Stable — replaces Python `[claude]` |
-| `[claude]` *(Python)* | Claude Agent SDK | ⚠️ Deprecated — migrate to `bridge-claude2`, target removal `v1.0.0` |
-| `bridge-codex2` *(Go)* | `codex` CLI | ✅ Stable — replaces Python `[codex]` |
-| `[codex]` *(Python)* | `codex` CLI | ⚠️ Deprecated — migrate to `bridge-codex2`, target removal `v1.0.0` |
-| `[gemini]` | Google Gemini CLI | ✅ Active |
-| `[slack]` | Slack Bolt SDK | ✅ Active |
-| `[a2a]` | A2A protocol | ✅ Active |
-| `@bridge-adk` | Google ADK + LiteLLM | ✅ Active |
-| `@client-litellm` | Generic LLM (LiteLLM) | ✅ Active |
+Status is split into two columns. **Usable** means the code is maintained and can be used. **Running** means it is running in this deployment right now; that column was observed with `agenthubctl bridge status` on 2026-09-27, when all 26 running bridges were `bridge-claude2`.
 
-The bridges above live in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges); its README is the source of truth for their status (stateless clients such as `[claude_p]` / `[client_codex]` are listed there). `@bridge-adk` and `@client-litellm` are standalone workers (repositories private/archived).
+| Bridge | Engine | Usable | Running (observed 2026-09-27) | Repository |
+|---|---|---|---|---|
+| `bridge-claude2` *(Go)* | `claude` CLI | ✅ Stable — replaces Python `[claude]` | ✅ 26 (including `@browser`) | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `[claude]` *(Python)* | Claude Agent SDK | ⚠️ Deprecated — migrate to `bridge-claude2`, target removal `v1.0.0` | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `bridge-codex2` *(Go)* | `codex` CLI | ✅ Stable — replaces Python `[codex]` | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `[codex]` *(Python)* | `codex` CLI | ⚠️ Deprecated — migrate to `bridge-codex2`, target removal `v1.0.0` | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `[gemini]` | Google Gemini CLI | ✅ Usable | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `[slack]` | Slack Bolt SDK | ✅ Usable | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `[a2a]` | A2A protocol | ✅ Usable | — | [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) |
+| `@browser` | Playwright (a role running on `bridge-claude2`) | ✅ Usable | ✅ (one of the 26 `bridge-claude2`) | `browser/` in `kishibashi3/agent-hub-roles-kaz` (repository private) |
+| `agent-hub-plugin-vscode` | VS Code Language Model API | 🏗️ Scaffolding | Not observed (VS Code extension; not listed by `agenthubctl bridge status`) | [kishibashi3/agent-hub-plugin-vscode](https://github.com/kishibashi3/agent-hub-plugin-vscode) |
+
+"—" means it was not running on that day, not that it is unusable.
+
+For the bridges in [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges), that repo's README is the source of truth for their status (stateless clients such as `[claude_p]` / `[client_codex]` are listed there).
 
 **Worker modes:**
 - `stateful` — holds context across messages; resume after restart works

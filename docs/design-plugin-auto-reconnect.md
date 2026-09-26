@@ -4,7 +4,7 @@
 
 ## 1. 概要
 
-agent-hub server (= TypeScript MCP server) が再起動すると、 in-memory `sessions: Map<string, Session>` が消失し、 既存 client (= Claude Code 内蔵 MCP client、 bridge-claude、 bridge-adk 等) が持つ stale `mcp-session-id` は次の tool call で **400 `Bad Request: missing/invalid session`** で reject される。 現状 Claude Code 側は auto-reconnect しないため、 user は **Claude Code session ごと再起動** が必要。
+agent-hub server (= TypeScript MCP server) が再起動すると、 in-memory `sessions: Map<string, Session>` が消失し、 既存 client (= Claude Code 内蔵 MCP client、 bridge-claude 等) が持つ stale `mcp-session-id` は次の tool call で **400 `Bad Request: missing/invalid session`** で reject される。 現状 Claude Code 側は auto-reconnect しないため、 user は **Claude Code session ごと再起動** が必要。
 
 本設計は **server-side stateless session reissuance** (= 不在 session ID + 有効 auth → server が auto-create + process request) を採用し、 client 側を一切変更せずに 「server restart → 透過的復帰」 を実現する。
 
@@ -13,7 +13,7 @@ agent-hub server (= TypeScript MCP server) が再起動すると、 in-memory `s
 ### (α) server-side stateless session reissuance ← 採用案
 - 不在 session ID で `POST /mcp` (= initialize 以外の request) が来た場合、 **server が同 request の auth 情報 (= X-User-Id / GITHUB_PAT) を再検証 → 有効なら新 session を auto-init → 同じ request body をその session で process** する path を追加
 - response の HTTP header に新 session ID を含める (= 既存 MCP の `mcp-session-id` response header と同形)
-- client は **完全に変更不要** = 既存 Claude Code / bridge-claude / bridge-adk / scheduler 等全 peer が恩恵
+- client は **完全に変更不要** = 既存 Claude Code / bridge-claude / scheduler 等全 peer が恩恵
 - 既存 auth 経路 (`authenticateUser` middleware) を毎 request 通るので **security regression なし** (= 不正 PAT で session reissuance は不可)
 
 ### (β) plugin-side intercepting proxy daemon
@@ -38,7 +38,7 @@ agent-hub server (= TypeScript MCP server) が再起動すると、 in-memory `s
 
 理由:
 1. **client 側変更ゼロ** (= Claude Code internal を変更できない制約に整合)
-2. **既存 bridges (= bridge-claude / bridge-adk / scheduler) も恩恵** (= 全 MCP client が server restart に耐性を得る)
+2. **既存 bridges (= bridge-claude / scheduler) も恩恵** (= 全 MCP client が server restart に耐性を得る)
 3. **security regression なし** = `authenticateUser` middleware が毎 request 通る既存設計を活用、 不在 session = 「新規 init すべき」 と扱うだけ
 4. **MCP spec 違反ではない** (= MCP 仕様は 「server は session ID を持たないと initialize required」 と書いてあるが、 「不在 session ID を auto-init してはいけない」 とは書いていない、 implementation choice の余地)
 5. β / γ と比較して **実装範囲が極小** (= server.ts 内 1 path の追加、 ~30 LOC 規模)
@@ -166,7 +166,7 @@ async function dispatchReissuedRequest(transport, req, res) {
 これにより:
 - watch.sh が 「server restart 後の SSE 再接続」 で `resources/subscribe` を再発行する必要がある
 - 既に watch.sh は `while true; do ... done` loop で sub 再発行する設計 = compatible
-- bridges (= bridge-claude / bridge-adk) も同様に reconnect 時 sub 再発行が必要
+- bridges (= bridge-claude) も同様に reconnect 時 sub 再発行が必要
 - **subscribe state は session level であるべき** (= server crash で失われる前提) を明示
 
 これは本 PR 設計の **意図的な scope 制限** (= subscribe state persistence は γ 案の subset、 別 issue 候補)。
@@ -222,7 +222,7 @@ ops が 「restart 後の reconnect 成功件数」 を log で観察可能 = au
 - `sessions: Map<string, Session>` の data structure 不変
 
 ### 6.2 client-side 変更
-- **なし**。 既存 Claude Code / bridge-claude / bridge-adk / scheduler / watch.sh 全て無修正で動作
+- **なし**。 既存 Claude Code / bridge-claude / scheduler / watch.sh 全て無修正で動作
 
 ### 6.3 plugin (= agent-hub-plugin) 変更
 - 不要。 watch.sh は既存 reconnect loop でそのまま動作
