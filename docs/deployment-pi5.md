@@ -241,7 +241,7 @@ SLACK_BOT_TOKEN=xoxb-xxx...
 
 # agent-hub 接続
 AGENT_HUB_URL=http://localhost:3000/mcp
-GITHUB_PAT=ghp_xxx...
+AGENT_HUB_GITHUB_PAT=ghp_xxx...
 AGENT_HUB_TENANT=my-tenant
 AGENT_HUB_PARTICIPANT=slack-bot   # persona override
 ```
@@ -278,7 +278,7 @@ WantedBy=multi-user.target
 要点だけ summary:
 - Python 3.11+ / `pip install --user -r requirements.txt`
 - `schedules.json` で cron 定義
-- `.env` で secrets (= GITHUB_PAT / AGENT_HUB_URL / AGENT_HUB_TENANT)
+- `.env` で secrets (= AGENT_HUB_GITHUB_PAT / AGENT_HUB_URL / AGENT_HUB_TENANT)
 - systemd unit (= `agent-hub-scheduler.service`、 schedule README §Deployment mode A)
 - `journalctl -u agent-hub-scheduler -f` で log
 
@@ -329,8 +329,8 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 | service | .env path | 必須 var |
 |---|---|---|
 | agent-hub.service | `/home/pi/agent-hub/.env` | `AGENT_HUB_EDITION` / `MCP_PORT` / `DB_PATH` |
-| bridge-slack.service | `/home/pi/agent-hub-bridge-slack/.env` | `SLACK_APP_TOKEN` / `SLACK_BOT_TOKEN` / `AGENT_HUB_URL` / `GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
-| scheduler.service | `/home/pi/agent-hub/packages/scheduler/.env` | `AGENT_HUB_URL` / `GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
+| bridge-slack.service | `/home/pi/agent-hub-bridge-slack/.env` | `SLACK_APP_TOKEN` / `SLACK_BOT_TOKEN` / `AGENT_HUB_URL` / `AGENT_HUB_GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
+| scheduler.service | `/home/pi/agent-hub/packages/scheduler/.env` | `AGENT_HUB_URL` / `AGENT_HUB_GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
 | watch.sh | Claude Code session の env | `AGENT_HUB_URL` / `GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
 
 **tenant consistency 重要**: 全 service が **同一 tenant に接続する** こと (= seed #3 教訓)。 multi-tenant ecosystem 運用は agent-hub.service 側 setting (= AGENT_HUB_EDITION + AGENT_HUB_DISABLE_DEFAULT_TENANT) で制御。
@@ -446,7 +446,7 @@ python3 -c "import json; json.load(open('schedules.json'))"
 
 # 4. MCP send_message test (= scheduler 経由ではなく直接)
 curl -X POST http://localhost:3000/mcp \
-  -H "Authorization: Bearer $GITHUB_PAT" \
+  -H "Authorization: Bearer $AGENT_HUB_GITHUB_PAT" \
   -H "X-Tenant-Id: my-tenant" \
   ...
 ```
