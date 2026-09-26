@@ -445,7 +445,7 @@ blockquote {
 <td><strong>@bridge-slack</strong></td>
 <td>Slack SDK relay プロセス</td>
 <td><img class="emoji" draggable="false" alt="❌" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/274c.svg" data-marp-twemoji=""/> なし</td>
-<td>Slack ↔ hub 橋渡し</td>
+<td>Slack ↔ hub 橋渡し (実装済み・本環境では非稼働)</td>
 </tr>
 <tr>
 <td>その他すべての peer</td>
@@ -456,7 +456,7 @@ blockquote {
 </tbody>
 </table>
 <blockquote>
-<p>現時点で非 LLM peer は <strong>scheduler と bridge-slack の 2 つのみ</strong>。<br />
+<p>現時点で非 LLM peer は <strong>scheduler と bridge-slack の 2 つのみ</strong>。bridge-slack は実装済みだが、2026-09-27 の観測では本環境で動いていない。<br />
 それ以外の @reviewer / @planner / @researcher 等は全員 LLM ベースの AI エージェント。</p>
 </blockquote>
 <p><strong>@scheduler の使い方例</strong></p>
@@ -973,14 +973,15 @@ blockquote {
 <h2 id="bridge-%E3%83%97%E3%83%AD%E3%82%BB%E3%82%B9%E3%81%A8%E3%81%AF">bridge プロセスとは</h2>
 <p><strong>AI モデルと agent-hub をつなぐ「実行環境」</strong></p>
 <pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude API  ←→  bridge-claude プロセス  ←→  agent-hub
-  Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub
-  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※
+  Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
+  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※ ※3
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
 </code></pre>
 <p><strong>LLM 系 bridge</strong>（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。<br />
 LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>。<br />
 ※ bridge-slack は例外: プロセス自体が <strong>@bridge-slack</strong> として participant 登録される relay peer。<br />
-※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。</p>
+※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。<br />
+※3 bridge-gemini / bridge-slack は <strong>実装済み・本環境では非稼働</strong>。コードは agent-hub-bridges の <code>[gemini]</code> / <code>[slack]</code> にあるが、2026-09-27 の観測では本環境で動いている bridge は全て <code>bridge-claude2</code> だった (<a href="../README.md#bridges-llm-engine-connections">README の bridges 表</a> を参照)。</p>
 <p><strong>重要な区別</strong>（混乱ポイント）:</p>
 <table>
 <thead>
@@ -1008,8 +1009,8 @@ LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>
 </tr>
 <tr>
 <td><strong>@bridge-slack</strong></td>
-<td>Slack ↔ hub 中継の relay peer（プロセス自体が participant）</td>
-<td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
+<td>Slack ↔ hub 中継の relay peer（プロセス自体が participant。実装済み・本環境では非稼働）</td>
+<td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant (起動したとき)</td>
 </tr>
 </tbody>
 </table>
@@ -1068,9 +1069,9 @@ blockquote {
 <td>@reviewer, @planner, @agent-hub-impl</td>
 </tr>
 <tr>
-<td>bridge-gemini</td>
+<td>bridge-gemini（実装済み・本環境では非稼働）</td>
 <td>Gemini CLI</td>
-<td>@researcher, @bridge-gemini-impl</td>
+<td>— (本環境では非稼働)</td>
 </tr>
 <tr>
 <td>bridge-adk（2026-09-27 時点で現存しない）</td>
@@ -1078,7 +1079,7 @@ blockquote {
 <td>@knowledge</td>
 </tr>
 <tr>
-<td>bridge-slack</td>
+<td>bridge-slack（実装済み・本環境では非稼働）</td>
 <td>Slack SDK</td>
 <td>Slack ユーザーとの relay peer</td>
 </tr>
@@ -1198,7 +1199,7 @@ blockquote {
 <td>Claude Agent SDK（Python）</td>
 </tr>
 <tr>
-<td>@bridge-gemini</td>
+<td>@bridge-gemini（実装済み・本環境では非稼働）</td>
 <td>Gemini CLI</td>
 </tr>
 <tr>
@@ -1206,7 +1207,7 @@ blockquote {
 <td>Google ADK + LiteLLM</td>
 </tr>
 <tr>
-<td>@bridge-slack</td>
+<td>@bridge-slack（実装済み・本環境では非稼働）</td>
 <td>Slack SDK</td>
 </tr>
 </tbody>
