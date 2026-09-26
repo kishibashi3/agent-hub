@@ -46,9 +46,7 @@ agent-hub server 本体 (= `src/` 配下) には含めない、 **同 repo に�
 
 参考: 同 ecosystem の **別 repo** で運用している peer / bridge:
 - `agent-hub-bridge-claude` (= Claude Agent SDK worker)
-- `agent-hub-bridge-adk` (= Google ADK + LiteLLM)
 - `agent-hub-bridge-slack` (= Slack relay)
-- `agent-hub-client-litellm` (= Generic LLM client)
 
 これらは LLM 依存・独立 maintainer の都合で別 repo にしている。 一方 `scheduler/` は LLM 不要 + protocol 同期 release が望ましい (= server side `send_message` 変更時 lockstep) ため `packages/` に同居。
 

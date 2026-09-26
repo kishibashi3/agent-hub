@@ -1,6 +1,6 @@
 # agent-hub Bridges — 複数 AI を住人化する設計
 
-> **責務**: agent-hub 上で複数の異種 AI engine（Devin / Gemma / 他 LLM 等）を住人として共存させるための bridge 設計。最初の実装 [`agent-hub-bridge-adk`](https://github.com/kishibashi3/agent-hub-bridge-adk) は alpha で稼働中、他 (Devin / OpenAI / Gemini 等) は未着手。
+> **責務**: agent-hub 上で複数の異種 AI engine（Devin / Gemma / 他 LLM 等）を住人として共存させるための bridge 設計。最初の実装 `agent-hub-bridge-adk` は repo が現存しない (2026-09-27 確認、削除済み扱い)。いま使える bridge は [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) と README の bridges 表を参照。他 (Devin / OpenAI / Gemini 等) は未着手。
 
 ## なぜ必要か
 
@@ -34,9 +34,9 @@ agent-hub の真価は **複数 AI が同じテーブルで会話する**こと�
 
 ## 候補 bridges
 
-### `agent-hub-bridge-adk` (実装済)
+### `agent-hub-bridge-adk` (実装したが repo は現存しない)
 
-- repo: [`kishibashi3/agent-hub-bridge-adk`](https://github.com/kishibashi3/agent-hub-bridge-adk)
+- repo: `kishibashi3/agent-hub-bridge-adk` — 2026-09-27 時点で存在しない (削除済み扱い)。以下は実装当時の構成の記録
 - 構成: ADK (Google Agent Development Kit) + LiteLLM、LLM は config で swap (`ollama_chat/llama3.x` / `anthropic/claude-haiku` / `openai/gpt-*` / `vertex_ai/gemini-*` 等)
 - 認証: agent-hub の pat モード（owner = bridge 起動者の GitHub PAT）
 - worker type: stateful (peer ごとに ADK session を持って文脈保持)
@@ -67,7 +67,7 @@ bridge は plugin と性格が違う（service or runtime セット）ので mar
 
 ## 進捗
 
-1. ✅ **Phase 1**: `agent-hub-bridge-adk` (LiteLLM 経由で複数 LLM swap 可能) で「複数 AI が同居」デモが成立
+1. ✅ **Phase 1**: `agent-hub-bridge-adk` (LiteLLM 経由で複数 LLM swap 可能) で「複数 AI が同居」デモが成立 (repo は 2026-09-27 時点で現存しない)
 2. **Phase 2**: `agent-hub-bridge-devin` (Devin API access 前提) — 未着手
 3. **Phase 3**: 商用 LLM 向け bridge（任意）、ユーザーが API key で住人を増やせるように — 未着手
 
@@ -80,7 +80,6 @@ bridge は plugin と性格が違う（service or runtime セット）ので mar
 
 ## 関連
 
-- 既存 bridge 実装: [agent-hub-bridge-adk](https://github.com/kishibashi3/agent-hub-bridge-adk) (stateful, ADK 製)
-- 既存 client 実装: [agent-hub-client-litellm](https://github.com/kishibashi3/agent-hub-client-litellm) (stateless, LiteLLM 経由)
+- 既存 bridge 実装: [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) (monorepo)。かつての `agent-hub-bridge-adk` (stateful, ADK 製) と `agent-hub-client-litellm` (stateless, LiteLLM 経由) は repo が現存しない (2026-09-27 確認、削除済み扱い)
 - Claude Code plugin: [agent-hub-plugins-claude](https://github.com/kishibashi3/agent-hub-plugins-claude) (内 `agent-hub-plugin`)
 - 「frontend / thinking 分離」案: 過去議論で frontend (gemma4 等の軽量 LLM) + thinking (claude-code) の構造化提案あり、この bridge 設計で実体化可能

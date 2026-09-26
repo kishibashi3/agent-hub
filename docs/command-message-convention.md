@@ -33,7 +33,7 @@ LLM cost / latency / non-determinism を回避したい operational signal (= he
 | **`/pong`** | — | ping 応答 (= SDK が自動送信、 peer 側の追加実装不要) |
 | **`/unknown <cmd>`** | — | 未知 command への応答 (= sender 側の判別用) |
 
-これらは **SDK を使う全 bridge / client (= bridge-claude / bridge-adk 等)** で自動対応、 peer code に handler を書く必要がない。 SDK 未使用の peer (= 例: scheduler) は自前で同等 handler を実装する責務がある (= §4 移行参照)。
+これらは **SDK を使う全 bridge / client (= bridge-claude 等)** で自動対応、 peer code に handler を書く必要がない。 SDK 未使用の peer (= 例: scheduler) は自前で同等 handler を実装する責務がある (= §4 移行参照)。
 
 ### 3.2 peer 実装 (= 各 bridge が自分で実装、 例)
 
@@ -142,7 +142,7 @@ operator (= @ope-ultp1635) confirm:
 
 | peer / system | 現状 | 移行影響 |
 |---|---|---|
-| **bridge-claude / bridge-adk / bridge-gemini 等** (SDK M4 用) | `/ping`/`/pong` は SDK 内蔵 | 影響なし (= 既に convention 準拠) |
+| **bridge-claude / bridge-gemini 等** (SDK M4 用) | `/ping`/`/pong` は SDK 内蔵 | 影響なし (= 既に convention 準拠) |
 | **scheduler** (= packages/scheduler) | bare command (= `ping`, `list`) | 別 PR で `/` prefix 化、 v2.0 (= §5) |
 | **agent-hub server** (= packages/server) | `/health` / `/mcp` HTTP endpoint (= 別 layer) | 影響なし (= URL path であり message convention 外) |
 | **scheduler 利用 user / 自動 schedule** | bare command を send_message で送信 | 移行 deploy 後 `/` prefix に書き換え必要 (= operator 担当) |

@@ -53,7 +53,7 @@ Pi5 8GB RAM に **常駐する process 群** (= 2026-05 時点の構成):
 │                                                              │
 │  External bridges (= 別 host / 別 process):                  │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ bridge-claude / bridge-adk / client-litellm 等       │   │
+│  │ bridge-claude 等                                     │   │
 │  │   - 通常別 host (= 開発者 workstation 等)            │   │
 │  │   - Pi5 上の agent-hub.service に MCP 接続           │   │
 │  │   - Pi5 deployment 対象外 (= 接続先のみ)             │   │
@@ -307,7 +307,7 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 - → seed #3 / seed #12 (= ops/application 分離) family
 - 将来 systemd 化により session lifecycle 非依存常駐 (= future improvement candidate)
 
-### 4.5 External bridges (= bridge-claude / bridge-adk / client-litellm)
+### 4.5 External bridges (= bridge-claude 等)
 
 これらは **通常 Pi5 外 (= 開発者 workstation / 別 host) で動かす peer worker**、 Pi5 上の agent-hub.service に MCP 接続する形。
 
@@ -317,8 +317,6 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 
 各 bridge の deployment は **bridge ごとの repo README** を参照:
 - [`kishibashi3/agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) (= bridge-claude は `bridge-claude2/`)
-- `kishibashi3/agent-hub-bridge-adk`
-- `kishibashi3/agent-hub-client-litellm`
 
 ---
 
@@ -494,8 +492,6 @@ curl -X POST http://localhost:3000/mcp \
 ### 9.2 External (= 別 repo deployment)
 
 - [`kishibashi3/agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) — bridge worker monorepo (= Slack relay は `[slack]`、 Claude worker は `bridge-claude2/`)
-- `kishibashi3/agent-hub-bridge-adk` — Google ADK + LiteLLM worker
-- `kishibashi3/agent-hub-client-litellm` — Generic LLM client
 
 ### 9.3 Related issues
 
