@@ -442,7 +442,7 @@ blockquote {
 <td>スケジュール管理</td>
 </tr>
 <tr>
-<td><strong>@bridge-slack</strong></td>
+<td><strong>[slack]</strong>（起動すると participant。既定の handle は <code>@slack-bot</code>）</td>
 <td>Slack SDK relay プロセス</td>
 <td><img class="emoji" draggable="false" alt="❌" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/274c.svg" data-marp-twemoji=""/> なし</td>
 <td>Slack ↔ hub 橋渡し (実装済み・本環境では非稼働)</td>
@@ -979,7 +979,7 @@ blockquote {
 </code></pre>
 <p><strong>LLM 系 bridge</strong>（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。<br />
 LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>。<br />
-※1 bridge-slack は例外: プロセス自体が <strong>@bridge-slack</strong> として participant 登録される relay peer。<br />
+※1 <code>[slack]</code> は例外: 起動するとプロセス自体が participant として登録される relay peer (既定の handle は <code>@slack-bot</code>、<code>--participant</code> / <code>AGENT_HUB_PARTICIPANT</code> で変えられる)。<br />
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。<br />
 ※3 bridge-gemini / bridge-slack は <strong>実装済み・本環境では非稼働</strong>。コードは agent-hub-bridges の <code>[gemini]</code> / <code>[slack]</code> にあるが、2026-09-27 の観測では本環境で動いている bridge は全て <code>bridge-claude2</code> だった (<a href="../README.md#bridges-llm-engine-connections">README の bridges 表</a> を参照)。</p>
 <p><strong>重要な区別</strong>（混乱ポイント）:</p>
@@ -1008,8 +1008,8 @@ LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
 </tr>
 <tr>
-<td><strong>@bridge-slack</strong></td>
-<td>Slack ↔ hub 中継の relay peer（プロセス自体が participant。実装済み・本環境では非稼働）</td>
+<td><strong>[slack]</strong></td>
+<td>Slack ↔ hub 中継の relay peer（起動するとプロセス自体が participant として登録される。既定の handle は <code>@slack-bot</code>。実装済み・本環境では非稼働）</td>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant (起動したとき)</td>
 </tr>
 </tbody>
@@ -1207,7 +1207,7 @@ blockquote {
 <td>Google ADK + LiteLLM</td>
 </tr>
 <tr>
-<td>@bridge-slack（実装済み・本環境では非稼働）</td>
+<td>bridge-slack（実装済み・本環境では非稼働）</td>
 <td>Slack SDK</td>
 </tr>
 </tbody>

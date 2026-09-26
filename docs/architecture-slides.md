@@ -126,7 +126,7 @@ style: |
 | peer | 実体 | LLM？ | 役割 |
 |---|---|---|---|
 | **@scheduler** | Python cron プロセス | ❌ なし | スケジュール管理 |
-| **@bridge-slack** | Slack SDK relay プロセス | ❌ なし | Slack ↔ hub 橋渡し (実装済み・本環境では非稼働) |
+| **[slack]**（起動すると participant。既定の handle は `@slack-bot`） | Slack SDK relay プロセス | ❌ なし | Slack ↔ hub 橋渡し (実装済み・本環境では非稼働) |
 | その他すべての peer | Claude / Gemini 等の LLM | ✅ あり | 各種役割 |
 
 > 現時点で非 LLM peer は **scheduler と bridge-slack の 2 つのみ**。bridge-slack は実装済みだが、2026-09-27 の観測では本環境で動いていない。  
@@ -300,7 +300,7 @@ peer が直接 peer に通信するわけではない。
 
 **LLM 系 bridge**（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。  
 LLM 系 bridge は peer が動く**実行環境（インフラ）**。  
-※1 bridge-slack は例外: プロセス自体が **@bridge-slack** として participant 登録される relay peer。  
+※1 `[slack]` は例外: 起動するとプロセス自体が participant として登録される relay peer (既定の handle は `@slack-bot`、`--participant` / `AGENT_HUB_PARTICIPANT` で変えられる)。  
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。
 ※3 bridge-gemini / bridge-slack は **実装済み・本環境では非稼働**。コードは agent-hub-bridges の `[gemini]` / `[slack]` にあるが、2026-09-27 の観測では本環境で動いている bridge は全て `bridge-claude2` だった ([README の bridges 表](../README.md#bridges-llm-engine-connections) を参照)。
 
@@ -311,7 +311,7 @@ LLM 系 bridge は peer が動く**実行環境（インフラ）**。
 | **bridge-claude プロセス** | Claude API への gateway daemon プロセス | ❌ インフラ |
 | **@reviewer** | bridge-claude の上で動く **レビュー役割の peer** | ✅ participant |
 | **@bridges-impl** | bridge-claude などの bridge のコードを書く **実装担当の peer** | ✅ participant |
-| **@bridge-slack** | Slack ↔ hub 中継の relay peer（プロセス自体が participant。実装済み・本環境では非稼働） | ✅ participant (起動したとき) |
+| **[slack]** | Slack ↔ hub 中継の relay peer（起動するとプロセス自体が participant として登録される。既定の handle は `@slack-bot`。実装済み・本環境では非稼働） | ✅ participant (起動したとき) |
 
 ---
 
@@ -357,7 +357,7 @@ bridge プロセスは「どの AI モデルを使うか」で種類が分かれ
 | bridge-claude | Claude Agent SDK（Python） |
 | bridge-gemini（実装済み・本環境では非稼働） | Gemini CLI |
 | bridge-adk（2026-09-27 時点で現存しない） | Google ADK + LiteLLM |
-| @bridge-slack（実装済み・本環境では非稼働） | Slack SDK |
+| bridge-slack（実装済み・本環境では非稼働） | Slack SDK |
 
 ---
 
