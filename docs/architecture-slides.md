@@ -126,10 +126,10 @@ style: |
 | peer | 実体 | LLM？ | 役割 |
 |---|---|---|---|
 | **@scheduler** | Python cron プロセス | ❌ なし | スケジュール管理 |
-| **@bridge-slack** | Slack SDK relay プロセス | ❌ なし | Slack ↔ hub 橋渡し |
+| **@bridge-slack** | Slack SDK relay プロセス | ❌ なし | Slack ↔ hub 橋渡し (実装済み・本環境では非稼働) |
 | その他すべての peer | Claude / Gemini 等の LLM | ✅ あり | 各種役割 |
 
-> 現時点で非 LLM peer は **scheduler と bridge-slack の 2 つのみ**。  
+> 現時点で非 LLM peer は **scheduler と bridge-slack の 2 つのみ**。bridge-slack は実装済みだが、2026-09-27 の観測では本環境で動いていない。  
 > それ以外の @reviewer / @planner / @researcher 等は全員 LLM ベースの AI エージェント。
 
 **@scheduler の使い方例**
@@ -293,8 +293,8 @@ peer が直接 peer に通信するわけではない。
 
 ```
   Claude API  ←→  bridge-claude プロセス  ←→  agent-hub
-  Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub
-  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※
+  Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
+  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※ ※3
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
 ```
 
@@ -302,6 +302,7 @@ peer が直接 peer に通信するわけではない。
 LLM 系 bridge は peer が動く**実行環境（インフラ）**。  
 ※ bridge-slack は例外: プロセス自体が **@bridge-slack** として participant 登録される relay peer。  
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。
+※3 bridge-gemini / bridge-slack は **実装済み・本環境では非稼働**。コードは agent-hub-bridges の `[gemini]` / `[slack]` にあるが、2026-09-27 の観測では本環境で動いている bridge は全て `bridge-claude2` だった ([README の bridges 表](../README.md#bridges-llm-engine-connections) を参照)。
 
 **重要な区別**（混乱ポイント）:
 
@@ -310,7 +311,7 @@ LLM 系 bridge は peer が動く**実行環境（インフラ）**。
 | **bridge-claude プロセス** | Claude API への gateway daemon プロセス | ❌ インフラ |
 | **@reviewer** | bridge-claude の上で動く **レビュー役割の peer** | ✅ participant |
 | **@bridge-claude-impl** | bridge-claude のコードを書く **実装担当の peer** | ✅ participant |
-| **@bridge-slack** | Slack ↔ hub 中継の relay peer（プロセス自体が participant） | ✅ participant |
+| **@bridge-slack** | Slack ↔ hub 中継の relay peer（プロセス自体が participant。実装済み・本環境では非稼働） | ✅ participant (起動したとき) |
 
 ---
 
@@ -321,9 +322,9 @@ bridge プロセスは「どの AI モデルを使うか」で種類が分かれ
 | bridge | 使用技術 | 上で動く peer の例 |
 |---|---|---|
 | bridge-claude | Claude Agent SDK（Python） | @reviewer, @planner, @agent-hub-impl |
-| bridge-gemini | Gemini CLI | @researcher, @bridge-gemini-impl |
+| bridge-gemini（実装済み・本環境では非稼働） | Gemini CLI | — (本環境では非稼働) |
 | bridge-adk（2026-09-27 時点で現存しない） | Google ADK + LiteLLM | @knowledge |
-| bridge-slack | Slack SDK | Slack ユーザーとの relay peer |
+| bridge-slack（実装済み・本環境では非稼働） | Slack SDK | Slack ユーザーとの relay peer |
 
 **peer の動作モード（実装詳細）**
 
@@ -354,9 +355,9 @@ bridge プロセスは「どの AI モデルを使うか」で種類が分かれ
 | bridge | 使用技術 |
 |---|---|
 | @bridge-claude | Claude Agent SDK（Python） |
-| @bridge-gemini | Gemini CLI |
+| @bridge-gemini（実装済み・本環境では非稼働） | Gemini CLI |
 | @bridge-adk（2026-09-27 時点で現存しない） | Google ADK + LiteLLM |
-| @bridge-slack | Slack SDK |
+| @bridge-slack（実装済み・本環境では非稼働） | Slack SDK |
 
 ---
 
