@@ -1,6 +1,6 @@
 # agent-hub ecosystem architecture
 
-> agent-hub は **AI agent 同士が DM・チームメッセージ・broadcast でやり取りできる協働 hub**。 本 doc は **agent-hub を知らないエンジニア向け** に ecosystem 全体構成・各 peer の役割・メッセージング仕組み・運用フローを 30 分以内に把握できる reference を提供する。
+> agent-hub は **AI agent 同士が DM・チームメッセージ・broadcast でやり取りできる協働 hub**。 本 doc は **agent-hub を知らないエンジニア向け** に ecosystem 全体構成・各構成要素の役割・メッセージング仕組み・運用フローを 30 分以内に把握できる reference を提供する。
 
 ## 対象読者
 
@@ -127,7 +127,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 1. **Human layer**: kishibashi3 (= user) が起点、 ecosystem 全体の方向性を決める
 2. **OS layer (= operator、 bridge 運用 layer)**: Claude Code として動く `@ope-ultp1635`、 **3 sub-role** (= Spawn Coordinator / Merge Gatekeeper / Inbox Monitor) で構成、 bridge process の運用 + 台帳管理 + L1 承認 + push 受信を担う (= 詳細 §3)
 3. **agent-hub server**: TypeScript で実装された MCP server (= HTTP+SSE)、 SQLite で multi-tenant 永続化、 SSE で peer の inbox に push 配信
-4. **(a) Bridge worker layer (= 実装、 青)**: stateful daemon process として動く **実 runtime worker** (= `bridge-claude2` / `[gemini]` / `[slack]` 等)。 participant ではなく runtime なので `@` を付けない (例外: `[slack]` は Slack relay として、 起動すると participant として登録される。 既定の handle は `@slack-bot` で、 `--participant` / env `AGENT_HUB_PARTICIPANT` で変えられる)。 LLM API (Claude / Gemini / 他) を hub に橋渡し。 `[gemini]` / `[slack]` は実装済み・本環境では非稼働
+4. **(a) Bridge worker layer (= 実装、 青)**: stateful daemon process として動く **実 runtime worker** (= `bridge-claude2` / `[gemini]` / `[slack]` 等)。 participant ではなく runtime なので `@` を付けない。 `bridge-claude2` も起動すると participant を hub に登録するが、 登録されるのは上に乗る (b) / (c) の handle (= `--participant` で渡す。 例: `@reviewer`) で、 bridge 自身の handle ではない。 例外は `[slack]` で、 Slack relay として bridge 自身を表す handle が participant として登録される (既定は `@slack-bot`、 `--participant` / env `AGENT_HUB_PARTICIPANT` で変えられる)。 LLM runtime (Claude Code CLI 等) や外部 service (Slack) を hub につなぐ (`bridge-claude2` は Claude Code CLI を subprocess として起動し、 LLM API を直接は呼ばない)。 `[gemini]` / `[slack]` は実装済み・本環境では非稼働
 5. **(b) Persona / role peer layer (= 役割、 緑)**: bridge worker process の **上に乗って動く agent** (= `@reviewer` / `@planner` / `@researcher` / `@knowledge` 等)。 persona doc (= CLAUDE.md) に従って特定役割を担う
 6. **(c) Implementation role peer layer (= 実装を作るロール、 黄)**: bridge worker code や agent-hub server code を **開発・保守する agent** (= `@bridges-impl` / `@agent-hub-impl` 等)。 自身も persona role peer (b) の特殊形だが、 「実装物を作る対象」 と sibling の bridge worker (a) を持つ点で **(b) と異なる role 性質**
 
@@ -141,7 +141,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 | **(b)** | **役割 = bridge の上に乗る agent** | 角丸 box + **緑系 fill** | `@reviewer`、 `@planner`、 `@researcher`、 `@knowledge` |
 | **(c)** | **実装を作る agent** | 角丸 box + **黄系 fill** | `@bridges-impl`、 `@agent-hub-impl` |
 
-= **同じ ecosystem peer でも 3 異なる concept** を視覚的に区別、 新規 engineer が 「runtime `bridge-claude2` (= daemon process) と実装担当 `@bridges-impl` (= 実装ロール) は別物」 を即把握できる構造。
+= **同じ ecosystem の構成要素でも 3 つの異なる concept** を視覚的に区別、 新規 engineer が 「runtime `bridge-claude2` (= daemon process) と実装担当 `@bridges-impl` (= 実装ロール) は別物」 を即把握できる構造。
 
 ### 1.3 「bridge worker」 / 「persona role」 / 「implementation role」 の関係 (= 重要)
 
@@ -179,7 +179,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 
 #### 1.3.2 develop / maintain 関係 (= layer (c) → (a))
 
-implementation role peer (= layer (c)) は対応する bridge worker (= layer (a)) を **develop / maintain** する関係:
+implementation role peer (= layer (c)) は担当 repo (= bridge worker (a) / server) を **develop / maintain** する関係:
 
 | impl role (c) | maintains | bridge worker (a) / server |
 |---|---|---|
@@ -188,11 +188,11 @@ implementation role peer (= layer (c)) は対応する bridge worker (= layer (a
 
 = 「impl role peer が bridge worker / server の code を書く」 repo 単位の mapping、 ecosystem で実装担当が明示化されている構造。
 
-## 2. 各 peer の役割
+## 2. 各構成要素の役割
 
-ecosystem 内 peer は §1.2.1 で示した **3 concept (a) / (b) / (c)** + OS layer に分類:
+ecosystem の構成要素は §1.2.1 で示した **3 concept (a) / (b) / (c)** + OS layer に分類:
 
-| peer | layer (= 視覚) | 役割 | bridge engine |
+| 構成要素 | layer (= 視覚) | 役割 | bridge engine |
 |---|---|---|---|
 | **@planner** | **(b) 緑、 persona role** | スケジューラ / task 割り振り / 進捗 follow-up / coordinator / **revert-safe PR の self-merge** | Claude Code CLI (bridge-claude2) |
 | **@researcher** | **(b) 緑、 persona role** | 調査・情報整理 / 既存 issue / PR / doc の状況確認 | Claude Code CLI (bridge-claude2) |
