@@ -293,9 +293,9 @@ peer が直接 peer に通信するわけではない。
 
 ```
   Claude Code CLI ←→  bridge-claude2 プロセス ←→  agent-hub  ※4
-  Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
-  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※1 ※3
-  Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
+  Gemini API      ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
+  Slack           ←→  bridge-slack プロセス   ←→  agent-hub  ※1 ※3
+  Google ADK      ←→  bridge-adk プロセス     ←→  agent-hub  ※2
 ```
 
 **LLM 系 bridge**（bridge-claude2 / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。  
