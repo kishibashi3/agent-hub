@@ -45,8 +45,7 @@ agent-hub server 本体 (= `src/` 配下) には含めない、 **同 repo に�
 | 外部から **plugin like に install / discover** されたい | 別 repo (= package registry 配布) |
 
 参考: 同 ecosystem の **別 repo** で運用している peer / bridge:
-- `agent-hub-bridge-claude` (= Claude Agent SDK worker)
-- `agent-hub-bridge-slack` (= Slack relay)
+- [`agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) (= Claude Agent SDK worker / Slack relay 等の bridge を収めた monorepo)
 
 これらは LLM 依存・独立 maintainer の都合で別 repo にしている。 一方 `scheduler/` は LLM 不要 + protocol 同期 release が望ましい (= server side `send_message` 変更時 lockstep) ため `packages/` に同居。
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 // --- Participants ---
 
 /**
- * peer の worker type 宣言。詳細は agent-hub-bridge-adk README 参照。
+ * peer の worker type 宣言。詳細は docs/architecture.md §2.1 参照。
  * - stateful: peer ごとに文脈保持（personal assistant 系、cloud LLM 推奨）
  * - stateless: 単発処理（翻訳・要約 等の specialty worker）
  * - global: 全員が 1 session 共有（議事録・司会・場の管理人）

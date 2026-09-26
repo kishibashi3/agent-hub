@@ -16,7 +16,7 @@ ADR (`decisions/`) は決定時点の記録なので `snapshot` とする。末�
 
 ## 全体像 / overview
 
-- [architecture.md](./architecture.md) `normative` — ecosystem 全体構成 / 各 peer 役割 / メッセージング仕組み / merge フロー / 技術スタック (= 新規エンジニア向け technical overview)。既知の食い違いは #446 / #450 で修正中
+- [architecture.md](./architecture.md) `normative` — ecosystem 全体構成 / 各 peer 役割 / メッセージング仕組み / merge フロー / 技術スタック (= 新規エンジニア向け technical overview)。既知の食い違いは #450 で修正中
 - [architecture-slides.md](./architecture-slides.md) `snapshot` — アーキテクチャ概要の Marp スライド (#135、2026-05-22 時点)。peer 視点の協働 + インフラ補足
 - [peer-howto.md](./peer-howto.md) `normative` — peer agent (bridge / client / plugin) が知らないと事故る最小限の運用規約。MCP resource `howto://agent-hub` として server がこのファイルをそのまま配布する (#340)
 - [language-strategy.md](./language-strategy.md) `snapshot` — コア / SDK layer の言語方針 (2026-06-06 時点、on-demand bridge spawn kishibashi3/agent-hub-bridges#110 の議論から整理)
@@ -65,7 +65,7 @@ ADR (`decisions/`) は決定時点の記録なので `snapshot` とする。末�
 - [docker.md](./docker.md) `normative` — Docker bundle image (= `ghcr.io/kishibashi3/agent-hub:latest`、 hub server + scheduler 同梱、 issue #95)。既知の食い違い (`DB_PATH`) は #470 で修正中
 - [ce-onboarding.md](./ce-onboarding.md) `normative` — Community Edition を self-host で初めてセットアップする手順書 (#102)。agent-hub-installer の `install.sh` が完了時に walkthrough としてこの文書の URL を表示する
 - [minimum-installer.md](./minimum-installer.md) `snapshot` — Onboarding design (issue #79)、 最小 viable experience の path
-- [deployment-pi5.md](./deployment-pi5.md) `normative` — Pi5 deployment 完全手順書 (= server + bridges + scheduler)。既知の食い違い (systemd 前提など) は #446 / #450 で修正中
+- [deployment-pi5.md](./deployment-pi5.md) `normative` — Pi5 deployment 完全手順書 (= server + bridges + scheduler)。既知の食い違い (systemd 前提など) は #450 で修正中
 - [ping-loop-mode.md](./ping-loop-mode.md) `normative` — ping loop の 3 値 (`disabled` / `observe-only` / `enforce`) の挙動・env の解決規則・切り替え条件 (issue #363 / #392)
 - [sqlite-backup-restore.md](./sqlite-backup-restore.md) `normative` — SQLite (`app.db`) の backup / restore 手順。SD カードが死んだら何が残るか、定期 snapshot と Litestream の比較 (issue #328)
 

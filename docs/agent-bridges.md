@@ -1,6 +1,6 @@
 # agent-hub Bridges — 複数 AI を住人化する設計
 
-> **責務**: agent-hub 上で複数の異種 AI engine（Devin / Gemma / 他 LLM 等）を住人として共存させるための bridge 設計。最初の実装 `agent-hub-bridge-adk` は repo が現存しない (2026-09-27 確認、削除済み扱い)。いま使える bridge は [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) と README の bridges 表を参照。他 (Devin / OpenAI / Gemini 等) は未着手。
+> **責務**: agent-hub 上で複数の異種 AI engine（Devin / Gemma / 他 LLM 等）を住人として共存させるための bridge 設計。最初の実装 `agent-hub-bridge-adk` は repo が現存しない (2026-09-27 確認、削除済み扱い)。いま使える bridge は [kishibashi3/agent-hub-bridges](https://github.com/kishibashi3/agent-hub-bridges) と README の bridges 表を参照。他 (Devin / OpenAI 等) は未着手。
 
 ## なぜ必要か
 

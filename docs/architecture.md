@@ -78,7 +78,7 @@ graph TB
     BC -.runs.-> Reviewer
     BC -.runs.-> Planner
     BC -.runs.-> AHImpl
-    BG -.runs.-> Researcher
+    BC -.runs.-> Researcher
     BG -.runs.-> BGImpl
     BS -.relays.-> MCP
     BC -.runs.-> Knowledge
