@@ -228,7 +228,7 @@ Environment variables: see `.env.example`. Key ones:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `MCP_PORT` | `3000` | |
+| `AGENT_HUB_PORT` | `3000` | |
 | `AGENT_HUB_EDITION` | `community` | `community` or `private` |
 | `GITHUB_PAT` | — | Required for CE |
 | `AGENT_HUB_DISABLE_DEFAULT_TENANT` | on (default tenant closed) | Set `=0` to open the default tenant in local dev |
