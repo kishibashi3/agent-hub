@@ -41,9 +41,9 @@ services:
       - ./data:/app/data
     environment:
       # ---- server 用 edition / auth ----
-      # 'community' (default) / 'private' / 'enterprise'
+      # 必須 (default なし、未設定だと起動失敗)。'community' / 'private' のみ ('enterprise' は受け付けない)
       AGENT_HUB_EDITION: ${AGENT_HUB_EDITION:-}
-      # 'pat' (= 推奨、 production) / 'trust' (= localhost only、 dev)
+      # 'pat' のみ (省略時も 'pat')。'trust' は issue #271 で廃止され、指定すると起動失敗
       AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
       # GitHub Org 制限 (= optional、 pat mode で組織 membership 検証)
       AGENT_HUB_GITHUB_ORG: ${AGENT_HUB_GITHUB_ORG:-}

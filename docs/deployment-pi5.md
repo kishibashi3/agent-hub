@@ -115,7 +115,7 @@ cd agent-hub && npm ci && mkdir -p data && npm run migrate
 # 2. .env (= agent-hub server)
 cat > /home/pi/agent-hub/.env <<'EOF'
 AGENT_HUB_EDITION=private
-MCP_PORT=3000
+AGENT_HUB_PORT=3000
 DB_PATH=/home/pi/agent-hub/data/app.db
 EOF
 
@@ -159,7 +159,7 @@ AGENT_HUB_EDITION=private
 # AGENT_HUB_EDITION=community  # public deploy 用
 
 # server bind
-MCP_PORT=3000
+AGENT_HUB_PORT=3000
 DB_PATH=/home/pi/agent-hub/data/app.db
 
 # Optional: edition-specific
@@ -312,7 +312,7 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 これらは **通常 Pi5 外 (= 開発者 workstation / 別 host) で動かす peer worker**、 Pi5 上の agent-hub.service に MCP 接続する形。
 
 **Pi5 deployment 対象外**、 但し agent-hub.service の MCP endpoint (= `http://<pi5-ip>:3000/mcp`) を **外部に expose する場合の注意**:
-- LAN 内のみ: `MCP_PORT=3000` のまま、 firewall で外部 block
+- LAN 内のみ: `AGENT_HUB_PORT=3000` のまま、 firewall で外部 block
 - public 化: AGENT_HUB_EDITION=community + AUTH_MODE=pat 必須 (= PE の trust mode は LAN 専用)、 TLS reverse proxy 推奨
 
 各 bridge の deployment は **bridge ごとの repo README** を参照:
@@ -328,7 +328,7 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 
 | service | .env path | 必須 var |
 |---|---|---|
-| agent-hub.service | `/home/pi/agent-hub/.env` | `AGENT_HUB_EDITION` / `MCP_PORT` / `DB_PATH` |
+| agent-hub.service | `/home/pi/agent-hub/.env` | `AGENT_HUB_EDITION` / `AGENT_HUB_PORT` / `DB_PATH` |
 | bridge-slack.service | `/home/pi/agent-hub-bridge-slack/.env` | `SLACK_APP_TOKEN` / `SLACK_BOT_TOKEN` / `AGENT_HUB_URL` / `AGENT_HUB_GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
 | scheduler.service | `/home/pi/agent-hub/packages/scheduler/.env` | `AGENT_HUB_URL` / `AGENT_HUB_GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
 | watch.sh | Claude Code session の env | `AGENT_HUB_URL` / `GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
