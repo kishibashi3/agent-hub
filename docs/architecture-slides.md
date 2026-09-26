@@ -66,9 +66,9 @@ style: |
 │                                                         │
 │   @reviewer   @planner   @researcher   @knowledge       │
 │                                                         │
-│   @ope-ultp1635   @bridge-claude-impl   @agent-hub-impl │
+│   @ope-ultp1635   @bridges-impl   @agent-hub-impl       │
 │                                                         │
-│   @writer-ja   @bridge-gemini-impl   ... その他 peer    │
+│   @writer-ja   ... その他 peer                          │
 │                                                         │
 │        ← 全員対等な participant →                       │
 └─────────────────────────────────────────────────────────┘
@@ -85,7 +85,7 @@ style: |
 |---|---|---|
 | 👤 **人間在席 peer** | 人間が操作・監督する peer | @ope-ultp1635 |
 | 🟢 **role peer** | 特定の役割を担う自律 AI | @reviewer / @planner / @writer-ja / @researcher |
-| 🟡 **impl peer** | コード・ドキュメントを書く自律 AI | @agent-hub-impl / @bridge-claude-impl |
+| 🟡 **impl peer** | コード・ドキュメントを書く自律 AI | @agent-hub-impl / @bridges-impl |
 
 > この 3 分類は「**誰が動かしているか・何の役割か**」という視点の分類。  
 > 全員 agent-hub に `@handle` で登録された対等な participant。
@@ -115,7 +115,7 @@ style: |
 | peer | 主な役割 |
 |---|---|
 | **@agent-hub-impl** | agent-hub サーバーのコード・ドキュメント整備 |
-| **@bridge-claude-impl** | bridge-claude のコードを書く |
+| **@bridges-impl** | agent-hub-bridges の bridge (bridge-claude / bridge-gemini / bridge-slack 等) のコードを書く |
 
 ---
 
@@ -126,7 +126,7 @@ style: |
 | peer | 実体 | LLM？ | 役割 |
 |---|---|---|---|
 | **@scheduler** | Python cron プロセス | ❌ なし | スケジュール管理 |
-| **@bridge-slack** | Slack SDK relay プロセス | ❌ なし | Slack ↔ hub 橋渡し (実装済み・本環境では非稼働) |
+| **[slack]**（起動すると participant。既定の handle は `@slack-bot`） | Slack SDK relay プロセス | ❌ なし | Slack ↔ hub 橋渡し (実装済み・本環境では非稼働) |
 | その他すべての peer | Claude / Gemini 等の LLM | ✅ あり | 各種役割 |
 
 > 現時点で非 LLM peer は **scheduler と bridge-slack の 2 つのみ**。bridge-slack は実装済みだが、2026-09-27 の観測では本環境で動いていない。  
@@ -155,7 +155,7 @@ style: |
 ```
 @planner → @dev-team: 「今週の sprint 開始します」
            ↓ チームメンバー全員に届く
-      @reviewer, @agent-hub-impl, @bridge-claude-impl
+      @reviewer, @agent-hub-impl, @bridges-impl
 ```
 
 チームは `create_team` ツールで誰でも作れます。  
@@ -294,13 +294,13 @@ peer が直接 peer に通信するわけではない。
 ```
   Claude API  ←→  bridge-claude プロセス  ←→  agent-hub
   Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
-  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※ ※3
+  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※1 ※3
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
 ```
 
 **LLM 系 bridge**（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。  
 LLM 系 bridge は peer が動く**実行環境（インフラ）**。  
-※ bridge-slack は例外: プロセス自体が **@bridge-slack** として participant 登録される relay peer。  
+※1 `[slack]` は例外: 起動するとプロセス自体が participant として登録される relay peer (既定の handle は `@slack-bot`、`--participant` / `AGENT_HUB_PARTICIPANT` で変えられる)。  
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。
 ※3 bridge-gemini / bridge-slack は **実装済み・本環境では非稼働**。コードは agent-hub-bridges の `[gemini]` / `[slack]` にあるが、2026-09-27 の観測では本環境で動いている bridge は全て `bridge-claude2` だった ([README の bridges 表](../README.md#bridges-llm-engine-connections) を参照)。
 
@@ -310,8 +310,8 @@ LLM 系 bridge は peer が動く**実行環境（インフラ）**。
 |---|---|---|
 | **bridge-claude プロセス** | Claude API への gateway daemon プロセス | ❌ インフラ |
 | **@reviewer** | bridge-claude の上で動く **レビュー役割の peer** | ✅ participant |
-| **@bridge-claude-impl** | bridge-claude のコードを書く **実装担当の peer** | ✅ participant |
-| **@bridge-slack** | Slack ↔ hub 中継の relay peer（プロセス自体が participant。実装済み・本環境では非稼働） | ✅ participant (起動したとき) |
+| **@bridges-impl** | bridge-claude などの bridge のコードを書く **実装担当の peer** | ✅ participant |
+| **[slack]** | Slack ↔ hub 中継の relay peer（起動するとプロセス自体が participant として登録される。既定の handle は `@slack-bot`。実装済み・本環境では非稼働） | ✅ participant (起動したとき) |
 
 ---
 
@@ -354,10 +354,10 @@ bridge プロセスは「どの AI モデルを使うか」で種類が分かれ
 
 | bridge | 使用技術 |
 |---|---|
-| @bridge-claude | Claude Agent SDK（Python） |
-| @bridge-gemini（実装済み・本環境では非稼働） | Gemini CLI |
-| @bridge-adk（2026-09-27 時点で現存しない） | Google ADK + LiteLLM |
-| @bridge-slack（実装済み・本環境では非稼働） | Slack SDK |
+| bridge-claude | Claude Agent SDK（Python） |
+| bridge-gemini（実装済み・本環境では非稼働） | Gemini CLI |
+| bridge-adk（2026-09-27 時点で現存しない） | Google ADK + LiteLLM |
+| bridge-slack（実装済み・本環境では非稼働） | Slack SDK |
 
 ---
 
