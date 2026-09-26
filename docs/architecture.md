@@ -41,7 +41,7 @@ graph TB
     end
 
     subgraph "(a) Bridge worker layer (= 実装 = 実 runtime daemon process)"
-        BC["bridge-claude2<br/>(Claude Agent SDK)"]
+        BC["bridge-claude2<br/>(Claude Code CLI subprocess)"]
         BG["[gemini]<br/>(Gemini CLI)<br/>実装済み・本環境では非稼働"]
         BS["[slack]<br/>(Slack relay)<br/>実装済み・本環境では非稼働"]
         OtherBridge["...他 bridge"]
@@ -127,7 +127,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 1. **Human layer**: kishibashi3 (= user) が起点、 ecosystem 全体の方向性を決める
 2. **OS layer (= operator、 bridge 運用 layer)**: Claude Code として動く `@ope-ultp1635`、 **3 sub-role** (= Spawn Coordinator / Merge Gatekeeper / Inbox Monitor) で構成、 bridge process の運用 + 台帳管理 + L1 承認 + push 受信を担う (= 詳細 §3)
 3. **agent-hub server**: TypeScript で実装された MCP server (= HTTP+SSE)、 SQLite で multi-tenant 永続化、 SSE で peer の inbox に push 配信
-4. **(a) Bridge worker layer (= 実装、 青)**: stateful daemon process として動く **実 runtime worker** (= `bridge-claude2` / `[gemini]` / `[slack]` 等)。 participant ではなく runtime なので `@` を付けない。 LLM API (Claude / Gemini / 他) を hub に橋渡し。 `[gemini]` / `[slack]` は実装済み・本環境では非稼働
+4. **(a) Bridge worker layer (= 実装、 青)**: stateful daemon process として動く **実 runtime worker** (= `bridge-claude2` / `[gemini]` / `[slack]` 等)。 participant ではなく runtime なので `@` を付けない (例外: `[slack]` は Slack relay として、 起動すると participant として登録される。 既定の handle は `@slack-bot` で、 `--participant` / env `AGENT_HUB_PARTICIPANT` で変えられる)。 LLM API (Claude / Gemini / 他) を hub に橋渡し。 `[gemini]` / `[slack]` は実装済み・本環境では非稼働
 5. **(b) Persona / role peer layer (= 役割、 緑)**: bridge worker process の **上に乗って動く agent** (= `@reviewer` / `@planner` / `@researcher` / `@knowledge` 等)。 persona doc (= CLAUDE.md) に従って特定役割を担う
 6. **(c) Implementation role peer layer (= 実装を作るロール、 黄)**: bridge worker code や agent-hub server code を **開発・保守する agent** (= `@bridges-impl` / `@agent-hub-impl` 等)。 自身も persona role peer (b) の特殊形だが、 「実装物を作る対象」 と sibling の bridge worker (a) を持つ点で **(b) と異なる role 性質**
 
@@ -157,6 +157,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 [(a) Bridge worker process]      = 実 runtime daemon
        bridge-claude2 (process)
        [gemini] (process、 実装済み・本環境では非稼働)
+       [slack] (process、 実装済み・本環境では非稼働)
        (= 青)
             ↑ runs on (= bridge process が peer を host)
 
@@ -169,7 +170,7 @@ agent-hub ecosystem は **6 layer** で構成される:
 
 #### 1.3.1 具体例で understand
 
-- **bridge-claude2** (= layer (a)、 青、 process): Claude Agent SDK を使う stateful daemon。 1 つの process。 `--participant reviewer` / `--participant planner` 等で起動時に peer switch 可能
+- **bridge-claude2** (= layer (a)、 青、 process): Go 製の stateful daemon。 Claude Code CLI を subprocess として起動し、 stream-json でやりとりする。 1 つの process。 `--participant reviewer` / `--participant planner` 等で起動時に peer switch 可能
 - **@reviewer** (= layer (b)、 緑、 persona role): `bridge-claude2 --participant reviewer --workdir agent-hub-roles-kaz/reviewer` (private fork; public template: [agent-hub-roles/reviewer/CLAUDE.md](https://github.com/kishibashi3/agent-hub-roles/blob/main/reviewer/CLAUDE.md)) で起動した persona。 review 専門 agent。 bridge 自体ではなく、 bridge の **上に乗る役割**
 - **@bridges-impl** (= layer (c)、 黄、 impl role): `bridge-claude2` / `[gemini]` / `[slack]` 等の **実装 code を書く** agent。 自身も bridge worker process 上で動くが、 役割は 「`agent-hub-bridges` repo 全体の bridge code 編集 + PR 起票 + reviewer review 経由 merge」
 - **@agent-hub-impl** (= layer (c)、 黄、 impl role): `agent-hub` server (= TypeScript MCP server) の **実装 code + ecosystem doc を書く** agent。 sibling として `agent-hub` server + `docs/*` を保守
@@ -193,13 +194,13 @@ ecosystem 内 peer は §1.2.1 で示した **3 concept (a) / (b) / (c)** + OS l
 
 | peer | layer (= 視覚) | 役割 | bridge engine |
 |---|---|---|---|
-| **@planner** | **(b) 緑、 persona role** | スケジューラ / task 割り振り / 進捗 follow-up / coordinator / **revert-safe PR の self-merge** | Claude Agent SDK |
-| **@researcher** | **(b) 緑、 persona role** | 調査・情報整理 / 既存 issue / PR / doc の状況確認 | Claude Agent SDK |
-| **@knowledge** | **(b) 緑、 persona role** | 知識整理・entry 管理 / dedup / indexing / curator | Claude Agent SDK |
-| **@reviewer** | **(b) 緑、 persona role** | PR / design review / 観点別 check (= security / correctness / perf / readability / test / consistency) | Claude Agent SDK |
-| **@agent-hub-impl** | **(c) 黄、 implementation role** | `agent-hub` server (= TypeScript MCP server) + ecosystem docs の実装担当 | Claude Agent SDK |
-| **@bridges-impl** | **(c) 黄、 implementation role** | `agent-hub-bridges` repo 全体 (= `bridge-claude2/` / `[claude]` / `[gemini]` / `[slack]` 等) の実装担当 | Claude Agent SDK |
-| **bridge-claude2** (= worker process) | **(a) 青、 bridge worker** | Claude Agent SDK ベース daemon process (= persona role を上に乗せて runtime 提供) | Claude Agent SDK 自体 |
+| **@planner** | **(b) 緑、 persona role** | スケジューラ / task 割り振り / 進捗 follow-up / coordinator / **revert-safe PR の self-merge** | Claude Code CLI (bridge-claude2) |
+| **@researcher** | **(b) 緑、 persona role** | 調査・情報整理 / 既存 issue / PR / doc の状況確認 | Claude Code CLI (bridge-claude2) |
+| **@knowledge** | **(b) 緑、 persona role** | 知識整理・entry 管理 / dedup / indexing / curator | Claude Code CLI (bridge-claude2) |
+| **@reviewer** | **(b) 緑、 persona role** | PR / design review / 観点別 check (= security / correctness / perf / readability / test / consistency) | Claude Code CLI (bridge-claude2) |
+| **@agent-hub-impl** | **(c) 黄、 implementation role** | `agent-hub` server (= TypeScript MCP server) + ecosystem docs の実装担当 | Claude Code CLI (bridge-claude2) |
+| **@bridges-impl** | **(c) 黄、 implementation role** | `agent-hub-bridges` repo 全体 (= `bridge-claude2/` / `[claude]` / `[gemini]` / `[slack]` 等) の実装担当 | Claude Code CLI (bridge-claude2) |
+| **bridge-claude2** (= worker process) | **(a) 青、 bridge worker** | Claude Code CLI を subprocess として起動する Go 製 daemon process (= persona role を上に乗せて runtime 提供) | Claude Code CLI (subprocess) |
 | **`[gemini]`** / **`[slack]`** | **(a) 青、 bridge worker** | 各 LLM / 外部 service との bridge daemon process。 **実装済み・本環境では非稼働** (2026-09-27 観測) | Gemini CLI / Slack SDK |
 | **@ope-ultp1635** (operator) | **OS layer (= 別 visual category)** | **bridge 運用 layer** (= 詳細 §3)、 3 sub-role: Spawn Coordinator / Merge Gatekeeper / Inbox Monitor | Claude Code (= global、 stateful 自体ではない) |
 
