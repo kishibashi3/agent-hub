@@ -154,7 +154,7 @@ npm run migrate                     # schema v6 初期化 (= 既存 db あれば
 #### Config (= `/home/pi/agent-hub/.env`)
 
 ```bash
-# edition (= PE = LAN-only trust mode、 CE = PAT mode public)
+# edition (必須、 default なし。 PE = LAN-only、 CE = public。 どちらも PAT 必須)
 AGENT_HUB_EDITION=private
 # AGENT_HUB_EDITION=community  # public deploy 用
 
@@ -163,7 +163,7 @@ AGENT_HUB_PORT=3000
 DB_PATH=/home/pi/agent-hub/data/app.db
 
 # Optional: edition-specific
-# AUTH_MODE=trust  # PE default
+# AGENT_HUB_AUTH_MODE=pat  # 値は pat のみ (= 省略可)。 trust は廃止 (issue #271) で起動エラー
 # AGENT_HUB_DISABLE_DEFAULT_TENANT=0  # default tenant restriction
 
 # build-time vars (= /health 表示用、 deploy script で焼き込み)
@@ -211,7 +211,7 @@ curl http://localhost:3000/health | jq
 #   "status": "ok",
 #   "service": "agent-hub",
 #   "edition": "private",
-#   "auth_mode": "trust",
+#   "auth_mode": "pat",
 #   "sessions": 0,
 #   "git_commit": "abc1234",         # build-arg 設定済なら
 #   "git_commit_at": "2026-05-19T00:30:42Z",
@@ -313,7 +313,7 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 
 **Pi5 deployment 対象外**、 但し agent-hub.service の MCP endpoint (= `http://<pi5-ip>:3000/mcp`) を **外部に expose する場合の注意**:
 - LAN 内のみ: `AGENT_HUB_PORT=3000` のまま、 firewall で外部 block
-- public 化: AGENT_HUB_EDITION=community + AUTH_MODE=pat 必須 (= PE の trust mode は LAN 専用)、 TLS reverse proxy 推奨
+- public 化: AGENT_HUB_EDITION=community (= PE は LAN 専用。 auth は CE / PE とも PAT のみ)、 TLS reverse proxy 推奨
 
 各 bridge の deployment は **bridge ごとの repo README** を参照:
 - [`kishibashi3/agent-hub-bridges`](https://github.com/kishibashi3/agent-hub-bridges) (= bridge-claude は `bridge-claude2/`)
