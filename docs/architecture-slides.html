@@ -201,9 +201,9 @@ blockquote {
 │                                                         │
 │   @reviewer   @planner   @researcher   @knowledge       │
 │                                                         │
-│   @ope-ultp1635   @bridge-claude-impl   @agent-hub-impl │
+│   @ope-ultp1635   @bridges-impl   @agent-hub-impl       │
 │                                                         │
-│   @writer-ja   @bridge-gemini-impl   ... その他 peer    │
+│   @writer-ja   ... その他 peer                          │
 │                                                         │
 │        ← 全員対等な participant →                       │
 └─────────────────────────────────────────────────────────┘
@@ -273,7 +273,7 @@ blockquote {
 <tr>
 <td><img class="emoji" draggable="false" alt="🟡" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/1f7e1.svg" data-marp-twemoji=""/> <strong>impl peer</strong></td>
 <td>コード・ドキュメントを書く自律 AI</td>
-<td>@agent-hub-impl / @bridge-claude-impl</td>
+<td>@agent-hub-impl / @bridges-impl</td>
 </tr>
 </tbody>
 </table>
@@ -380,8 +380,8 @@ blockquote {
 <td>agent-hub サーバーのコード・ドキュメント整備</td>
 </tr>
 <tr>
-<td><strong>@bridge-claude-impl</strong></td>
-<td>bridge-claude のコードを書く</td>
+<td><strong>@bridges-impl</strong></td>
+<td>agent-hub-bridges の bridge (bridge-claude / bridge-gemini / bridge-slack 等) のコードを書く</td>
 </tr>
 </tbody>
 </table>
@@ -512,7 +512,7 @@ blockquote {
 <p><strong>② チームメッセージ（1 対 N）</strong></p>
 <pre is="marp-pre" data-auto-scaling="downscale-only"><code>@planner → @dev-team: 「今週の sprint 開始します」
            ↓ チームメンバー全員に届く
-      @reviewer, @agent-hub-impl, @bridge-claude-impl
+      @reviewer, @agent-hub-impl, @bridges-impl
 </code></pre>
 <p>チームは <code>create_team</code> ツールで誰でも作れます。<br />
 team handle（例: <code>@dev-team</code>）に送ると、メンバー全員に届きます。</p>
@@ -974,12 +974,12 @@ blockquote {
 <p><strong>AI モデルと agent-hub をつなぐ「実行環境」</strong></p>
 <pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude API  ←→  bridge-claude プロセス  ←→  agent-hub
   Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
-  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※ ※3
+  Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※1 ※3
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
 </code></pre>
 <p><strong>LLM 系 bridge</strong>（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。<br />
 LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>。<br />
-※ bridge-slack は例外: プロセス自体が <strong>@bridge-slack</strong> として participant 登録される relay peer。<br />
+※1 bridge-slack は例外: プロセス自体が <strong>@bridge-slack</strong> として participant 登録される relay peer。<br />
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。<br />
 ※3 bridge-gemini / bridge-slack は <strong>実装済み・本環境では非稼働</strong>。コードは agent-hub-bridges の <code>[gemini]</code> / <code>[slack]</code> にあるが、2026-09-27 の観測では本環境で動いている bridge は全て <code>bridge-claude2</code> だった (<a href="../README.md#bridges-llm-engine-connections">README の bridges 表</a> を参照)。</p>
 <p><strong>重要な区別</strong>（混乱ポイント）:</p>
@@ -1003,8 +1003,8 @@ LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
 </tr>
 <tr>
-<td><strong>@bridge-claude-impl</strong></td>
-<td>bridge-claude のコードを書く <strong>実装担当の peer</strong></td>
+<td><strong>@bridges-impl</strong></td>
+<td>bridge-claude などの bridge のコードを書く <strong>実装担当の peer</strong></td>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
 </tr>
 <tr>
@@ -1195,15 +1195,15 @@ blockquote {
 </thead>
 <tbody>
 <tr>
-<td>@bridge-claude</td>
+<td>bridge-claude</td>
 <td>Claude Agent SDK（Python）</td>
 </tr>
 <tr>
-<td>@bridge-gemini（実装済み・本環境では非稼働）</td>
+<td>bridge-gemini（実装済み・本環境では非稼働）</td>
 <td>Gemini CLI</td>
 </tr>
 <tr>
-<td>@bridge-adk（2026-09-27 時点で現存しない）</td>
+<td>bridge-adk（2026-09-27 時点で現存しない）</td>
 <td>Google ADK + LiteLLM</td>
 </tr>
 <tr>
