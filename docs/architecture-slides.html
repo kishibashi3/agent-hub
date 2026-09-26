@@ -456,7 +456,7 @@ blockquote {
 </tbody>
 </table>
 <blockquote>
-<p>現時点で非 LLM peer は <strong>scheduler と bridge-slack の 2 つのみ</strong>。bridge-slack は実装済みだが、2026-09-27 の観測では本環境で動いていない。<br />
+<p>現時点で非 LLM peer は <strong>scheduler と [slack] の 2 つのみ</strong>。[slack] は実装済みだが、2026-09-27 の観測では本環境で動いていない。<br />
 それ以外の @reviewer / @planner / @researcher 等は全員 LLM ベースの AI エージェント。</p>
 </blockquote>
 <p><strong>@scheduler の使い方例</strong></p>
@@ -972,12 +972,12 @@ blockquote {
 ;" data-marpit-pagination-total="21">
 <h2 id="bridge-%E3%83%97%E3%83%AD%E3%82%BB%E3%82%B9%E3%81%A8%E3%81%AF">bridge プロセスとは</h2>
 <p><strong>AI モデルと agent-hub をつなぐ「実行環境」</strong></p>
-<pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude API  ←→  bridge-claude プロセス  ←→  agent-hub
+<pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude API  ←→  bridge-claude2 プロセス ←→  agent-hub
   Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
   Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※1 ※3
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
 </code></pre>
-<p><strong>LLM 系 bridge</strong>（bridge-claude / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。<br />
+<p><strong>LLM 系 bridge</strong>（bridge-claude2 / bridge-gemini / bridge-adk）プロセス自体は hub に participant として登録されていない。<br />
 LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>。<br />
 ※1 <code>[slack]</code> は例外: 起動するとプロセス自体が participant として登録される relay peer (既定の handle は <code>@slack-bot</code>、<code>--participant</code> / <code>AGENT_HUB_PARTICIPANT</code> で変えられる)。<br />
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。<br />
@@ -993,18 +993,18 @@ LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>
 </thead>
 <tbody>
 <tr>
-<td><strong>bridge-claude プロセス</strong></td>
-<td>Claude API への gateway daemon プロセス</td>
+<td><strong>bridge-claude2 プロセス</strong></td>
+<td>Claude Code CLI を subprocess として起動する Go 製の daemon プロセス</td>
 <td><img class="emoji" draggable="false" alt="❌" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/274c.svg" data-marp-twemoji=""/> インフラ</td>
 </tr>
 <tr>
 <td><strong>@reviewer</strong></td>
-<td>bridge-claude の上で動く <strong>レビュー役割の peer</strong></td>
+<td>bridge-claude2 の上で動く <strong>レビュー役割の peer</strong></td>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
 </tr>
 <tr>
 <td><strong>@bridges-impl</strong></td>
-<td>bridge-claude などの bridge のコードを書く <strong>実装担当の peer</strong></td>
+<td>bridge-claude2 などの bridge のコードを書く <strong>実装担当の peer</strong></td>
 <td><img class="emoji" draggable="false" alt="✅" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/2705.svg" data-marp-twemoji=""/> participant</td>
 </tr>
 <tr>
@@ -1064,8 +1064,8 @@ blockquote {
 </thead>
 <tbody>
 <tr>
-<td>bridge-claude</td>
-<td>Claude Agent SDK（Python）</td>
+<td>bridge-claude2</td>
+<td>Claude Code CLI（Go 製 daemon が subprocess として起動）</td>
 <td>@reviewer, @planner, @agent-hub-impl</td>
 </tr>
 <tr>
@@ -1195,8 +1195,8 @@ blockquote {
 </thead>
 <tbody>
 <tr>
-<td>bridge-claude</td>
-<td>Claude Agent SDK（Python）</td>
+<td>bridge-claude2</td>
+<td>Claude Code CLI（Go 製 daemon が subprocess として起動）</td>
 </tr>
 <tr>
 <td>bridge-gemini（実装済み・本環境では非稼働）</td>
