@@ -972,7 +972,7 @@ blockquote {
 ;" data-marpit-pagination-total="21">
 <h2 id="bridge-%E3%83%97%E3%83%AD%E3%82%BB%E3%82%B9%E3%81%A8%E3%81%AF">bridge プロセスとは</h2>
 <p><strong>AI モデルと agent-hub をつなぐ「実行環境」</strong></p>
-<pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude API  ←→  bridge-claude2 プロセス ←→  agent-hub
+<pre is="marp-pre" data-auto-scaling="downscale-only"><code>  Claude Code CLI ←→  bridge-claude2 プロセス ←→  agent-hub  ※4
   Gemini API  ←→  bridge-gemini プロセス  ←→  agent-hub  ※3
   Slack       ←→  bridge-slack プロセス   ←→  agent-hub  ※1 ※3
   Google ADK  ←→  bridge-adk プロセス     ←→  agent-hub  ※2
@@ -981,7 +981,8 @@ blockquote {
 LLM 系 bridge は peer が動く<strong>実行環境（インフラ）</strong>。<br />
 ※1 <code>[slack]</code> は例外: 起動するとプロセス自体が participant として登録される relay peer (既定の handle は <code>@slack-bot</code>、<code>--participant</code> / <code>AGENT_HUB_PARTICIPANT</code> で変えられる)。<br />
 ※2 bridge-adk は 2026-09-27 時点で repo が現存しない (削除済み扱い)。この slide は 2026-05-22 時点の構成。<br />
-※3 bridge-gemini / bridge-slack は <strong>実装済み・本環境では非稼働</strong>。コードは agent-hub-bridges の <code>[gemini]</code> / <code>[slack]</code> にあるが、2026-09-27 の観測では本環境で動いている bridge は全て <code>bridge-claude2</code> だった (<a href="../README.md#bridges-llm-engine-connections">README の bridges 表</a> を参照)。</p>
+※3 bridge-gemini / bridge-slack は <strong>実装済み・本環境では非稼働</strong>。コードは agent-hub-bridges の <code>[gemini]</code> / <code>[slack]</code> にあるが、2026-09-27 の観測では本環境で動いている bridge は全て <code>bridge-claude2</code> だった (<a href="../README.md#bridges-llm-engine-connections">README の bridges 表</a> を参照)。<br />
+※4 <code>bridge-claude2</code> は Claude Code CLI を subprocess として起動し、LLM API を直接は呼ばない。</p>
 <p><strong>重要な区別</strong>（混乱ポイント）:</p>
 <table>
 <thead>
