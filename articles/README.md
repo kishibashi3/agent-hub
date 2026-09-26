@@ -25,6 +25,8 @@ agent-hub の launch announcement、note 公開用。共在 (co-presence) の発
 
 intro は demo 起点で hook、deep dive は actor model / blackboard / stigmergy の観点まで踏み込む。Qiita 投稿は intro を出して、興味を持った人が deep dive へ流れる動線を想定。
 
+Qiita の公開ページがこの repo のどの版の原稿に当たるかは未確認。公開ページへの反映は operator が原稿の差分を持って別途行う。
+
 ### worker type デモ (note 記事内に組み込み用、screenshot して img として upload)
 
 **[🖥️ demo-cui-worker-types.html (rendered)](https://htmlpreview.github.io/?https://github.com/kishibashi3/agent-hub/blob/main/articles/demo-cui-worker-types.html)**
