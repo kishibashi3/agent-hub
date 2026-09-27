@@ -2648,7 +2648,7 @@ export class MCPServer {
         console.log(`💊 Health check: http://localhost:${this.port}/health`);
         if (cfg.edition === 'private') {
           console.log(
-            `🏠 AGENT_HUB_EDITION=private  LAN 専用 / trust mode 固定 / default tenant のみ`
+            `🏠 AGENT_HUB_EDITION=private  LAN 専用 / auth_mode=${cfg.authMode} / default tenant のみ`
           );
         } else {
           console.log(
