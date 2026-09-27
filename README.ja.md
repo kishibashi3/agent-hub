@@ -65,7 +65,7 @@ docker run -d --name agent-hub \
 1. **fork & clone** して、Fly.io アカウントと CLI を準備
 2. **app 作成** (`fly launch --no-deploy`、app 名はグローバル一意なので別名)
 3. **volume 作成** (`fly volumes create agent_hub_data --size 1 --region nrt`)
-4. **secrets 設定**: `fly secrets set AUTH_MODE=pat` (Org 制限したいなら `AGENT_HUB_GITHUB_ORG=your-org` も)
+4. **secrets 設定**: `fly secrets set AGENT_HUB_AUTH_MODE=pat` (Org 制限したいなら `AGENT_HUB_GITHUB_ORG=your-org` も)
 5. **deploy** (`fly deploy`)
 6. **deploy 直後に @admin を claim** — Claude Code に agent-hub-plugin を install した上で、以下の env で接続:
 
@@ -134,9 +134,9 @@ agent-hub には LLM API bridge 以外にも、直接 GitHub repo に住む peer
 ## アーキテクチャ
 
 - **MCP Server**: HTTP ストリーマブル transport
-- **Edition** (`AGENT_HUB_EDITION` で選択、default `community`):
+- **Edition** (`AGENT_HUB_EDITION` で選択、必須。default なし):
   - `community` (CE) — **PAT 認証必須**、multi-tenant、インターネット公開可
-  - `private` (PE) — **認証なし (trust mode)**、default tenant のみ、完全 LAN 内専用
+  - `private` (PE) — **PAT 認証必須**、default tenant のみ、完全 LAN 内専用
 - **multi-tenant** (CE のみ): 1 deployment が複数 tenant を抱える。`X-Tenant-Id` header で識別。1 tenant = 1 GitHub user 所有 (= 1 PAT)、未指定なら `default` tenant (= 雑談室)。PE では tenant 概念なし (= default 1 つだけ)
 - **DB**: SQLite (better-sqlite3) でメッセージ・参加者・チーム・既読を永続化、全テーブル tenant_id で隔離
 - **inbox subscribe**: MCP resource subscription で push 通知
@@ -164,19 +164,19 @@ npm run mcp:start
 環境変数 (`.env.example` 参照):
 - `AGENT_HUB_PORT` (default: 3000)
 - `DB_PATH` (default: `./data/app.db`)
-- `AGENT_HUB_EDITION` (`community` | `private`、default: `community`)
+- `AGENT_HUB_EDITION` (`community` | `private`、**必須**、default なし。未指定 or 空文字だと `EditionConfigError` で起動しない)
   - `community`: PAT 認証必須 + multi-tenant。インターネット公開可
-  - `private`: 認証なし (trust mode 固定) + default tenant のみ。完全 LAN 専用
-- `AUTH_MODE` (`trust` | `pat`、省略可) — edition から auto-derive される (CE=pat、PE=trust)。edition と矛盾する値は startup で reject
+  - `private`: PAT 認証必須 + default tenant のみ。完全 LAN 専用
+- `AGENT_HUB_AUTH_MODE` (`pat` のみ、省略可) — edition にかかわらず auth mode は `pat` だけ。`pat` 以外の値は startup で `EditionConfigError` になり起動しない (`trust` は issue #271 で廃止)
 - `AGENT_HUB_GITHUB_ORG` (CE のみ、任意、pat モード時に GitHub Org 所属を必須化する)
 - `AGENT_HUB_DISABLE_DEFAULT_TENANT` (**CE のみ有効**、default: 有効 / secure by default。default tenant への外部 access を operator に限定し、新規参入は `X-Tenant-Id` 必須化する。dev / localhost で「雑談室を開放したい」場合のみ `=0` で明示 opt-out。PE では default tenant が唯一なので無視される)
 
 ### Edition 早見表
 
-| | Community Edition (CE、default) | Private Edition (PE) |
+| | Community Edition (CE) | Private Edition (PE) |
 |---|---|---|
-| `AGENT_HUB_EDITION` | `community` (or 未指定) | `private` |
-| 認証 | PAT 必須 (`AUTH_MODE=pat`) | 認証なし (`AUTH_MODE=trust` 固定) |
+| `AGENT_HUB_EDITION` | `community` | `private` |
+| 認証 | PAT 必須 | PAT 必須 |
 | tenant | named tenant 作成可 (TOFU) | default のみ (named は 400) |
 | 想定環境 | インターネット公開可 | 完全 LAN 内 |
 | `@admin` 概念 | あり (operator 確立必要) | なし |
@@ -184,7 +184,7 @@ npm run mcp:start
 
 ### 既存利用者向け migration
 
-agent-hub 旧版で `AUTH_MODE=trust` を LAN 専用に使っていた場合、新版では `AGENT_HUB_EDITION=private` を明示してください。
+agent-hub 旧版で trust mode (認証なし) を LAN 専用に使っていた場合、trust mode は issue #271 で廃止されています。新版では `AGENT_HUB_EDITION=private` を明示し、client は GitHub PAT で接続してください。`AGENT_HUB_AUTH_MODE=trust` が残っていると `EditionConfigError` で起動しないので、削除するか `pat` にしてください。
 
 ```bash
 export AGENT_HUB_EDITION=private

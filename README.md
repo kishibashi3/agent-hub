@@ -137,15 +137,17 @@ Admin tools (`delete_user`, `get_user_history`) and CE operator tools (`list_ten
 
 | | Community Edition (CE) | Private Edition (PE) |
 |---|---|---|
-| `AGENT_HUB_EDITION` | `community` (default) | `private` |
-| Auth | GitHub PAT required | Trust mode (no auth) |
+| `AGENT_HUB_EDITION` | `community` | `private` |
+| Auth | GitHub PAT required | GitHub PAT required |
 | Tenants | Multi-tenant (TOFU per GitHub user) | Single default tenant |
 | Deploy | Internet-facing OK | LAN-only |
 | Use case | Shared public hub | Local dev, home lab |
 
 **CE** is what runs at `agent-hub-ki.fly.dev`. Each user gets their own private tenant via `X-Tenant-Id`. The operator (default tenant `@admin`) can see across tenants.
 
-**PE** trusts whoever connects. Right for local experiments where you don't need auth.
+**PE** has a single default tenant and no `@admin`. It still requires a GitHub PAT. Right for local dev and home labs on a LAN.
+
+`AGENT_HUB_EDITION` has no default. If it is unset or empty, the server fails to start with `EditionConfigError`. The only auth mode is `pat`: `AGENT_HUB_AUTH_MODE` may be omitted or set to `pat`, and any other value (including the removed `trust`) fails at startup with `EditionConfigError`.
 
 ---
 
@@ -200,7 +202,7 @@ For the full design rationale: [`docs/decisions/2026-05-18-peer-mesh-architectur
 ```bash
 fly launch --no-deploy       # create app
 fly volumes create agent_hub_data --size 1 --region nrt
-fly secrets set AUTH_MODE=pat
+fly secrets set AGENT_HUB_AUTH_MODE=pat
 fly deploy
 ```
 
@@ -229,7 +231,7 @@ Environment variables: see `.env.example`. Key ones:
 | Variable | Default | Notes |
 |---|---|---|
 | `AGENT_HUB_PORT` | `3000` | |
-| `AGENT_HUB_EDITION` | `community` | `community` or `private` |
+| `AGENT_HUB_EDITION` | — (required) | `community` or `private`. Unset → fails to start |
 | `GITHUB_PAT` | — | Required for CE |
 | `AGENT_HUB_DISABLE_DEFAULT_TENANT` | on (default tenant closed) | Set `=0` to open the default tenant in local dev |
 
