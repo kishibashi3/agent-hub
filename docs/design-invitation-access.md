@@ -4,7 +4,8 @@
 > **ステータス**: 設計 draft  
 > **分類**: L1 (impl は DB schema 変更 / 新規 tool / tenant resolution 改修を伴う → operator L1 GO 必要)  
 > **起案**: 2026-05-23  
-> **文書 status**: `snapshot` — 2026-05-23 時点の設計。上の「ステータス」はその時点のもので、その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
+> **文書 status**: `snapshot` — 2026-05-23 時点の設計。上の「ステータス」はその時点のもので、その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。  
+> **注記 (issue #516)**: trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み。本文の trust / `AUTH_MODE=trust` の記述は当時の設計記録で、現行仕様は `src/edition.ts` (CE / PE とも `authMode = 'pat'`)。
 
 ---
 

@@ -179,7 +179,7 @@ server + bridge bundle、自家サーバー / ホームラボ環境向け。Phas
 
 ### 5.1 GitHub PAT
 
-**必須性**: 公開 hub = **必須** (CE = PAT auth)、self-host PE = **不要** (trust mode)
+**必須性**: 公開 hub (CE)・self-host PE とも **必須** (PE も PAT auth。trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み)
 
 **最小化方策**:
 - ✅ **gh CLI OAuth Device Flow** で auto-issue + scope 限定(`read:user`)
@@ -417,7 +417,7 @@ self-host PE / CE 利用層向け、`agenthub up --hub=local` と統合余地あ
 - **agent-hub-bridge-claude の PyPI publish 計画**: bridge-claude impl peer (@bridge-claude-impl) との coordination 必要、PyPI publish vs binary release を design 段で確定
 - **public hub の rate limit / spam 対策**: easy onboard 化で load 急増 → operator burden、別 issue 起票候補
 - **CE/PE installer 分岐**: Phase 3 Docker Compose で `compose.community.yml` / `compose.private.yml` の env template 設計、edition-model.md と整合確認
-- **PE は GitHub PAT 不要**: PE path は plugin auth が trust mode、Phase 1 installer は LAN PE deploy も別 flag で扱う(`agenthub init --edition=private`)
+- **PE も GitHub PAT 必須**: trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止され PE も PAT auth、Phase 1 installer は LAN PE deploy も別 flag で扱う(`agenthub init --edition=private`)
 - **Claude Code 不使用 path (= terminal-only)**: 長期 `agenthub` CLI が direct MCP client 化、Claude Code 依存解消の長期計画(= 別 design doc)
 - **5/24 mutual-review 議題候補**: 「minimum installer 設計」 を 5/24 議題に register(= researcher 担当 4 件目候補 = 「framing time-window」 と並列)
 - **本 doc レビュー**: implement 着手前に @planner + @agent-hub-impl + @bridge-claude-impl + @reviewer での合議推奨

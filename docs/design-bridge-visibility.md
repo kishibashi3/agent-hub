@@ -3,7 +3,8 @@
 > **責務**: bridge/worker peer の visibility 制御設計の正本。cross-PAT prompt injection 入口を塞ぐための `visibility` field 追加と `get_participants` フィルタリング設計。  
 > **上位 issue**: [#4 bridge/worker visibility = owner-only](https://github.com/kishibashi3/agent-hub/issues/4)  
 > **関連**: issue #5 (cross-PAT message gate)  
-> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
+> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。  
+> **注記 (issue #516)**: trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み。本文の trust / `AUTH_MODE=trust` の記述は当時の設計記録で、現行仕様は `src/edition.ts` (CE / PE とも `authMode = 'pat'`)。
 
 ---
 
