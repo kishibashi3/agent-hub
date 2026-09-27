@@ -37,7 +37,6 @@ ARG GIT_COMMIT=
 ARG GIT_COMMIT_AT=
 
 ENV NODE_ENV=production \
-    MCP_PORT=3000 \
     DB_PATH=/app/data/app.db \
     GIT_COMMIT=${GIT_COMMIT} \
     GIT_COMMIT_AT=${GIT_COMMIT_AT}
