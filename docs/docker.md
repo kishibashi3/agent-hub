@@ -95,6 +95,7 @@ docker-compose down
 | `AGENT_HUB_GITHUB_ORG` | (unset) | server | pat mode で GitHub Org membership 検証 |
 | `AGENT_HUB_PORT` | `3000` | server | server listen port (= 通常不変) |
 | `AGENT_HUB_DB_PATH` | `/app/data/app.db` | server | SQLite DB file path (= 通常不変、 volume mount 側で永続化) |
+| `AGENT_HUB_REQUIRE_DB_MOUNT` | (unset) | server | 空でない値で、 `/app/data` が mount されていない (または判定できない) とき起動失敗にする。 未設定なら WARN のみ (§ mount 忘れの検出、 issue #537) |
 | `SCHEDULER_CONFIG` | `/app/data/schedules.json` | scheduler | schedules.json path (= 通常不変) |
 
 ## health check
@@ -135,6 +136,18 @@ v2.0 以降は全 command に `/` prefix が必要で、 prefix なしの body �
 - `/app/data/schedules.json` — scheduler の cron schedule 設定 + sender 単位 ownership
 
 container 再作成しても data が消えないように、 **必ず volume mount してください**。
+
+### mount 忘れの検出 (issue #537)
+
+image は `/app/data` を作ってあるので、 volume の mount を忘れても hub server は container layer 上に DB を作って起動します。 この DB は container を作り直すと消えます。 これに気づけるよう、 hub server は起動時に `/proc/self/mountinfo` を読み、 `/app/data` が mount point でなければ次の WARN を出します (起動は続けます):
+
+```
+[DB] WARNING: /app/data is not a mounted volume, so the DB is created in the container's writable layer and will be lost when the container is recreated. ...
+```
+
+- `AGENT_HUB_REQUIRE_DB_MOUNT=1` (空でない値) を設定すると、 WARN の代わりに起動失敗にします。 `/proc/self/mountinfo` が読めず判定できないときも起動失敗にします (未設定なら、 判定できないときは何も出しません)
+- 判定するのは **DB の親 dir が `/app/data` のときだけ**です。 `AGENT_HUB_DB_PATH` を `/app/data` 以外 (例: `/data/app.db`) にした場合は判定の対象外で、 mount を忘れても WARN は出ず、 `AGENT_HUB_REQUIRE_DB_MOUNT` も効きません。 host で直接動かす開発環境 (`./data` など) も対象外です
+- 見ているのは mount の有無だけです。 anonymous volume (`docker run --rm -v /app/data ...`) は mount 済みと判定しますが、 その data は container と一緒に消えます
 
 ## dashboard sidecar (= 2026-05-20 admin feature request + issue #103 expansion)
 
