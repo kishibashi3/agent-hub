@@ -12,6 +12,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 全 job とも checkout と読み取りしかしないので GITHUB_TOKEN を最小権限にする
+# (= issue #531)。
+permissions:
+  contents: read
+
 jobs:
   test:
     name: typecheck + lint + test
@@ -67,6 +72,11 @@ jobs:
   # 機械検証する (= issue #322 (b))。 agent-hub-bridges の main にある
   # pyproject.toml の version と package.json の version を比べ、
   # major.minor が違えば fail する。 patch は repo ごとに独立なので比べない。
+  #
+  # 比較先は常に bridges の main なので、 minor bump は
+  # 「bridges を先に上げる → agent-hub を後から上げる」 の順になる。
+  # その間は agent-hub の main の CI が red になり、 agent-hub 側を先に
+  # 上げた PR は bridges の main が上がるまで自分の CI が fail する (= issue #531)。
   version-sync:
     name: minor version sync with agent-hub-bridges
     runs-on: ubuntu-latest
@@ -81,6 +91,13 @@ jobs:
           path: agent-hub-bridges
           sparse-checkout: pyproject.toml
           sparse-checkout-cone-mode: false
+
+      # tomllib は Python 3.11 以上が必要なので runner の python3 に頼らず明示する。
+      # node は package.json を読むだけなので runner image のものを使う。
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Compare major.minor
         run: |
