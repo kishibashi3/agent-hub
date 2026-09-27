@@ -15,11 +15,11 @@ WORKDIR /app
 COPY server.py .
 
 # 環境変数 default 値:
-# - DB_PATH: agent-hub bundle と同じ `/app/data/app.db` を期待 (= compose 経由で
+# - AGENT_HUB_DB_PATH: agent-hub bundle と同じ `/app/data/app.db` を期待 (= compose 経由で
 #   shared volume mount される想定)
 # - PORT: dashboard listen port (= 8080 が canonical default)
 # - AGENT_HUB_TENANT: 未指定なら全 tenant aggregate (= admin clarification)
-ENV DB_PATH=/app/data/app.db \
+ENV AGENT_HUB_DB_PATH=/app/data/app.db \
     PORT=8080
 
 EXPOSE 8080
