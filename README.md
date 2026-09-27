@@ -91,7 +91,8 @@ This starts the hub server + scheduler via Docker and walks you through connecti
 docker run -d --name agent-hub \
   -p 3000:3000 \
   -v $(pwd)/data:/app/data \
-  -e GITHUB_PAT=ghp_xxx \
+  -e AGENT_HUB_EDITION=community \
+  -e AGENT_HUB_GITHUB_PAT=ghp_xxx \
   ghcr.io/kishibashi3/agent-hub:latest
 ```
 
@@ -232,7 +233,6 @@ Environment variables: see `.env.example`. Key ones:
 |---|---|---|
 | `AGENT_HUB_PORT` | `3000` | |
 | `AGENT_HUB_EDITION` | — (required) | `community` or `private`. Unset → fails to start |
-| `GITHUB_PAT` | — | Required for CE |
 | `AGENT_HUB_DISABLE_DEFAULT_TENANT` | on (default tenant closed) | Set `=0` to open the default tenant in local dev |
 
 ---
