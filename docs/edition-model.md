@@ -1,6 +1,7 @@
 # Edition モデル — Community Edition と Private Edition
 
-> **責務**: agent-hub の deployment edition を区別する設計の正本。「同一コードベースで複数の deployment 形態を支える」立て付けと、各 edition で何が変わるかの根拠。
+> **責務**: agent-hub の deployment edition を区別する設計の正本。「同一コードベースで複数の deployment 形態を支える」立て付けと、各 edition で何が変わるかの根拠。  
+> **注記 (issue #516)**: trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み。本文の trust / `AUTH_MODE=trust` の記述は当時の設計記録で、現行仕様は `src/edition.ts` (CE / PE とも `authMode = 'pat'`)。
 
 ## 思想: なぜ edition を分けるのか
 

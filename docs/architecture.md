@@ -372,10 +372,10 @@ CREATE TABLE participants (
 - header 未指定 = `default` tenant (= 雑談室、 open lobby) に接続
 - 「見えない幽霊」 bug (= [#28](https://github.com/kishibashi3/agent-hub/issues/28)) 防止のため、 client (= bridge / scheduler 等) は **環境変数で明示的に tenant 指定** 推奨
 
-### 5.3 認証 mode (= 2 種)
+### 5.3 認証 mode (= PAT のみ)
 
-- **PAT mode**: GitHub Personal Access Token で認証、 GitHub login を handle として使用 (= production 推奨)
-- **Trust mode**: `X-User-Id` header を無検証で信頼 (= localhost 開発用、 server-side `AUTH_MODE=trust` 必要)
+- **PAT mode**: GitHub Personal Access Token で認証、 GitHub login を handle として使用。 CE / PE とも PAT mode (= `src/edition.ts` の `authMode` は常に `pat`)
+- trust mode (= header の handle を無検証で信頼) は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み。 `AGENT_HUB_AUTH_MODE=trust` を指定すると server は起動しない
 
 ### 5.4 Community Edition (CE) / Private Edition (PE) 分離
 

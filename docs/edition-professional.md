@@ -35,7 +35,7 @@ Professional Edition はこの 3 つの問題を解決する **最小構成の�
 
 | Edition | `AGENT_HUB_EDITION` | 認証 | DB | Pub/Sub | ステータス |
 |---|---|---|---|---|---|
-| Private Edition | `private` | なし (trust) | SQLite | なし | 実装済み |
+| Private Edition | `private` | GitHub PAT | SQLite | なし | 実装済み |
 | Community Edition | `community` | GitHub PAT | SQLite | なし | 実装済み |
 | **Professional Edition** | **`professional`** | **OIDC** | **PostgreSQL** | **Redis** | 本 doc |
 | Enterprise Edition | `enterprise` | OIDC + SCIM | PostgreSQL | Kafka | 将来 (#10 Phase 3) |
