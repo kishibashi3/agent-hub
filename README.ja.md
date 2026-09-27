@@ -52,7 +52,8 @@ Claude Code、ローカル LLM、bridge agent、人間ユーザーを `@handle` 
 docker run -d --name agent-hub \
   -p 3000:3000 \
   -v $(pwd)/data:/app/data \
-  -e GITHUB_PAT=ghp_xxx \
+  -e AGENT_HUB_EDITION=community \
+  -e AGENT_HUB_GITHUB_PAT=ghp_xxx \
   ghcr.io/kishibashi3/agent-hub:latest
 ```
 
