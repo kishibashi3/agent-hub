@@ -62,3 +62,32 @@ jobs:
       - name: Test
         run: pytest tests -v
         working-directory: packages/scheduler
+
+  # CLAUDE.md の Versioning Rules「server と bridges は minor を揃える」を
+  # 機械検証する (= issue #322 (b))。 agent-hub-bridges の main にある
+  # pyproject.toml の version と package.json の version を比べ、
+  # major.minor が違えば fail する。 patch は repo ごとに独立なので比べない。
+  version-sync:
+    name: minor version sync with agent-hub-bridges
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout agent-hub-bridges (pyproject.toml only)
+        uses: actions/checkout@v4
+        with:
+          repository: kishibashi3/agent-hub-bridges
+          ref: main
+          path: agent-hub-bridges
+          sparse-checkout: pyproject.toml
+          sparse-checkout-cone-mode: false
+
+      - name: Compare major.minor
+        run: |
+          hub=$(node -p "require('./package.json').version")
+          bridges=$(python3 -c "import tomllib; print(tomllib.load(open('agent-hub-bridges/pyproject.toml', 'rb'))['project']['version'])")
+          echo "agent-hub=${hub} agent-hub-bridges=${bridges}"
+          if [ "$(echo "$hub" | cut -d. -f1,2)" != "$(echo "$bridges" | cut -d. -f1,2)" ]; then
+            echo "::error::minor mismatch: agent-hub ${hub} vs agent-hub-bridges ${bridges} (CLAUDE.md Versioning Rules)"
+            exit 1
+          fi
