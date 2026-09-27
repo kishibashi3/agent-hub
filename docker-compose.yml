@@ -47,6 +47,8 @@ services:
       AGENT_HUB_AUTH_MODE: ${AGENT_HUB_AUTH_MODE:-}
       # GitHub Org 制限 (= optional、 pat mode で組織 membership 検証)
       AGENT_HUB_GITHUB_ORG: ${AGENT_HUB_GITHUB_ORG:-}
+      # SQLite DB file path (= 上の ./data volume の中。image の ENV と同じ値)
+      AGENT_HUB_DB_PATH: /app/data/app.db
       # ---- active ping-presence loop の制御 (issue #106 / #363) ----
       # server の active ping loop は client を ping して presence 判定する。
       # 現在無効化している理由は「@scheduler / VS Code plugin が MCP ping に応答しない」こと

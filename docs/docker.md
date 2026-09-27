@@ -94,7 +94,7 @@ docker-compose down
 | `AGENT_HUB_AUTH_MODE` | `pat` | server | `pat` のみ。 `trust` は廃止済みで、 指定すると server が起動しない (issue #271) |
 | `AGENT_HUB_GITHUB_ORG` | (unset) | server | pat mode で GitHub Org membership 検証 |
 | `AGENT_HUB_PORT` | `3000` | server | server listen port (= 通常不変) |
-| `DB_PATH` | `/app/data/app.db` | server | SQLite DB file path (= 通常不変、 volume mount 側で永続化) |
+| `AGENT_HUB_DB_PATH` | `/app/data/app.db` | server | SQLite DB file path (= 通常不変、 volume mount 側で永続化) |
 | `SCHEDULER_CONFIG` | `/app/data/schedules.json` | scheduler | schedules.json path (= 通常不変) |
 
 ## health check
