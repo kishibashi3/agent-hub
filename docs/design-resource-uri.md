@@ -3,7 +3,8 @@
 > **責務**: agent-hub の MCP resource URI の設計正本。現状 `inbox://<handle>` が notification slot 名程度にしか使われていない問題を解消し、tenant 識別・event-type 細分化・複数 URI subscribe に対応する。  
 > **上位 issue**: [#11 resource URI を richer に](https://github.com/kishibashi3/agent-hub/issues/11)  
 > **関連**: issue #7 (cross-tenant SSE leak)、issue #1 (presence)、issue #4 (visibility)  
-> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。
+> **文書 status**: `snapshot` — 2026-05-22 時点の設計。その後の実装の変更には追従しない ([docs/index.md](./index.md) の status の読み方を参照)。  
+> **注記 (issue #523)**: trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み。本文の trust の記述は当時の設計記録で、現行仕様は `src/edition.ts` (CE / PE とも `authMode = 'pat'`)。
 
 ---
 

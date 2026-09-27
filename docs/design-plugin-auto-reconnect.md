@@ -1,6 +1,7 @@
 # Design: MCP session auto-reconnect after server restart (#68)
 
-> [issue #68](https://github.com/kishibashi3/agent-hub/issues/68) (= server 再起動後に Claude Code セッション再起動が不要になる auto-reconnect 機能) の **設計 doc**。 実装 PR は本 doc LGTM 後に別 PR で起草する 2 段ゲート構成。
+> [issue #68](https://github.com/kishibashi3/agent-hub/issues/68) (= server 再起動後に Claude Code セッション再起動が不要になる auto-reconnect 機能) の **設計 doc**。 実装 PR は本 doc LGTM 後に別 PR で起草する 2 段ゲート構成。  
+> **注記 (issue #523)**: trust mode は [#271](https://github.com/kishibashi3/agent-hub/issues/271) で廃止済み。本文の trust の記述は当時の設計記録で、現行仕様は `src/edition.ts` (CE / PE とも `authMode = 'pat'`)。
 
 ## 1. 概要
 
