@@ -182,7 +182,7 @@ nav-bar:  overview │ [Mesh]  [Matrix]  [Timeline]  [Link List]   ┃   drill-d
 
 | 変数 | default | 用途 |
 |---|---|---|
-| `DB_PATH` | `/app/data/app.db` | SQLite DB file path (= bundle と shared volume mount) |
+| `AGENT_HUB_DB_PATH` | `/app/data/app.db` | SQLite DB file path (= bundle と shared volume mount) |
 | `PORT` | `8080` | dashboard listen port |
 | `AGENT_HUB_TENANT` | (unset → **全 tenant aggregate**) | 特定 tenant のみ filter する場合に set。 unset で全 tenant 合算 view |
 
