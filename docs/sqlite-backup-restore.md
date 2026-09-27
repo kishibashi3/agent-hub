@@ -34,7 +34,7 @@ agent-hub hub server は SQLite の 1 ファイル (`app.db`) にすべての状
 
 補足:
 
-- hub の container には `DB_PATH=/app/data/app.db` が入っているが、server が読むのは `AGENT_HUB_DB_PATH` で、こちらは未設定である。今の DB path は、`AGENT_HUB_DB_PATH` 未設定時の default (`src/db/index.ts`、`__dirname` 相対) が **たまたま** `/app/data/app.db` に一致しているだけ (起動ログに WARN が出ている)。restore では、この path にファイルを置く。
+- 調査時点 (#470 の修正前の image) の hub の container には `DB_PATH=/app/data/app.db` が入っているが、server が読むのは `AGENT_HUB_DB_PATH` で、こちらは未設定である。今の DB path は、`AGENT_HUB_DB_PATH` 未設定時の default (`src/db/index.ts`、`__dirname` 相対) が **たまたま** `/app/data/app.db` に一致しているだけ (起動ログに WARN が出ている)。#470 以降の image と `docker-compose.yml` は `AGENT_HUB_DB_PATH=/app/data/app.db` を設定するので、path は同じまま WARN が消える。restore では、この path にファイルを置く。
 - WAL mode では、commit 済みのデータの一部が `app.db-wal` にだけ入っている時間がある (今日の実測で 20 MB)。**`app.db` だけを `cp` した backup は、最近の書き込みが欠けるか壊れる**。backup は必ず SQLite の backup API (`sqlite3 .backup`) を使う (§4)。
 
 ---

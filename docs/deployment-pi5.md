@@ -116,7 +116,7 @@ cd agent-hub && npm ci && mkdir -p data && npm run migrate
 cat > /home/pi/agent-hub/.env <<'EOF'
 AGENT_HUB_EDITION=private
 AGENT_HUB_PORT=3000
-DB_PATH=/home/pi/agent-hub/data/app.db
+AGENT_HUB_DB_PATH=/home/pi/agent-hub/data/app.db
 EOF
 
 # 3. systemd unit (= agent-hub.service)
@@ -160,7 +160,7 @@ AGENT_HUB_EDITION=private
 
 # server bind
 AGENT_HUB_PORT=3000
-DB_PATH=/home/pi/agent-hub/data/app.db
+AGENT_HUB_DB_PATH=/home/pi/agent-hub/data/app.db
 
 # Optional: edition-specific
 # AGENT_HUB_AUTH_MODE=pat  # 値は pat のみ (= 省略可)。 trust は廃止 (issue #271) で起動エラー
@@ -328,7 +328,7 @@ watch.sh は **operator が自分の Claude Code session 内で起動する Moni
 
 | service | .env path | 必須 var |
 |---|---|---|
-| agent-hub.service | `/home/pi/agent-hub/.env` | `AGENT_HUB_EDITION` / `AGENT_HUB_PORT` / `DB_PATH` |
+| agent-hub.service | `/home/pi/agent-hub/.env` | `AGENT_HUB_EDITION` / `AGENT_HUB_PORT` / `AGENT_HUB_DB_PATH` |
 | bridge-slack.service | `/home/pi/agent-hub-bridge-slack/.env` | `SLACK_APP_TOKEN` / `SLACK_BOT_TOKEN` / `AGENT_HUB_URL` / `AGENT_HUB_GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
 | scheduler.service | `/home/pi/agent-hub/packages/scheduler/.env` | `AGENT_HUB_URL` / `AGENT_HUB_GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |
 | watch.sh | Claude Code session の env | `AGENT_HUB_URL` / `GITHUB_PAT` / `AGENT_HUB_TENANT` / `AGENT_HUB_PARTICIPANT` |

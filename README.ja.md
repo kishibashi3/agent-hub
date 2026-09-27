@@ -164,7 +164,7 @@ npm run mcp:start
 
 環境変数 (`.env.example` 参照):
 - `AGENT_HUB_PORT` (default: 3000)
-- `DB_PATH` (default: `./data/app.db`)
+- `AGENT_HUB_DB_PATH` (default: `./data/app.db`)
 - `AGENT_HUB_EDITION` (`community` | `private`、**必須**、default なし。未指定 or 空文字だと `EditionConfigError` で起動しない)
   - `community`: PAT 認証必須 + multi-tenant。インターネット公開可
   - `private`: PAT 認証必須 + default tenant のみ。完全 LAN 専用
