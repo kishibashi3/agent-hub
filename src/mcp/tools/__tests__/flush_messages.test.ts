@@ -75,6 +75,19 @@ describe('flush_messages ツール（issue #336）', () => {
       expect(readIds).toContain(MSG_BROADCAST);
     });
 
+    it('acted_by に操作した operator が記録される（issue #348: 代理flushの監査記録）', async () => {
+      await handleFlushMessages(scopeToTenant(db, 'default'), { participant: '@bob' }, '@operator');
+
+      const receipt = db
+        .prepare(
+          'SELECT reader, acted_by FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?'
+        )
+        .get('default', MSG_DM, '@bob') as { reader: string; acted_by: string | null };
+      // reader (対象 @bob) と acted_by (実行した @operator) が区別して記録される
+      expect(receipt.reader).toBe('@bob');
+      expect(receipt.acted_by).toBe('@operator');
+    });
+
     it('チーム宛メッセージは対象外（既読化されない）', async () => {
       await handleFlushMessages(scopeToTenant(db, 'default'), { participant: '@bob' }, '@operator');
 

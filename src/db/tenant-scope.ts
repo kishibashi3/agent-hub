@@ -47,7 +47,7 @@ export interface TenantScope {
   getUnreadDmBroadcastMessages(reader: string): Message[];
   getHistory(input: GetHistoryInput, requester: string): Message[];
   getThread(input: GetThreadInput, requester: string): { rootId: string; threadSize: number; messages: Message[] };
-  markAsRead(messageId: string, reader: string): { read: true };
+  markAsRead(messageId: string, reader: string, actedBy?: string): { read: true };
   /** 全参加者の未読メッセージ数をバッチ取得 (issue #234) */
   getQueueDepths(): Map<string, number>;
 
@@ -99,8 +99,8 @@ export function scopeToTenant(db: Database, tenantId: string): TenantScope {
       M.getHistory(db, tenantId, input, requester),
     getThread: (input, requester) =>
       M.getThread(db, tenantId, input, requester),
-    markAsRead: (messageId, reader) =>
-      M.markAsRead(db, tenantId, messageId, reader),
+    markAsRead: (messageId, reader, actedBy) =>
+      M.markAsRead(db, tenantId, messageId, reader, actedBy),
     getQueueDepths: () => M.getQueueDepths(db, tenantId),
 
     // teams
