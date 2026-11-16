@@ -98,6 +98,7 @@ export const readReceiptSchema = z.object({
   message_id: z.string(),
   reader: z.string(),
   read_at: z.string(),
+  acted_by: z.string().nullable(),
 });
 
 export type ReadReceipt = z.infer<typeof readReceiptSchema>;

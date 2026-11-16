@@ -158,7 +158,7 @@ export function runMigration(
  * applyMigrations() の最終到達バージョン。新しい migration を追加したら
  * ここを bump し、対応する migrateToVN() を追加する。
  */
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 // v2 → v3: participants に owner 列を追加
 export function migrateToV3(db: Database.Database): void {
@@ -589,6 +589,24 @@ export function migrateToV12(db: Database.Database): void {
   });
 }
 
+// v12 → v13: read_receipts に acted_by カラム追加（代理 flush の監査記録、issue #348）
+// 実際に既読操作を実行した caller を記録する。通常の mark_as_read (reader 本人操作)
+// では acted_by = reader、flush_messages (operator による代理操作) では
+// acted_by = operator の userId になる (呼び出し側で明示的に埋める、backfill 対象外)。
+// re-create 不要 (v9/v11 と同じ ALTER TABLE ADD COLUMN パターン)。
+export function migrateToV13(db: Database.Database): void {
+  if (getCurrentVersion(db) >= 13) return;
+  runMigration(db, {
+    version: 13,
+    description: 'add read_receipts.acted_by for proxy-flush audit trail (issue #348)',
+    sql: `
+      ALTER TABLE read_receipts ADD COLUMN acted_by TEXT;
+      INSERT INTO schema_version (version, description)
+      VALUES (13, 'add read_receipts.acted_by for proxy-flush audit trail (issue #348)');
+    `,
+  });
+}
+
 /**
  * 未適用のマイグレーションを順序通りに適用
  *
@@ -630,6 +648,7 @@ export function applyMigrations(db: Database.Database): void {
   migrateToV10(db);
   migrateToV11(db);
   migrateToV12(db);
+  migrateToV13(db);
 
   console.log(
     `[Migration] Migration completed. Database version: ${targetVersion}`

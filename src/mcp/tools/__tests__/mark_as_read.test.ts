@@ -85,8 +85,10 @@ describe('mark_as_read ツール', () => {
       // DB 確認
       const receipt = db
         .prepare('SELECT * FROM read_receipts WHERE tenant_id = ? AND message_id = ? AND reader = ?')
-        .get('default', MSG_001, '@bob');
+        .get('default', MSG_001, '@bob') as { acted_by: string | null };
       expect(receipt).toBeDefined();
+      // reader 本人による通常操作は acted_by = reader (issue #348)
+      expect(receipt.acted_by).toBe('@bob');
     });
 
     it('チームメッセージを既読にできる（メンバー）', async () => {
