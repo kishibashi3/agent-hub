@@ -6,6 +6,7 @@ import {
   sendMessage,
   getMessage,
   getUnreadMessages,
+  getUnreadDmBroadcastMessages,
   getHistory,
   getThread,
   markAsRead,
@@ -504,6 +505,69 @@ describe('messages.ts', () => {
     it('未読がない場合は空配列', () => {
       const unread = getUnreadMessages(db, 'default', 'alice');
       expect(unread).toEqual([]);
+    });
+  });
+
+  describe('@* broadcast は送信時点の参加者だけに未読として届く (issue #542)', () => {
+    /** participants.created_at を明示して参加者を作る */
+    function addParticipant(name: string, createdAt: string) {
+      db.prepare('INSERT INTO participants (tenant_id, name, created_at) VALUES (?, ?, ?)').run(
+        'default',
+        name,
+        createdAt
+      );
+    }
+
+    /** created_at を明示して @* を保存する（送信経路の権限チェックは send_message.ts 側の責務なので通さない） */
+    function insertBroadcast(id: string, body: string, createdAt: string) {
+      db.prepare(
+        'INSERT INTO messages (tenant_id, id, sender, recipient, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run('default', id, '@alice', '@*', body, createdAt);
+    }
+
+    const BCAST = '44444444-4444-4444-4444-444444444444';
+
+    beforeEach(() => {
+      addParticipant('@early', '2026-09-01T00:00:00.000Z');
+      insertBroadcast(BCAST, 'old notice', '2026-09-19T20:13:13.000Z');
+      addParticipant('@late', '2026-11-16T00:00:00.000Z');
+    });
+
+    it('送信前からいた peer には getUnreadMessages / getUnreadDmBroadcastMessages の両方で出る', () => {
+      expect(getUnreadMessages(db, 'default', 'early').map((m) => m.id)).toEqual([BCAST]);
+      expect(getUnreadDmBroadcastMessages(db, 'default', 'early').map((m) => m.id)).toEqual([BCAST]);
+    });
+
+    it('送信後に参加した peer には getUnreadMessages / getUnreadDmBroadcastMessages のどちらにも出ない', () => {
+      expect(getUnreadMessages(db, 'default', 'late')).toEqual([]);
+      expect(getUnreadDmBroadcastMessages(db, 'default', 'late')).toEqual([]);
+    });
+
+    it('参加と同じ時刻に送られた @* は届く（境界は含む）', () => {
+      const SAME = '55555555-5555-5555-5555-555555555555';
+      insertBroadcast(SAME, 'same instant', '2026-11-16T00:00:00.000Z');
+      expect(getUnreadMessages(db, 'default', 'late').map((m) => m.id)).toEqual([SAME]);
+      expect(getUnreadDmBroadcastMessages(db, 'default', 'late').map((m) => m.id)).toEqual([SAME]);
+    });
+
+    it('参加後に送られた @* は後から参加した peer にも届く', () => {
+      const NEW = '66666666-6666-6666-6666-666666666666';
+      insertBroadcast(NEW, 'new notice', '2026-11-16T01:00:00.000Z');
+      expect(getUnreadMessages(db, 'default', 'late').map((m) => m.id)).toEqual([NEW]);
+      expect(getUnreadDmBroadcastMessages(db, 'default', 'late').map((m) => m.id)).toEqual([NEW]);
+    });
+
+    it('後から参加した peer への DM は従来どおり届く（絞り込みは @* だけ）', () => {
+      db.prepare(
+        'INSERT INTO messages (tenant_id, id, sender, recipient, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run('default', '77777777-7777-7777-7777-777777777777', '@alice', '@late', 'dm', '2026-09-19T20:13:13.000Z');
+      expect(getUnreadMessages(db, 'default', 'late').map((m) => m.body)).toEqual(['dm']);
+      expect(getUnreadDmBroadcastMessages(db, 'default', 'late').map((m) => m.body)).toEqual(['dm']);
+    });
+
+    it('ID を指定すれば後から参加した peer でも getMessage / markAsRead できる（権限チェックは変えない）', () => {
+      expect(getMessage(db, 'default', BCAST, 'late').id).toBe(BCAST);
+      expect(() => markAsRead(db, 'default', BCAST, 'late')).not.toThrow();
     });
   });
 
