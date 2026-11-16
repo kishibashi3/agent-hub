@@ -175,6 +175,7 @@ export function getMessage(
  * 未読メッセージを取得する
  * - DM: 自分宛のメッセージ
  * - チーム: 所属チーム宛のメッセージ
+ * - ブロードキャスト: @* 宛のうち、reader の参加 (participants.created_at) 以後に送られたもの (issue #542)
  * - 自分が送信したメッセージは除外
  * - 既読済みは除外
  */
@@ -204,7 +205,10 @@ export function getUnreadMessages(
          AND rr.message_id IS NULL
          AND (
            m.recipient = ?
-           OR m.recipient = '@*'
+           OR (m.recipient = '@*' AND m.created_at >= (
+             SELECT created_at FROM participants
+             WHERE tenant_id = m.tenant_id AND name = ?
+           ))
            OR m.recipient IN (
              SELECT team_name FROM team_members
              WHERE tenant_id = ? AND member_name = ?
@@ -213,7 +217,7 @@ export function getUnreadMessages(
          AND m.sender != ?
        ORDER BY m.created_at ASC`
     )
-    .all(readerName, tenantId, readerName, tenantId, readerName, readerName) as Message[];
+    .all(readerName, tenantId, readerName, readerName, tenantId, readerName, readerName) as Message[];
 
   return messages;
 }
@@ -224,7 +228,7 @@ export function getUnreadMessages(
  * flush_messages (issue #336) 用。queue_depth (getQueueDepths) が person 宛
  * メッセージのみをカウントしているのと scope を揃えるため、team 宛は対象外とする。
  * - DM: 自分宛のメッセージ
- * - ブロードキャスト: @* 宛のメッセージ
+ * - ブロードキャスト: @* 宛のうち、reader の参加 (participants.created_at) 以後に送られたもの (issue #542)
  * - 自分が送信したメッセージ・既読済みは除外
  */
 export function getUnreadDmBroadcastMessages(
@@ -251,11 +255,17 @@ export function getUnreadDmBroadcastMessages(
          ON m.tenant_id = rr.tenant_id AND m.id = rr.message_id AND rr.reader = ?
        WHERE m.tenant_id = ?
          AND rr.message_id IS NULL
-         AND (m.recipient = ? OR m.recipient = '@*')
+         AND (
+           m.recipient = ?
+           OR (m.recipient = '@*' AND m.created_at >= (
+             SELECT created_at FROM participants
+             WHERE tenant_id = m.tenant_id AND name = ?
+           ))
+         )
          AND m.sender != ?
        ORDER BY m.created_at ASC`
     )
-    .all(readerName, tenantId, readerName, readerName) as Message[];
+    .all(readerName, tenantId, readerName, readerName, readerName) as Message[];
 
   return messages;
 }
